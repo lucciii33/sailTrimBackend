@@ -14,6 +14,8 @@ app.use(express.urlencoded({extended: false}))
 
 app.use('/api/meditations', require('./routes/meditationRoutes'))
 app.use('/api/white_noise', require('./routes/whiteNoseRoutes'))
+app.use('/api/user', require('./routes/userRoutes'))
+app.use('/api/ai', require("./routes/dashboardRoutes"))
 
 app.use(errorHandler)
 
