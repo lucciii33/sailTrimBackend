@@ -32,7 +32,7 @@ async function generateTestQuestions(req, res) {
         return res.status(400).send("Topic is required.");
     }
 
-    const prompt = `Generate test questions for the topic ${topic}. Add "@" at the start of each completion question, "-" at the start of each true/false question, "$" at the start of each multiple choice question, and "^" at the start of each short answer question.(max 40 questions)`;
+    const prompt = `Generate test questions for the topic ${topic}. Add "@" at the start of each completion question, "-" at the start of each true/false question, "$" at the start of each multiple choice question, and "^" at the start of each short answer question.(max 10 questions)`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
