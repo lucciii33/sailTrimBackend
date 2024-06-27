@@ -7,9 +7,9 @@ const User = require("../model/userModel");
 // Route:       POST /api/users/
 // Access:      Public
 const registerUser = asyncHandler(async (req, res) => {
-    const { firstName, lastName, email, password, phoneNumber } = req.body;
+    const { firstName, lastName, email, password, pais, edad } = req.body;
     
-    if (!firstName || !lastName || !email || !password || !phoneNumber) {
+    if (!firstName || !lastName || !email || !password || !pais || !edad) {
         res.status(400);
         throw new Error("Please complete all required fields.");
     }
@@ -34,7 +34,8 @@ const registerUser = asyncHandler(async (req, res) => {
         lastName,
         email,
         password: hashedPassword,
-        phoneNumber,
+        pais,
+        edad,
         role: "USER",
     });
 
@@ -74,7 +75,7 @@ const loginUser = asyncHandler(async (req, res) => {
   });
 
   const generateToken = (id) => {
-    return jwt.sign({ id }, process.env.JWT_SECRET, {
+    return jwt.sign({ id }, "process.env.JWT_SECRET_NODE", {
       expiresIn: "8h",
     });
   };

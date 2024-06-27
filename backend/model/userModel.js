@@ -17,11 +17,11 @@ const userSchema = mongoose.Schema({
         type: String,
         required: true
     },
-    phoneNumber: {
+    edad: {
         type: Number,
         required: true
     },
-    profileImage: {
+    pais: {
         type: String,
         required: false
     },
