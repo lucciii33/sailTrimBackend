@@ -1,12 +1,29 @@
-const { Configuration, OpenAIApi } = require('openai');
-const OpenAI = require("openai");
+// const { Configuration, OpenAIApi } = require('openai');
+
+// const OpenAI = require("openai");
 const { parse, stringify } = require('flatted'); 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const apiKey = process.env.GEMINI_KEY; // Replace with your actual key
 
 const genAI = new GoogleGenerativeAI("AIzaSyDa3W2MKxBBjxnjCp6cJfHO8iJcn55B4v4");
 
-// const openai = new OpenAI({ apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt" });
+const OpenAI = require('openai');
+// console.log("OpenAI", OpenAI)
+
+// const configuration = new OpenAI.Configuration({
+//     apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt"
+// });
+
+// const openai = new OpenAI.OpenAIApi(configuration);
+
+
+const Openai = new OpenAI({
+  apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt"
+});
+console.log("Openai", Openai)
+
+
+
 
 async function generateTextGoole(req, res) {
     const { prompt } = req.body;
@@ -49,6 +66,29 @@ async function generateTestQuestions(req, res) {
         console.error("Error generating questions:", error);
         res.status(500).send("An error occurred while generating questions.");
     }
+}
+
+async function generateflashCards(req, res) {
+    const { topic } = req.body;
+
+  if (!topic) {
+    return res.status(400).send("Topic is required.");
+  }
+
+  const prompt = `
+    Each flashcard should contain a question and a corresponding answer. Please format the output as follows: Q: [Question] A: [Answer] , Generate a set of study flashcards for the topic "${topic}". `;
+
+  try {
+    const model = genAI.getGenerativeModel({ model: "pro-1.5"});
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    console.log(text);
+    res.status(200).json({ flashCrads: text });
+  } catch (error) {
+    console.error("Error generating text:", error);
+    return "An error occurred while generating text.";
+  }
 }
 
 // async function gradeExam(req, res) {
@@ -179,45 +219,31 @@ async function gradeExam(req, res) {
      }
     
 
-// // Function to determine question type based on prompt text
-// function getQuestionType(questionText) {
-//     if (questionText.startsWith('@')) return '@'; // Completion question
-//     if (questionText.startsWith('-')) return '-'; // True/False question
-//     if (questionText.startsWith('$')) return '$'; // Multiple choice question
-//     if (questionText.startsWith('^')) return '^'; // Short answer question
-//     return ''; // Default case
-// }
+async function generateText(req, res) {
+    const { prompt } = req.body;
+    try {
 
-// async function generateText(prompt) {
-//     try {
-//         const message = {
-//             role: "system",
-//             content: prompt
-//         };
+        const chatCompletion = await Openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser`}],
+          });
 
-//         const messageString = stringify({
-//             role: message.role,
-//             content: message.content
-//         }); 
+       console.log(chatCompletion)
 
-//         const completion = await openai.chat.completions.create({
-//             messages: [{
-//                 role: "system",
-//                 content: messageString
-//             }],
-//             model: "gpt-3.5-turbo",
-//         });
+        res.json({
+            flashCards: chatCompletion
+        });
 
-//         return completion.choices[0];
-//     } catch (error) {
-//         console.error("Error generating text:", error);
-//         return "An error occurred while generating text.";
-//     }
-// }
+    } catch (error) {
+        console.error("Error generating text:", error);
+        res.status(500).send("An error occurred while generating text.");
+    }
+}
 
 module.exports = {
-    // generateText,
+    generateText,
     generateTextGoole,
     generateTestQuestions,
-    gradeExam
+    gradeExam,
+    generateflashCards
 }
