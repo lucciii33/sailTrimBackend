@@ -225,13 +225,32 @@ async function generateText(req, res) {
 
         const chatCompletion = await Openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser`}],
+            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work`}],
           });
 
-       console.log(chatCompletion)
+        const contentString = chatCompletion?.choices[0]?.message.content;
+
+        const qaRegex = /Question:\s*(.*?)\s*Answer:\s*(.*?)(?=\nQuestion:|$)/gs;
+        const qaPairs = [];
+        let match;
+
+        while ((match = qaRegex.exec(contentString)) !== null) {
+            const question = match[1].trim();
+            const answer = match[2].trim();
+            if (question && answer) {
+                qaPairs.push({ question, answer });
+            }
+        }
+
+        // Prepare the response in the format you need
+        const flashCards = qaPairs.map((item, index) => ({
+            id: `card-${index + 1}`,
+            question: item.question,
+            answer: item.answer
+        }));
 
         res.json({
-            flashCards: chatCompletion
+            flashCards
         });
 
     } catch (error) {
