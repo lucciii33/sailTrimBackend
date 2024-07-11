@@ -29,6 +29,19 @@ const userSchema = mongoose.Schema({
         type: String,
         required: true
     },
+    loginDays: { 
+        type: Map,
+        of: Boolean,
+        default: {
+          "0": false, // Sunday
+          "1": false, // Monday
+          "2": false, // Tuesday
+          "3": false, // Wednesday
+          "4": false, // Thursday
+          "5": false, // Friday
+          "6": false  // Saturday
+        }
+      }
 }, {
     timestamps: true
 });

@@ -60,6 +60,10 @@ const loginUser = asyncHandler(async (req, res) => {
     }
   
     if (user && (await bcrypt.compare(password, user.password))) {
+      const currentDay = new Date().getDay().toString(); 
+      user.loginDays.set(currentDay, true);
+      await user.save();
+
       res.json({
         _id: user.id,
         firstName: user.firstName,
@@ -67,6 +71,7 @@ const loginUser = asyncHandler(async (req, res) => {
         email: user.email,
         phoneNumber: user.phoneNumber,
         token: generateToken(user._id),
+        loginDays: user.loginDays,
       });
     } else {
       res.status(400);
