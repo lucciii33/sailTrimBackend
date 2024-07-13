@@ -41,7 +41,11 @@ const userSchema = mongoose.Schema({
           "5": false, // Friday
           "6": false  // Saturday
         }
-      }
+    },
+    customerId:{
+        type: String,
+        required: false
+    },
 }, {
     timestamps: true
 });

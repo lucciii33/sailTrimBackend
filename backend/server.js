@@ -21,6 +21,8 @@ app.use('/api/meditations', require('./routes/meditationRoutes'))
 app.use('/api/white_noise', require('./routes/whiteNoseRoutes'))
 app.use('/api/user', require('./routes/userRoutes'))
 app.use('/api/ai', require("./routes/dashboardRoutes"))
+app.use('/api/pomodoro', require("./routes/pomodoroRoutes"))
+app.use('/api/checkout', require("./routes/checkoutRoutes"))
 
 app.use(errorHandler)
 
