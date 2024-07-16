@@ -1,13 +1,68 @@
 const asyncHanlder = require('express-async-handler')
 const Task = require('../model/taskModel')
 const Pomodoro =  require('../model/pomodoroModel')
+const User = require('../model/userModel')
 
 const getTasks = asyncHanlder(async(req, res) => {
+    const tasks = await Task.find();
+    res.json(tasks);
+})
+
+const getTasksById = asyncHanlder(async(req, res) => {
+    const taskId = req.params.id; // Obtén el ID de la tarea desde los parámetros de la URL
     
+    // Implementa la lógica para buscar la tarea por su ID
+    const task = await Task.findById(taskId);
+    
+    if (!task) {
+        res.status(404);
+        throw new Error('Task not found');
+    }
+    
+    res.json(task);
+})
+
+const getTasksByUserId = asyncHanlder(async(req, res) => {
+    const userId = req.params.userId; // Obtén el ID del usuario desde los parámetros de la URL
+    
+    const tasks = await Task.find({ UserId: userId });
+
+    res.json(tasks);
 })
 
 const createTask = asyncHanlder(async(req, res) => {
-   
+    const {
+        taskName,
+        description,
+        completed,
+        UserId
+      } = req.body;
+    
+      console.log("POMODORO CREATE", req.body);
+
+      if (!description || !taskName) {
+        res.status(400);
+        throw new Error("Please add all required fields");
+      }
+    
+      const newTask = await Task.create({
+        taskName,
+        description,
+        completed,
+        UserId
+      });
+    
+      if (newTask) {
+        res.status(201).json({
+          description: newTask.description,
+          taskName: newTask.taskName,
+          completed: newTask.completed,
+          UserId: newTask.UserId
+        });
+      } else {
+        res.status(400);
+        throw new Error("Meditation wasn't registered correctly");
+      }
 })
 
 const editTask = asyncHanlder(async(req, res) => {
@@ -60,7 +115,9 @@ const deletePomodoro = asyncHanlder(async(req, res) => {
 })
 
 module.exports = {
+    getTasksByUserId,
     getTasks,
+    getTasksById,
     createTask,
     editTask,
     deleteTask,

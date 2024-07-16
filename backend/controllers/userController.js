@@ -44,7 +44,8 @@ const registerUser = asyncHandler(async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
-        phoneNumber: user.phoneNumber,
+        pais: user.pais,
+        edad: user.edad,
     });
 })
 
@@ -69,7 +70,8 @@ const loginUser = asyncHandler(async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
-        phoneNumber: user.phoneNumber,
+        pais: user.pais,
+        edad: user.edad,
         token: generateToken(user._id),
         loginDays: user.loginDays,
       });

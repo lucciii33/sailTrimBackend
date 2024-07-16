@@ -19,7 +19,7 @@ const userSchema = mongoose.Schema({
     },
     edad: {
         type: Number,
-        required: true
+        required: false
     },
     pais: {
         type: String,
@@ -46,6 +46,10 @@ const userSchema = mongoose.Schema({
         type: String,
         required: false
     },
+    tasks: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Task"
+    }]
 }, {
     timestamps: true
 });
