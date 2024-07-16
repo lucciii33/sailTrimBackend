@@ -1,6 +1,6 @@
 const asyncHanlder = require('express-async-handler')
 const express = require('express');
-const stripe = require('stripe')('sk_test_51Pc4aREM69ysvIJbBIjYjX8hdmAIrIscHqSHDOj5yMCo4kT9aC6lOT5uvarSnExWTOGz62Fo6Dh4AEvDCVDBKLKm004tHHzr6s');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const payment = asyncHanlder(async(req, res) => {
     const { token, trial_end_date } = req.body;
