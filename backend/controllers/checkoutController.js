@@ -18,7 +18,7 @@ const payment = asyncHanlder(async(req, res) => {
     });
 
     // Subscribe the customer to the plan
-    const subscription = await stripe.subscriptions.create({
+    const subscription = await stripe?.subscriptions.create({
         customer: customer.id,
         items: [{ price: 'price_1Pc5OgEM69ysvIJbkNWRzVay' }], // Reemplaza con tu ID de plan real
         trial_end: trial_end_date,
