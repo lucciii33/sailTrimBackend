@@ -25,7 +25,7 @@ const payment = asyncHanlder(async(req, res) => {
         expand: ['latest_invoice.payment_intent'],
     });
 
-    res.json({ message: 'Subscription created successfully', subscription });
+    res.json({ message: 'Subscription creaddted successfully', subscription });
 })
 
 const checkpayment = asyncHanlder(async(req, res) => {
