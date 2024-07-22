@@ -1,13 +1,15 @@
 const express = require('express')
 const router = express.Router()
 const {createPomodoro, getPomodoros, getTasks, createTask, getTasksById, getTasksByUserId} = require('../controllers/pomodoroController')
+const { protect } = require('../middleware/authMiddleware')
 
-router.get('/',  getPomodoros)
-router.post('/', createPomodoro)
+router.get('/', protect, getPomodoros)
+router.post('/',protect, createPomodoro)
 
-router.get('/tasks',  getTasks)
-router.get('/userTask/:userId',  getTasksByUserId)
-router.get('/getTasksById/:id', getTasksById )
-router.post('/createTask', createTask)
+router.get('/tasks', protect,   getTasks)
+router.get('/userTask/:userId', protect,  getTasksByUserId)
+router.get('/getTasksById/:id', protect, getTasksById )
+router.post('/createTask', protect, createTask)
+
 
 module.exports = router
