@@ -209,32 +209,34 @@ async function gradeExam(req, res) {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const gradedExam = {};
 
-        for (let i = 0; i < questions.length; i++) {
-            const question = questions[i];
-            const studentAnswer = answers[i] ? answers[i].trim().toLowerCase() : "";
-            let evaluatedAnswer = "";
+        for (const key in questions) {
+            if (questions.hasOwnProperty(key)) {
+                const question = questions[key];
+                const studentAnswer = answers[key] ? answers[key].trim().toLowerCase() : "";
+                let evaluatedAnswer = "";
 
-            try {
-                // Generate AI response for the current question
-                const result = await model.generateContent(question);
-                evaluatedAnswer = await result.response.text();
-                evaluatedAnswer = evaluatedAnswer.trim().toLowerCase(); // Trim any extra whitespace
-            } catch (error) {
-                console.error("Error generating content:", error);
-                evaluatedAnswer = ""; // Handle error case gracefully
+                try {
+                    // Generate AI response for the current question
+                    const result = await model.generateContent(question);
+                    evaluatedAnswer = await result.response.text();
+                    evaluatedAnswer = evaluatedAnswer.trim().toLowerCase(); // Trim any extra whitespace
+                } catch (error) {
+                    console.error("Error generating content:", error);
+                    evaluatedAnswer = ""; // Handle error case gracefully
+                }
+
+                // Determine if student's answer matches the evaluated answer
+                const isCorrect = evaluatedAnswer.includes(studentAnswer.toLowerCase().trim());
+
+                // Store the result for each question
+                gradedExam[key] = {
+                    question: question,
+                    studentAnswer,
+                    expectedAnswer: evaluatedAnswer,
+                    isCorrect,
+                    explanation: `The correct answer for the question "${question}" is "${evaluatedAnswer}".`
+                };
             }
-
-            // Determine if student's answer matches the evaluated answer
-            const isCorrect = evaluatedAnswer.includes(studentAnswer.toLowerCase().trim());
-
-            // Store the result for each question
-            gradedExam[i] = {
-                question: question,
-                studentAnswer,
-                expectedAnswer: evaluatedAnswer,
-                isCorrect,
-                explanation: `The correct answer for the question "${question}" is "${evaluatedAnswer}".`
-            };
         }
 
         res.status(200).json({ gradedExam });
