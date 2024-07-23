@@ -170,6 +170,33 @@ async function generateflashCards(req, res) {
 //         res.status(500).send("An error occurred while grading exam.");
 //     }
 // }
+async function generateFeynman(req, res) {
+    const { resume } = req.body;
+    if (!resume) {
+        return res.status(400).send("A resume is required.");
+    }
+
+    const prompt = `Explain the following topic as if you were explaining it to a child using the Feynman technique: ${resume} also check my resume and told me what is wrong`;
+
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = await response.text();
+        
+        // Procesar la respuesta de la AI
+        const resumeAi = text.trim();
+
+        console.log({ resumeAi, resume });
+        res.status(200).json({ 
+            resumeAi,
+            resume
+        });
+    } catch (error) {
+        console.error("Error generating summary:", error);
+        res.status(500).send("An error occurred while generating the summary.");
+    }
+}
 
 async function gradeExam(req, res) {
     const { answers, questions } = req.body;
@@ -264,5 +291,6 @@ module.exports = {
     generateTextGoole,
     generateTestQuestions,
     gradeExam,
-    generateflashCards
+    generateflashCards,
+    generateFeynman
 }
