@@ -288,11 +288,62 @@ async function generateText(req, res) {
     }
 }
 
+async function imagesStory(req, res) {
+    const { topic } = req.body;
+    try {
+
+        const chatCompletion = await Openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [{"role": "user", "content": `puedes ayudarme si te paso este topic: ${topic} a generar imagenes mentales y asociativas para yo entender mejor este tema, methodo de locci`}],
+          });
+
+        const contentString = chatCompletion?.choices[0]?.message.content;
+
+
+        res.json({
+            contentString
+        });
+
+    } catch (error) {
+        console.error("Error generating text:", error);
+        res.status(500).send("An error occurred while generating text.");
+    }
+}
+
+async function generateWordsCombination(req, res) {
+    const { word } = req.body;
+    if (!word) {
+        return res.status(400).send("A resume is required.");
+    }
+
+    const prompt = `te voy a pasar esta palabra ${word} necestio que me ayudes a generar algo para recordarles puede ser una historia, un juego de palabras para yo recodar esta mas sencillo`;
+
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = await response.text();
+        
+        // Procesar la respuesta de la AI
+        const textAi = text.trim();
+
+        res.status(200).json({ 
+            word,
+            textAi
+        });
+    } catch (error) {
+        console.error("Error generating summary:", error);
+        res.status(500).send("An error occurred while generating the summary.");
+    }
+}
+
 module.exports = {
     generateText,
     generateTextGoole,
     generateTestQuestions,
     gradeExam,
     generateflashCards,
-    generateFeynman
+    generateFeynman,
+    imagesStory,
+    generateWordsCombination
 }
