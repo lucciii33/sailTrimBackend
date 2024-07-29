@@ -74,6 +74,7 @@ const loginUser = asyncHandler(async (req, res) => {
         edad: user.edad,
         token: generateToken(user._id),
         loginDays: user.loginDays,
+        customerId: user.customerId
       });
     } else {
       res.status(400);
