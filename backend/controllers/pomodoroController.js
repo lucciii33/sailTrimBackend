@@ -70,7 +70,14 @@ const editTask = asyncHanlder(async(req, res) => {
 })
 
 const deleteTask = asyncHanlder(async(req, res) => {
-  
+    const deleteTask = await Task.findByIdAndDelete(req.params.id);
+
+    if (!deleteTask) {
+        res.status(404);
+        throw new Error("task not found");
+    }
+
+    res.status(200).json({ message: `task with id ${req.params.id} deleted successfully` });
 })
 
 /////Pomodoro functions here: 

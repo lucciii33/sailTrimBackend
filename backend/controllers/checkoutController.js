@@ -40,17 +40,18 @@ const payment = asyncHanlder(async(req, res) => {
 
 const checkpayment = asyncHanlder(async(req, res) => {
   const { userId } = req.params; // Obtener ID de usuario de la ruta
-
+    console.log("userId", userId)
     // Buscar al usuario por userId
     const user = await User.findById(userId);
+    console.log("user", user)
 
     if (!user) {
         return res.status(404).json({ message: 'User not found' });
     }
 
-    if (!user.customerId) {
-        return res.status(200).json({ message: 'User does not have a customerId' });
-    }
+    // if (!user.customerId) {
+    //     return res.status(200).json({ message: 'User does not have a customerId' });
+    // }
 
     // Recuperar todas las suscripciones del cliente usando el customerId
     try {
