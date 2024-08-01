@@ -66,8 +66,18 @@ const createTask = asyncHanlder(async(req, res) => {
 })
 
 const editTask = asyncHanlder(async(req, res) => {
+    const updatedTask = await Task.findByIdAndUpdate(req.params.id, req.body, {
+        new: true,
+    });
 
+    if (!updatedTask) {
+        res.status(404);
+        throw new Error("WhitenNose not found");
+    }
+
+    res.status(200).json(updatedTask);
 })
+
 
 const deleteTask = asyncHanlder(async(req, res) => {
     const deleteTask = await Task.findByIdAndDelete(req.params.id);
