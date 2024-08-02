@@ -48,12 +48,6 @@ const checkpayment = asyncHanlder(async(req, res) => {
     if (!user) {
         return res.status(404).json({ message: 'User not found' });
     }
-
-    // if (!user.customerId) {
-    //     return res.status(200).json({ message: 'User does not have a customerId' });
-    // }
-
-    // Recuperar todas las suscripciones del cliente usando el customerId
     try {
         const subscription = await stripe?.subscriptions.retrieve(user.customerId);
         res.json({ subscription });
@@ -63,7 +57,35 @@ const checkpayment = asyncHanlder(async(req, res) => {
     }
 })
 
+const cancelSuscription = asyncHanlder(async(req, res) => {
+    const { userId } = req.params; // userId se envía en el cuerpo de la solicitud
+    console.log("userId", userId);
+
+    // Buscar al usuario por userId
+    const user = await User.findById(userId);
+    console.log("user", user);
+
+    if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+    }
+
+    try {
+        // Usar el ID de suscripción almacenado en `customerId` para cancelar la suscripción
+        const deletedSubscription = await stripe.subscriptions.cancel(user.customerId);
+        console.log("deletedSubscription", deletedSubscription);
+
+        // Actualizar la base de datos, por ejemplo, eliminando el customerId o marcando la suscripción como cancelada
+ 
+
+        res.json({ message: 'Subscription canceled successfully', subscription: deletedSubscription });
+    } catch (error) {
+        console.error('Error canceling subscription:', error);
+        res.status(500).json({ message: 'Error canceling subscription', error: error.message });
+    }
+  })
+
 module.exports = {
     payment,
-    checkpayment
+    checkpayment,
+    cancelSuscription
 }
