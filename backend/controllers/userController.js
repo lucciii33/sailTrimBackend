@@ -50,37 +50,53 @@ const registerUser = asyncHandler(async (req, res) => {
 })
 
 const loginUser = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-  
-    //Check for a practitioner user email
-    const user = await User.findOne({ email });
-  
-    if (!user) {
+  const { email, password } = req.body;
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
       res.status(400);
       throw new Error("User not found");
-    }
-  
-    if (user && (await bcrypt.compare(password, user.password))) {
+  }
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (user && isMatch) {
       const currentDay = new Date().getDay().toString(); 
+      const currentWeekNumber = Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7));
+
+      // Verifica si la semana ha cambiado
+      if (user.lastWeekNumber !== currentWeekNumber) {
+          user.loginDays = {
+              "0": false,
+              "1": false,
+              "2": false,
+              "3": false,
+              "4": false,
+              "5": false,
+              "6": false
+          };
+          user.lastWeekNumber = currentWeekNumber; // Actualiza el número de semana
+      }
+
       user.loginDays.set(currentDay, true);
       await user.save();
 
       res.json({
-        _id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        pais: user.pais,
-        edad: user.edad,
-        token: generateToken(user._id),
-        loginDays: user.loginDays,
-        customerId: user.customerId
+          _id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          pais: user.pais,
+          edad: user.edad,
+          token: generateToken(user._id),
+          loginDays: user.loginDays,
+          customerId: user.customerId
       });
-    } else {
+  } else {
       res.status(400);
       throw new Error("Invalid credentials");
-    }
-  });
+  }
+});
 
   const generateToken = (id) => {
     return jwt.sign({ id }, `${process.env.JWT_SECRET_NODE}`, {

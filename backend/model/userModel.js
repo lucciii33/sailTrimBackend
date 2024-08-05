@@ -42,6 +42,10 @@ const userSchema = mongoose.Schema({
           "6": false  // Saturday
         }
     },
+    lastWeekNumber: {
+        type: Number,
+        default: Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7))
+    },
     customerId:{
         type: String,
         required: false
