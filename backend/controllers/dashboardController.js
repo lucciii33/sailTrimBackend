@@ -171,12 +171,17 @@ async function generateflashCards(req, res) {
 //     }
 // }
 async function generateFeynman(req, res) {
+
     const { resume } = req.body;
     if (!resume) {
         return res.status(400).send("A resume is required.");
     }
 
-    const prompt = `Explain the following topic as if you were explaining it to a child using the Feynman technique: ${resume} also check my resume and told me what is wrong`;
+    // Eliminar las etiquetas HTML del texto para que la IA no se confunda
+    const plainTextResume = resume.replace(/<\/?[^>]+>/gi, '');
+
+    const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} `;
+
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
