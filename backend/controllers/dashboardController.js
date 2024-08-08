@@ -2,6 +2,7 @@
 
 // const OpenAI = require("openai");
 const { parse, stringify } = require('flatted'); 
+const levenshtein = require('fast-levenshtein');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const apiKey = process.env.GEMINI_KEY; // Replace with your actual key
 
@@ -21,8 +22,6 @@ const Openai = new OpenAI({
   apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt"
 });
 console.log("Openai", Openai)
-
-
 
 
 async function generateTextGoole(req, res) {
@@ -203,7 +202,117 @@ async function generateFeynman(req, res) {
     }
 }
 
+// async function gradeExam(req, res) {
+//     const { answers, questions } = req.body;
+
+//     if (!answers || !questions) {
+//         return res.status(400).send("Answers and questions are required.");
+//     }
+
+//     try {
+//         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+//         const gradedExam = {};
+
+//         for (const key in questions) {
+//             if (questions.hasOwnProperty(key)) {
+//                 const question = questions[key];
+//                 const studentAnswer = answers[key] ? answers[key].trim().toLowerCase() : "";
+//                 let evaluatedAnswer = "";
+
+//                 try {
+//                     // Generate AI response for the current question
+//                     const result = await model.generateContent(question);
+//                     evaluatedAnswer = await result.response.text();
+//                     evaluatedAnswer = evaluatedAnswer.trim().toLowerCase(); // Trim any extra whitespace
+//                 } catch (error) {
+//                     console.error("Error generating content:", error);
+//                     evaluatedAnswer = ""; // Handle error case gracefully
+//                 }
+
+//                 // Determine if student's answer matches the evaluated answer
+//                 const isCorrect = evaluatedAnswer.includes(studentAnswer.toLowerCase().trim());
+
+//                 // Store the result for each question
+//                 gradedExam[key] = {
+//                     question: question,
+//                     studentAnswer,
+//                     expectedAnswer: evaluatedAnswer,
+//                     isCorrect,
+//                     explanation: `The correct answer for the question "${question}" is "${evaluatedAnswer}".`
+//                 };
+//             }
+//         }
+
+//         res.status(200).json({ gradedExam });
+//     } catch (error) {
+//         console.error("Error grading exam:", error);
+//         res.status(500).send("An error occurred while grading exam.");
+//     }
+    
+//      }
+
+// async function gradeExam(req, res) {
+//     const { answers, questions } = req.body;
+
+//     if (!answers || !questions) {
+//         return res.status(400).send("Answers and questions are required.");
+//     }
+
+//     try {
+//         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+//         const gradedExam = {};
+
+//         for (const key in questions) {
+//             if (questions.hasOwnProperty(key)) {
+//                 const question = questions[key];
+//                 const studentAnswer = answers[key] ? answers[key].trim().toLowerCase() : "";
+//                 let evaluatedAnswer = "";
+
+//                 try {
+//                     // Generate AI response for the current question
+//                     const result = await model.generateContent(question);
+//                     evaluatedAnswer = await result.response.text();
+//                     evaluatedAnswer = evaluatedAnswer.trim().toLowerCase(); // Trim any extra whitespace
+//                 } catch (error) {
+//                     console.error("Error generating content:", error);
+//                     evaluatedAnswer = ""; // Handle error case gracefully
+//                 }
+
+//                 // Normalize both answers for comparison
+//                 const normalizedStudentAnswer = studentAnswer.replace(/\s+/g, ' ').trim();
+//                 const normalizedEvaluatedAnswer = evaluatedAnswer.replace(/\s+/g, ' ').trim();
+
+//                 // Calculate Levenshtein distance
+//                 const distance = levenshtein(normalizedStudentAnswer, normalizedEvaluatedAnswer);
+//                 const maxLength = Math.max(normalizedStudentAnswer.length, normalizedEvaluatedAnswer.length);
+//                 const similarity = 1 - (distance / maxLength); // Similarity between 0 and 1
+
+//                 // Determine if the similarity is high enough to be considered correct
+//                 const isCorrect = similarity >= 0.8; // Threshold for correctness (can be adjusted)
+
+//                 // Store the result for each question
+//                 gradedExam[key] = {
+//                     question: question,
+//                     studentAnswer,
+//                     expectedAnswer: evaluatedAnswer,
+//                     isCorrect,
+//                     explanation: `The correct answer for the question "${question}" is "${evaluatedAnswer}".`
+//                 };
+//             }
+//         }
+
+//         res.status(200).json({ gradedExam });
+//     } catch (error) {
+//         console.error("Error grading exam:", error);
+//         res.status(500).send("An error occurred while grading exam.");
+//     }
+// }
+
 async function gradeExam(req, res) {
+    if (!levenshtein) {
+        return res.status(500).send("Levenshtein module not loaded.");
+    }
+
     const { answers, questions } = req.body;
 
     if (!answers || !questions) {
@@ -221,19 +330,24 @@ async function gradeExam(req, res) {
                 let evaluatedAnswer = "";
 
                 try {
-                    // Generate AI response for the current question
                     const result = await model.generateContent(question);
                     evaluatedAnswer = await result.response.text();
-                    evaluatedAnswer = evaluatedAnswer.trim().toLowerCase(); // Trim any extra whitespace
+                    evaluatedAnswer = evaluatedAnswer.trim().toLowerCase();
                 } catch (error) {
                     console.error("Error generating content:", error);
-                    evaluatedAnswer = ""; // Handle error case gracefully
+                    evaluatedAnswer = "";
                 }
 
-                // Determine if student's answer matches the evaluated answer
-                const isCorrect = evaluatedAnswer.includes(studentAnswer.toLowerCase().trim());
+                const normalizedStudentAnswer = studentAnswer.replace(/\s+/g, ' ').trim();
+                const normalizedEvaluatedAnswer = evaluatedAnswer.replace(/\s+/g, ' ').trim();
 
-                // Store the result for each question
+                const distance = levenshtein.get(normalizedStudentAnswer, normalizedEvaluatedAnswer);
+                const maxLength = Math.max(normalizedStudentAnswer.length, normalizedEvaluatedAnswer.length);
+                const similarity = 1 - (distance / maxLength);
+
+                const isCorrect = similarity >= 0.09;
+                console.log("Distance:", distance, "Similarity:", similarity);
+
                 gradedExam[key] = {
                     question: question,
                     studentAnswer,
@@ -247,10 +361,9 @@ async function gradeExam(req, res) {
         res.status(200).json({ gradedExam });
     } catch (error) {
         console.error("Error grading exam:", error);
-        res.status(500).send("An error occurred while grading exam.");
+        res.status(500).send("An error occurred while grading the exam.");
     }
-    
-     }
+}
     
 
 async function generateText(req, res) {
