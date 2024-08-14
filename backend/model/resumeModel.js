@@ -5,6 +5,10 @@ const resumeSchema = mongoose.Schema({
         type: String,
         required: false
     },
+    title:{
+        type: String,
+        required: false
+    },
     UserId: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,

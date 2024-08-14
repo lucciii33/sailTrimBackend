@@ -3,6 +3,7 @@ const User = require('../model/userModel'); // Ruta al modelo de usuario
 
 // Programar un trabajo para que se ejecute cada domingo a la medianoche
 cron.schedule('0 0 * * 0', async () => {
+  console.log("Cron job ejecutado en:", new Date().toLocaleString("es-ES", { timeZone: "Europe/Madrid" }));
   try {
     await User.updateMany({}, { 
       loginDays: {
@@ -19,6 +20,9 @@ cron.schedule('0 0 * * 0', async () => {
   } catch (error) {
     console.error("Error reiniciando los días de login:", error);
   }
+}, {
+  scheduled: true,
+  timezone: "Europe/Madrid" // Configuración de la zona horaria
 });
 
 module.exports = cron;
