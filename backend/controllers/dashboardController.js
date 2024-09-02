@@ -327,7 +327,7 @@ async function generateWordsCombination(req, res) {
         return res.status(400).send("A resume is required.");
     }
 
-    const prompt = `te voy a pasar esta palabra ${word} necestio que me ayudes a generar algo para recordarles puede ser una historia, un juego de palabras para yo recodar esta mas sencillo`;
+    const prompt = `con esta palabra: ${word}. Necesito que me ayudes a crear una asociación mnemotécnica para recordarla más fácilmente. Puedes hacerlo sugiriendo palabras similares, rimas, o una frase creativa que me ayude a relacionar esta palabra con algo que ya conozco. Por ejemplo, si la palabra es 'felaraquidio', podrías sugerir algo como 'fecalo' o 'estafano' como asociaciones que suenen similares o que sean fáciles de recordar. También puedes crear una pequeña historia o frase que haga que la palabra sea más memorable.`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
