@@ -48,7 +48,7 @@ async function generateTestQuestions(req, res) {
         return res.status(400).send("Topic is required.");
     }
 
-    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso, "$" al inicio de cada pregunta de opción múltiple y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas)`;
+    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -202,9 +202,6 @@ async function generateFeynman(req, res) {
     }
 }
 
-
-
-
 async function gradeExam(req, res) {
     if (!levenshtein) {
         return res.status(500).send("Levenshtein module not loaded.");
@@ -262,7 +259,6 @@ async function gradeExam(req, res) {
     }
 }
     
-
 async function generateText(req, res) {
     const { prompt } = req.body;
     try {
