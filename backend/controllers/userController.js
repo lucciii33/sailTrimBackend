@@ -2,6 +2,12 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
+const Mailjet = require('node-mailjet');
+
+const mailjet = Mailjet.apiConnect(
+  process.env.MJ_APIKEY_PUBLIC, 
+  process.env.MJ_APIKEY_PRIVATE
+);
 
 // Description: Register a user
 // Route:       POST /api/users/
@@ -38,6 +44,35 @@ const registerUser = asyncHandler(async (req, res) => {
         edad,
         role: "USER",
     });
+
+    const request = mailjet
+        .post('send', { version: 'v3.1' })
+        .request({
+            Messages: [
+                {
+                    From: {
+                        Email: 'bluelighttech22@gmail.com',  // Tu email
+                        Name: 'bluelighttech22',  // Tu nombre o el de tu empresa
+                    },
+                    To: [
+                        {
+                            Email: user.email,  // Email del usuario registrado
+                            Name: `${user.firstName} ${user.lastName}`,  // Nombre del usuario
+                        },
+                    ],
+                    Subject: 'Welcome to Our Service!',
+                    TextPart: `Dear ${user.firstName}, welcome to our service! We're glad to have you on board.`,
+                    HTMLPart: `<h3>Dear ${user.firstName}, welcome to our service!</h3><p>We're glad to have you on board.</p>`,
+                },
+            ],
+        });
+    request
+        .then((result) => {
+            console.log('Email sent successfully:', result.body);
+        })
+        .catch((err) => {
+            console.error('Error sending email:', err.statusCode);
+        });
 
     res.status(201).json({
         _id: user.id,
