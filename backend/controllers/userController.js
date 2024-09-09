@@ -97,21 +97,21 @@ const loginUser = asyncHandler(async (req, res) => {
   const isMatch = await bcrypt.compare(password, user.password);
   if (user && isMatch) {
       const currentDay = new Date().getDay().toString(); 
-      const currentWeekNumber = Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7));
+    //   const currentWeekNumber = Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7));
 
-      // Verifica si la semana ha cambiado
-      if (user.lastWeekNumber !== currentWeekNumber) {
-          user.loginDays = {
-              "0": false,
-              "1": false,
-              "2": false,
-              "3": false,
-              "4": false,
-              "5": false,
-              "6": false
-          };
-          user.lastWeekNumber = currentWeekNumber; // Actualiza el número de semana
-      }
+    //   // Verifica si la semana ha cambiado
+    //   if (user.lastWeekNumber !== currentWeekNumber) {
+    //       user.loginDays = {
+    //           "0": false,
+    //           "1": false,
+    //           "2": false,
+    //           "3": false,
+    //           "4": false,
+    //           "5": false,
+    //           "6": false
+    //       };
+    //       user.lastWeekNumber = currentWeekNumber; // Actualiza el número de semana
+    //   }
 
       user.loginDays.set(currentDay, true);
       await user.save();

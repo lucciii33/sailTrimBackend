@@ -20,6 +20,7 @@
         "fast-levenshtein": "^3.0.0",
         "jsonwebtoken": "^9.0.2",
         "levenshtein-edit-distance": "^3.0.1",
+        "moment-timezone": "^0.5.45",
         "mongoose": "^8.4.4",
         "node-cron": "^3.0.3",
         "node-mailjet": "^6.0.6",
