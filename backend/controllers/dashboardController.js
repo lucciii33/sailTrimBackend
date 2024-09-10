@@ -48,7 +48,7 @@ async function generateTestQuestions(req, res) {
         return res.status(400).send("Topic is required.");
     }
 
-    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple`;
+    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas)`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
