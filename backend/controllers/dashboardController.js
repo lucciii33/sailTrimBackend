@@ -75,7 +75,7 @@ async function generateflashCards(req, res) {
   }
 
   const prompt = `
-    Each flashcard should contain a question and a corresponding answer. Please format the output as follows: Q: [Question] A: [Answer] , Generate a set of study flashcards for the topic "${topic}". `;
+    Cada tarjeta de estudio debe contener una pregunta y una respuesta correspondiente. Por favor, formatea el resultado de la siguiente manera: P: [Question] R: [Answer] , Genera un conjunto de tarjetas de estudio para el tema "${topic}".  `;
 
   try {
     const model = genAI.getGenerativeModel({ model: "pro-1.5"});
@@ -265,12 +265,13 @@ async function generateText(req, res) {
 
         const chatCompletion = await Openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 10`}],
+            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 10.(SPANISH ONLY PLEASE)`}],
           });
 
         const contentString = chatCompletion?.choices[0]?.message.content;
 
-        const qaRegex = /Question:\s*(.*?)\s*Answer:\s*(.*?)(?=\nQuestion:|$)/gs;
+        const qaRegex = /(?:Question|Pregunta):\s*(.*?)\s*(?:Answer|Respuesta):\s*(.*?)(?=\n(?:Question|Pregunta):|$)/gs;
+        console.log("qaRegex", qaRegex)
         const qaPairs = [];
         let match;
 
@@ -292,6 +293,7 @@ async function generateText(req, res) {
         res.json({
             flashCards
         });
+
 
     } catch (error) {
         console.error("Error generating text:", error);
