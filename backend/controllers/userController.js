@@ -13,9 +13,9 @@ const mailjet = Mailjet.apiConnect(
 // Route:       POST /api/users/
 // Access:      Public
 const registerUser = asyncHandler(async (req, res) => {
-    const { firstName, lastName, email, password, pais, edad } = req.body;
+    const { firstName, lastName, email, password, pais, edad, terms} = req.body;
     
-    if (!firstName || !lastName || !email || !password || !pais || !edad) {
+    if (!firstName || !lastName || !email || !password || !pais || !edad || !terms) {
         res.status(400);
         throw new Error("Please complete all required fields.");
     }
@@ -43,6 +43,7 @@ const registerUser = asyncHandler(async (req, res) => {
         pais,
         edad,
         role: "USER",
+        terms
     });
 
     const request = mailjet
@@ -81,6 +82,7 @@ const registerUser = asyncHandler(async (req, res) => {
         email: user.email,
         pais: user.pais,
         edad: user.edad,
+        terms: user.terms
     });
 })
 

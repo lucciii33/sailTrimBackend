@@ -53,7 +53,11 @@ const userSchema = mongoose.Schema({
     tasks: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "Task"
-    }]
+    }],
+    terms:{
+        type: Boolean,
+        required: false
+    }
 }, {
     timestamps: true
 });
