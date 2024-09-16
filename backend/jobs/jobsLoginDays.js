@@ -18,7 +18,6 @@ cron.schedule('0 6 * * 1', async () => {
         "loginDays.4": false,
         "loginDays.5": false,
         "loginDays.6": false,
-        lastWeekNumber: Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7)) // Actualiza el número de semana
       }
     });
 

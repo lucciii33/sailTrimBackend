@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require('crypto');
 const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
 const Mailjet = require('node-mailjet');
@@ -8,6 +9,8 @@ const mailjet = Mailjet.apiConnect(
   process.env.MJ_APIKEY_PUBLIC, 
   process.env.MJ_APIKEY_PRIVATE
 );
+
+console.log("process.env.MJ_APIKEY_PUBLIC", process.env.MJ_APIKEY_PUBLIC)
 
 // Description: Register a user
 // Route:       POST /api/users/
@@ -99,21 +102,18 @@ const loginUser = asyncHandler(async (req, res) => {
   const isMatch = await bcrypt.compare(password, user.password);
   if (user && isMatch) {
       const currentDay = new Date().getDay().toString(); 
-    //   const currentWeekNumber = Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7));
-
-    //   // Verifica si la semana ha cambiado
-    //   if (user.lastWeekNumber !== currentWeekNumber) {
-    //       user.loginDays = {
-    //           "0": false,
-    //           "1": false,
-    //           "2": false,
-    //           "3": false,
-    //           "4": false,
-    //           "5": false,
-    //           "6": false
-    //       };
-    //       user.lastWeekNumber = currentWeekNumber; // Actualiza el número de semana
-    //   }
+      if (currentDay === '1') {
+        user.loginDays = {
+          "0": false,
+          "1": false,
+          "2": false,
+          "3": false,
+          "4": false,
+          "5": false,
+          "6": false
+        };
+        console.log("Los días de login se han reiniciado porque es lunes");
+      }
 
       user.loginDays.set(currentDay, true);
       await user.save();
@@ -135,6 +135,132 @@ const loginUser = asyncHandler(async (req, res) => {
   }
 });
 
+const forgotPassword = asyncHandler(async (req, res) => {
+    const { email } = req.body;
+  
+    const user = await User.findOne({ email });
+    if (!user) {
+      res.status(404);
+      throw new Error('No user found with that email address');
+    }
+  
+    // Generar token para restablecer la contraseña
+    const resetToken = crypto.randomBytes(32).toString('hex');
+  
+    // Guardar el token y su fecha de expiración en el usuario
+    user.resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // Token válido por 10 minutos
+  
+    await user.save();
+  
+    // URL de frontend para que el usuario cambie la contraseña
+    const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;  // Cambia el enlace si usas un dominio real
+  
+    // Enviar el correo electrónico con Mailjet
+    try {
+        const request = await mailjet
+          .post('send', { version: 'v3.1' })
+          .request({
+            Messages: [
+              {
+                From: {
+                  Email: 'bluelighttech22@gmail.com',  
+                  Name: 'bluelighttech22',
+                },
+                To: [
+                  {
+                    Email: user.email,
+                    Name: `${user.firstName} ${user.lastName}`,
+                  },
+                ],
+                Subject: 'Password Reset Request',
+                TextPart: `Dear ${user.firstName}, you requested a password reset. Please click the following link to reset your password: ${resetUrl}`,
+                HTMLPart: `<h3>Dear ${user.firstName},</h3>
+                           <p>You requested a password reset. Please click the following link to reset your password:</p>
+                           <a href="${resetUrl}">Reset Password</a>
+                           <p>If you did not request this, please ignore this email.</p>`,
+              },
+            ],
+          });
+      
+        // Si el email se envía con éxito
+        res.status(200).json({ success: true, data: 'Password reset email sent' });
+      } catch (err) {
+        console.error('Error sending password reset email:', err.statusCode);
+      
+        // Restablecer los campos del token en caso de error
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpire = undefined;
+        await user.save();
+      
+        res.status(500);
+        throw new Error('Email could not be sent');
+      }
+      
+  });
+
+const resetPassword = asyncHandler(async (req, res) => {
+    const { password } = req.body;
+  
+    // Encriptar el token de la URL
+    const resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(req.params.token)
+      .digest('hex');
+  
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpire: { $gt: Date.now() }, // Verifica que el token no haya expirado
+    });
+  
+    if (!user) {
+      res.status(400);
+      throw new Error('Invalid token or token has expired');
+    }
+  
+    // Establecer la nueva contraseña
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(password, salt);
+  
+    // Limpiar los campos de reset token y expiración
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+  
+    await user.save();
+  
+    res.status(200).json({
+      success: true,
+      data: 'Password reset successful',
+    });
+  });
+  
+
+// const resetLoginDays = async (req, res) => {
+//   try {
+//     // Reiniciar los días de login de todos los usuarios
+//     const updateResult = await User.updateMany({}, { 
+//       $set: {
+//         "loginDays.0": false,
+//         "loginDays.1": false,
+//         "loginDays.2": false,
+//         "loginDays.3": false,
+//         "loginDays.4": false,
+//         "loginDays.5": false,
+//         "loginDays.6": false
+//       }
+//     });
+
+//     console.log(`Documentos modificados: ${updateResult.nModified}`);
+//     res.send("Días de login reiniciados!");
+//   } catch (error) {
+//     console.error("Error reiniciando los días de login:", error);
+//     res.status(500).send("Error reiniciando los días de login");
+//   }
+// };
+
   const generateToken = (id) => {
     return jwt.sign({ id }, `${process.env.JWT_SECRET_NODE}`, {
       expiresIn: "8h",
@@ -143,5 +269,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
 module.exports = {
     registerUser,
-    loginUser
+    loginUser,
+    forgotPassword,
+    resetPassword
 }
