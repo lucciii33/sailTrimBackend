@@ -239,7 +239,7 @@ async function gradeExam(req, res) {
                 const maxLength = Math.max(normalizedStudentAnswer.length, normalizedEvaluatedAnswer.length);
                 const similarity = 1 - (distance / maxLength);
 
-                const isCorrect = similarity >= 0.09;
+                const isCorrect = similarity >= 0.07;
                 console.log("Distance:", distance, "Similarity:", similarity);
 
                 gradedExam[key] = {
