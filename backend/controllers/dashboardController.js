@@ -350,6 +350,33 @@ async function generateWordsCombination(req, res) {
     }
 }
 
+async function generateHomework(req, res) {
+    const { homework } = req.body;
+    if (!homework) {
+        return res.status(400).send("A homework is required.");
+    }
+
+    const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta`;
+
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = await response.text();
+        
+        // Procesar la respuesta de la AI
+        const textAi = text.trim();
+
+        res.status(200).json({ 
+            homework,
+            textAi
+        });
+    } catch (error) {
+        console.error("Error generating summary:", error);
+        res.status(500).send("An error occurred while generating the summary.");
+    }
+}
+
 module.exports = {
     generateText,
     generateTextGoole,
@@ -358,5 +385,6 @@ module.exports = {
     generateflashCards,
     generateFeynman,
     imagesStory,
-    generateWordsCombination
+    generateWordsCombination,
+    generateHomework
 }
