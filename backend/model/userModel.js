@@ -65,7 +65,10 @@ const userSchema = mongoose.Schema({
     resetPasswordExpire:{
         type: Date,
         required: false
-    } 
+    },
+    lastReset: {
+        type: Date, // Este es el campo que necesitas para guardar la fecha de reinicio
+      },
 }, {
     timestamps: true
 });
