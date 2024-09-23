@@ -102,7 +102,11 @@ const loginUser = asyncHandler(async (req, res) => {
   const isMatch = await bcrypt.compare(password, user.password);
   if (user && isMatch) {
       const currentDay = new Date().getDay().toString(); 
-      if (currentDay === '1') {
+      const today = new Date();
+      const lastMonday = new Date(today.setDate(today.getDate() - (today.getDay() + 6) % 7));
+  
+      // Si no se ha reiniciado los días desde el último lunes, reiniciamos
+      if (!user.lastReset || new Date(user.lastReset) < lastMonday) {
         user.loginDays = {
           "0": false,
           "1": false,
@@ -112,7 +116,8 @@ const loginUser = asyncHandler(async (req, res) => {
           "5": false,
           "6": false
         };
-        console.log("Los días de login se han reiniciado porque es lunes");
+        user.lastReset = new Date(); // Actualizamos la fecha de reinicio
+        console.log("Los días de login se han reiniciado porque ha pasado un nuevo lunes");
       }
 
       user.loginDays.set(currentDay, true);
