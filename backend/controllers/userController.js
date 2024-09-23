@@ -106,7 +106,7 @@ const loginUser = asyncHandler(async (req, res) => {
       const lastMonday = new Date(today.setDate(today.getDate() - (today.getDay() + 6) % 7));
   
       // Si no se ha reiniciado los días desde el último lunes, reiniciamos
-      if (!user.lastReset || new Date(user.lastReset) < lastMonday) {
+      if (currentDay === '1' || !user.lastReset || new Date(user.lastReset) < lastMonday) {
         user.loginDays = {
           "0": false,
           "1": false,
