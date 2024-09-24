@@ -140,7 +140,27 @@ const payment = asyncHanlder(async (req, res) => {
           },
           To: [{ Email: user.email, Name: `${user.firstName} ${user.lastName}` }],
           Subject: "¡Bienvenido! Que alegría tenerte aquí",
-          HTMLPart: `<h3>Hola ${user.firstName}, soy Nova. Tu periodo de prueba ha comenzado y terminará el ${formattedTrialEndDate}. ¡Sigue esforzándote para lograr tus sueños!</h3>`,
+          
+          HTMLPart: `
+        <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f9f9f9;">
+         <h2 style="color: #ff8313;">¡Bienvenido, ${user.firstName}!</h2>
+          <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Login.png" alt="Nova te da la bienvenida" style="width: 100%; max-width: 400px; height: auto; margin-bottom: 20px;"/>
+          <p style="font-size: 18px; color: #333;">
+            Hola ${user.firstName}, soy <strong>Nova</strong>, tu asistente personal. ¡Qué alegría tenerte con nosotros!
+          </p>
+          <p style="font-size: 16px; color: #333;">
+            Tu periodo de prueba ha comenzado y finalizará el <strong>${formattedTrialEndDate}</strong>. Durante este tiempo, puedes explorar todas las funcionalidades que hemos creado para ayudarte a alcanzar tus sueños.
+          </p>
+          <p style="font-size: 16px; color: #333;">
+            No dudes en aprovechar este periodo para sacar el máximo provecho. ¡Sigue esforzándote y no te rindas!
+          </p>
+          <p style="font-size: 14px; color: #666;">
+            Saludos,<br/>
+            <strong>NOVA</strong><br/>
+            El equipo de <strong>Blue Light Tech</strong>
+          </p>
+        </div>
+      `,
         },
       ],
     });
@@ -220,8 +240,23 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
             },
           ],
           Subject: "Sentimos mucho que te vayas",
-          TextPart: `hey ${user.firstName}, aqui estaremos mejorando por si deseas volver.`,
-          HTMLPart: `<h3>esperamos vuelvas pronto ${user.firstName}.</p>`,
+          TextPart: `hey ${user.firstName} ${user.lastName}, aqui estaremos mejorando por si deseas volver.`,
+          HTMLPart: `
+            <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+              <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
+              <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
+              <p style="font-size: 16px; color: #333;">
+                Hola ${user.firstName} ${user.lastName}, lamentamos que hayas decidido irte. Queremos que sepas que 
+                estamos trabajando duro para mejorar y ofrecerte una mejor experiencia.
+              </p>
+              <p style="font-size: 16px; color: #333;">
+                Si decides regresar, siempre serás bienvenido en nuestra comunidad. ¡Te esperamos con los brazos abiertos!
+              </p>
+              <p style="font-size: 14px; color: #666;">
+                Saludos cordiales,<br/>El equipo de <strong>bluelighttech22</strong>
+              </p>
+            </div>
+          `,
         },
       ],
     });
