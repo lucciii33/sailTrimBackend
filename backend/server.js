@@ -32,4 +32,5 @@ app.use(errorHandler)
 
 app.listen(port, ()=> console.log(`Server started on port ${port}`))
 
-resetLoginDaysJob;
+resetLoginDaysJob();
+console.log("funcion se envio")
