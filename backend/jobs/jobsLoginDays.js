@@ -3,7 +3,7 @@ const User = require('../model/userModel');
 const moment = require('moment-timezone');
 // cron.schedule('0 6 * * 1', async () => {
 const resetLoginDaysJob = () => {
-  cron.schedule('0 14 * * 3', async () => {
+  cron.schedule('0 6 * * 1', async () => {
     const currentTime = moment.tz("Europe/Madrid").format('YYYY-MM-DD HH:mm:ss');
     console.log("Cron job ejecutado en (hora local):", currentTime);
 
