@@ -26,6 +26,7 @@ console.log("Openai", Openai)
 
 async function generateTextGoole(req, res) {
     const { prompt } = req.body;
+
     if (!prompt) {
         return res.status(400).send("Prompt is required.");
     }
@@ -43,12 +44,14 @@ async function generateTextGoole(req, res) {
 }
 
 async function generateTestQuestions(req, res) {
-    const { topic } = req.body;
+    const { topic, level } = req.body;
+    console.log("levellevellevellevel", level)
+    console.log("body generateTestQuestions", req.body )
     if (!topic) {
         return res.status(400).send("Topic is required.");
     }
 
-    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas)`;
+    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas) y hazlo para un niverl ${level}`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -171,7 +174,9 @@ async function generateflashCards(req, res) {
 // }
 async function generateFeynman(req, res) {
 
-    const { resume } = req.body;
+    const { resume, level } = req.body;
+    console.log("body Feyman", req.body )
+
     if (!resume) {
         return res.status(400).send("A resume is required.");
     }
@@ -179,7 +184,7 @@ async function generateFeynman(req, res) {
     // Eliminar las etiquetas HTML del texto para que la IA no se confunda
     const plainTextResume = resume.replace(/<\/?[^>]+>/gi, '');
 
-    const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} `;
+    const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} hazlo con una exigencia nivel ${level} `;
 
 
     try {
@@ -247,7 +252,7 @@ async function gradeExam(req, res) {
                     studentAnswer,
                     expectedAnswer: evaluatedAnswer,
                     isCorrect,
-                    explanation: `The correct answer for the question "${question}" is "${evaluatedAnswer}".`
+                    explanation: `La respuesta correcta para la pregunta "${question}" es "${evaluatedAnswer}".`
                 };
             }
         }
