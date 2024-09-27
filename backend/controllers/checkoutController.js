@@ -94,6 +94,15 @@ const payment = asyncHanlder(async (req, res) => {
   }
 
   try {
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.hasTrial) {
+      return res.status(400).json({ message: "You have already used your free trial." });
+    }
     // Crear método de pago
     const paymentMethod = await stripe.paymentMethods.create({
       type: "card",
@@ -103,20 +112,29 @@ const payment = asyncHanlder(async (req, res) => {
     // Crear cliente en Stripe y adjuntar el método de pago
     const customer = await stripe.customers.create({
       payment_method: paymentMethod.id,
+      name: `${user.firstName} ${user.lastName}`,  // Pasar nombre del usuario desde la base de datos
+      email: user.email, 
+      invoice_settings: {
+        default_payment_method: paymentMethod.id,  // Esto garantiza que este método de pago será utilizado para los cobros.
+      },
     });
 
     // Crear la suscripción
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Reemplaza con tu ID de plan real
-      trial_end: trial_end_date,
+      trial_period_days: user.hasTrial ? 0 : 1,
       expand: ["latest_invoice.payment_intent"],
     });
 
     // Validar si el usuario existe en la base de datos
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // const user = await User.findById(userId);
+    // if (!user) {
+    //   return res.status(404).json({ message: "User not found" });
+    // }
+    if (!user.hasTrial) {
+      user.hasTrial = true;
+      await user.save();
     }
 
     // Actualizar el usuario con el ID del cliente de Stripe
@@ -205,76 +223,220 @@ const checkpayment = asyncHanlder(async (req, res) => {
   }
 });
 
+const updatePaymentMethod = async (req, res) => {
+  const { userId, paymentMethodId } = req.body;
+
+  try {
+    // Encuentra al usuario en tu base de datos
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Adjuntar el nuevo método de pago al cliente en Stripe
+    await stripe.paymentMethods.attach(paymentMethodId, {
+      customer: user.customerId,
+    });
+
+    // Establecer el nuevo método como predeterminado
+    await stripe.customers.update(user.customerIdStripe, {
+      invoice_settings: {
+        default_payment_method: paymentMethodId,
+      },
+    });
+
+    res.json({ message: "Payment method updated successfully" });
+  } catch (error) {
+    console.error("Error updating payment method:", error);
+    res.status(500).json({ message: "Error updating payment method", error: error.message });
+  }
+};
+
+// const cancelSuscription = asyncHanlder(async (req, res) => {
+//   const { userId } = req.params; // userId se envía en el cuerpo de la solicitud
+//   console.log("userId", userId);
+
+//   // Buscar al usuario por userId
+//   const user = await User.findById(userId);
+//   console.log("user", user);
+
+//   if (!user) {
+//     return res.status(404).json({ message: "User not found" });
+//   }
+
+//   try {
+//     // Usar el ID de suscripción almacenado en `customerId` para cancelar la suscripción
+//     const deletedSubscription = await stripe.subscriptions.cancel(
+//       user.customerId
+//     );
+//     console.log("deletedSubscription", deletedSubscription);
+
+//     // Actualizar la base de datos, por ejemplo, eliminando el customerId o marcando la suscripción como cancelada
+
+//     const request = mailjet.post("send", { version: "v3.1" }).request({
+//       Messages: [
+//         {
+//           From: {
+//             Email: "bluelighttech22@gmail.com", // Tu email
+//             Name: "bluelighttech22", // Tu nombre o el de tu empresa
+//           },
+//           To: [
+//             {
+//               Email: user.email, // Email del usuario registrado
+//               Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
+//             },
+//           ],
+//           Subject: "Sentimos mucho que te vayas",
+//           TextPart: `hey ${user.firstName} ${user.lastName}, aqui estaremos mejorando por si deseas volver.`,
+//           HTMLPart: `
+//             <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+//               <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
+//               <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
+//               <p style="font-size: 16px; color: #333;">
+//                 Hola ${user.firstName} ${user.lastName}, lamentamos que hayas decidido irte. Queremos que sepas que 
+//                 estamos trabajando duro para mejorar y ofrecerte una mejor experiencia.
+//               </p>
+//               <p style="font-size: 16px; color: #333;">
+//                 Si decides regresar, siempre serás bienvenido en nuestra comunidad. ¡Te esperamos con los brazos abiertos!
+//               </p>
+//               <p style="font-size: 14px; color: #666;">
+//                 Saludos cordiales,<br/>El equipo de <strong>bluelighttech22</strong>
+//               </p>
+//             </div>
+//           `,
+//         },
+//       ],
+//     });
+//     request
+//       .then((result) => {
+//         console.log("Email sent successfully:", result.body);
+//       })
+//       .catch((err) => {
+//         console.error("Error sending email:", err.statusCode);
+//       });
+
+//     res.json({
+//       message: "Subscription canceled successfully",
+//       subscription: deletedSubscription,
+//     });
+//   } catch (error) {
+//     console.error("Error canceling subscription:", error);
+//     res
+//       .status(500)
+//       .json({ message: "Error canceling subscription", error: error.message });
+//   }
+// });
+
+
 const cancelSuscription = asyncHanlder(async (req, res) => {
-  const { userId } = req.params; // userId se envía en el cuerpo de la solicitud
-  console.log("userId", userId);
+  const { userId } = req.params;
 
   // Buscar al usuario por userId
   const user = await User.findById(userId);
-  console.log("user", user);
-
   if (!user) {
     return res.status(404).json({ message: "User not found" });
   }
 
   try {
-    // Usar el ID de suscripción almacenado en `customerId` para cancelar la suscripción
-    const deletedSubscription = await stripe.subscriptions.cancel(
-      user.customerId
-    );
-    console.log("deletedSubscription", deletedSubscription);
+    // Primero, obtener la suscripción del usuario
+    const subscription = await stripe.subscriptions.retrieve(user.customerId); 
 
-    // Actualizar la base de datos, por ejemplo, eliminando el customerId o marcando la suscripción como cancelada
+    // Verificar si obtuviste correctamente la información de la suscripción
+    if (!subscription) {
+      return res.status(404).json({ message: "Subscription not found" });
+    }
 
-    const request = mailjet.post("send", { version: "v3.1" }).request({
-      Messages: [
-        {
-          From: {
-            Email: "bluelighttech22@gmail.com", // Tu email
-            Name: "bluelighttech22", // Tu nombre o el de tu empresa
-          },
-          To: [
-            {
-              Email: user.email, // Email del usuario registrado
-              Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
+    // Verificar si la suscripción está en período de prueba
+    if (subscription.status === 'trialing') {
+      // CASO: Si la suscripción está en el período de prueba, usar `cancel` en lugar de `del`
+      const deletedSubscription = await stripe.subscriptions.cancel(subscription.id);  // Cambié `del` a `cancel`
+
+      // Actualizar la base de datos si es necesario, por ejemplo, eliminando el customerId
+      await User.findByIdAndUpdate(userId, { customerId: null }, { new: true });
+
+      // Enviar email de confirmación
+      await mailjet.post("send", { version: "v3.1" }).request({
+        Messages: [
+          {
+            From: {
+              Email: "bluelighttech22@gmail.com",
+              Name: "bluelighttech22",
             },
-          ],
-          Subject: "Sentimos mucho que te vayas",
-          TextPart: `hey ${user.firstName} ${user.lastName}, aqui estaremos mejorando por si deseas volver.`,
-          HTMLPart: `
-            <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
-              <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
-              <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
-              <p style="font-size: 16px; color: #333;">
-                Hola ${user.firstName} ${user.lastName}, lamentamos que hayas decidido irte. Queremos que sepas que 
-                estamos trabajando duro para mejorar y ofrecerte una mejor experiencia.
-              </p>
-              <p style="font-size: 16px; color: #333;">
-                Si decides regresar, siempre serás bienvenido en nuestra comunidad. ¡Te esperamos con los brazos abiertos!
-              </p>
-              <p style="font-size: 14px; color: #666;">
-                Saludos cordiales,<br/>El equipo de <strong>bluelighttech22</strong>
-              </p>
-            </div>
-          `,
-        },
-      ],
-    });
-    request
-      .then((result) => {
-        console.log("Email sent successfully:", result.body);
-      })
-      .catch((err) => {
-        console.error("Error sending email:", err.statusCode);
+            To: [
+              {
+                Email: user.email,
+                Name: `${user.firstName} ${user.lastName}`,
+              },
+            ],
+            Subject: "Sentimos mucho que te vayas",
+            TextPart: `Hola ${user.firstName} ${user.lastName}, aquí estaremos mejorando por si deseas volver.`,
+            HTMLPart: `
+              <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+                <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
+                <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
+                <p style="font-size: 16px; color: #333;">
+                  Hola ${user.firstName}, lamentamos que hayas decidido irte. Estamos trabajando duro para mejorar.
+                </p>
+                <p style="font-size: 14px; color: #666;">
+                  Saludos,<br/>El equipo de <strong>Blue Light Tech</strong>
+                </p>
+              </div>
+            `,
+          },
+        ],
       });
 
-    res.json({
-      message: "Subscription canceled successfully",
-      subscription: deletedSubscription,
-    });
+      return res.json({
+        message: "Subscription canceled successfully during trial period",
+        subscription: deletedSubscription,
+      });
+    } else {
+      // Si no está en período de prueba, cancelar al final del período de facturación
+      const updatedSubscription = await stripe.subscriptions.update(
+        subscription.id,
+        { cancel_at_period_end: true }
+      );
+
+      // Enviar el email de confirmación
+      await mailjet.post("send", { version: "v3.1" }).request({
+        Messages: [
+          {
+            From: {
+              Email: "bluelighttech22@gmail.com",
+              Name: "bluelighttech22",
+            },
+            To: [
+              {
+                Email: user.email,
+                Name: `${user.firstName} ${user.lastName}`,
+              },
+            ],
+            Subject: "Sentimos mucho que te vayas",
+            TextPart: `Hola ${user.firstName} ${user.lastName}, tu suscripción ha sido cancelada y terminará al final del periodo de facturación actual.`,
+            HTMLPart: `
+              <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
+                <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
+                <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
+                <p style="font-size: 16px; color: #333;">
+                  Hola ${user.firstName}, tu suscripción ha sido cancelada exitosamente. Continuarás teniendo acceso hasta el final del periodo de facturación.
+                </p>
+                <p style="font-size: 14px; color: #666;">
+                  Saludos,<br/>El equipo de <strong>Blue Light Tech</strong>
+                </p>
+              </div>
+            `,
+          },
+        ],
+      });
+
+      return res.json({
+        message: "Subscription will be canceled at the end of the billing period",
+        subscription: updatedSubscription,
+      });
+    }
   } catch (error) {
     console.error("Error canceling subscription:", error);
-    res
+    return res
       .status(500)
       .json({ message: "Error canceling subscription", error: error.message });
   }
@@ -284,4 +446,5 @@ module.exports = {
   payment,
   checkpayment,
   cancelSuscription,
+  updatePaymentMethod
 };

@@ -50,6 +50,10 @@ const userSchema = mongoose.Schema({
         type: String,
         required: false
     },
+    customerIdStripe:{
+        type: String,
+        required: false
+    },
     tasks: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "Task"
@@ -68,7 +72,11 @@ const userSchema = mongoose.Schema({
     },
     lastReset: {
         type: Date, // Este es el campo que necesitas para guardar la fecha de reinicio
-      },
+    },
+    hasTrial: { 
+        type: Boolean, 
+        default: false 
+    },
 }, {
     timestamps: true
 });
