@@ -181,12 +181,14 @@ const forgotPassword = asyncHandler(async (req, res) => {
                     Name: `${user.firstName} ${user.lastName}`,
                   },
                 ],
-                Subject: 'Password Reset Request',
-                TextPart: `Dear ${user.firstName}, you requested a password reset. Please click the following link to reset your password: ${resetUrl}`,
-                HTMLPart: `<h3>Dear ${user.firstName},</h3>
-                           <p>You requested a password reset. Please click the following link to reset your password:</p>
-                           <a href="${resetUrl}">Reset Password</a>
-                           <p>If you did not request this, please ignore this email.</p>`,
+                Subject: 'Recupera tu contraseña de NOVA AI',
+                TextPart: `Hola ${user.firstName}, Haz clic en el siguiente enlace para restablecer tu contraseña: ${resetUrl}`,
+                HTMLPart: `<h3>Hola ${user.firstName} ${user.lastName},</h3>
+                          <h6>Parece que has solicitado restablecer tu contraseña en NOVA AI. No te preocupes, ¡estamos aquí para ayudarte!</h6>
+                           <p>Haz clic en el siguiente enlace para restablecer tu contraseña:</p>
+                           <a href="${resetUrl}">Resetear Contraseña</a>
+                           <p>Este enlace es válido por 5 minutos. Si no solicitaste este cambio, simplemente ignora este correo. Tu cuenta está segura..</p>
+                           <p>Un saludo, El equipo de NOVA AI</p>`,
               },
             ],
           });
