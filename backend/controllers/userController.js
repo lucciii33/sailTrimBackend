@@ -162,7 +162,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
     await user.save();
   
     // URL de frontend para que el usuario cambie la contraseña
-    const resetUrl = `https://shantibackend.onrender.com/reset-password/${resetToken}`;  // Cambia el enlace si usas un dominio real
+    const resetUrl = `https://mentorai.netlify.app/reset-password/${resetToken}`;  // Cambia el enlace si usas un dominio real
   
     // Enviar el correo electrónico con Mailjet
     try {
