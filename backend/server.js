@@ -8,7 +8,7 @@ const resetLoginDaysJob = require('./jobs/jobsLoginDays'); // Ruta al cron job
 const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Mailjet = require("node-mailjet");  // Para enviar correos
-const User = require('../model/userModel');
+const User = require('./model/userModel.js');
 const bodyParser = require('body-parser');
 
 const mailjet = Mailjet.apiConnect(process.env.MJ_APIKEY_PUBLIC, process.env.MJ_APIKEY_PRIVATE);
