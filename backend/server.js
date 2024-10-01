@@ -25,7 +25,7 @@ const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
 // app.use('/webhookFailPayments', bodyParser.raw({type: 'application/json'}));
 
-app.post('/webhookFailPayments', bodyParser.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhookFailPayments', express.raw({ type: 'application/json' }), (req, res) => {
     const sig = req.headers['stripe-signature'];
 
     let event;
