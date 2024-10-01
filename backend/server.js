@@ -23,7 +23,28 @@ app.use(cors());
 
 const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
-app.use('/webhookFailPayments', bodyParser.raw({type: 'application/json'}));
+// app.use('/webhookFailPayments', bodyParser.raw({type: 'application/json'}));
+
+app.post('/webhookFailPayments', bodyParser.raw({ type: 'application/json' }), (req, res) => {
+    const sig = req.headers['stripe-signature'];
+
+    let event;
+
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+        console.error(`⚠️ Webhook signature verification failed:`, err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Verificar el tipo de evento
+    if (event.type === 'invoice.payment_failed') {
+        console.log('⚠️ Evento de pago fallido recibido');
+        // Tu lógica para manejar el pago fallido
+    }
+
+    res.status(200).json({ received: true });
+});
 
 // app.post('/webhookFailPayments', async (req, res) => {
 //     const sig = req.headers['stripe-signature'];
@@ -90,25 +111,25 @@ app.use('/webhookFailPayments', bodyParser.raw({type: 'application/json'}));
 //     res.status(200).json({ received: true });
 //   });
 
-app.post('/webhookFailPayments', async (req, res) => {
-    console.log("🔔 Webhook recibido"); // Log inicial para verificar que Stripe envió algo
-    const sig = req.headers['stripe-signature'];
-    let event;
+// app.post('/webhookFailPayments', async (req, res) => {
+//     console.log("🔔 Webhook recibido"); // Log inicial para verificar que Stripe envió algo
+//     const sig = req.headers['stripe-signature'];
+//     let event;
   
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-      console.log("✅ Webhook tipo:", event.type); // Log para ver qué tipo de evento llegó
-    } catch (err) {
-      console.error('⚠️ Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
+//     try {
+//       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+//       console.log("✅ Webhook tipo:", event.type); // Log para ver qué tipo de evento llegó
+//     } catch (err) {
+//       console.error('⚠️ Webhook signature verification failed:', err.message);
+//       return res.status(400).send(`Webhook Error: ${err.message}`);
+//     }
   
-    if (event.type === 'invoice.payment_failed') {
-      console.log("⚠️ Evento de pago fallido recibido");
-    }
+//     if (event.type === 'invoice.payment_failed') {
+//       console.log("⚠️ Evento de pago fallido recibido");
+//     }
   
-    res.status(200).json({ received: true });
-  });
+//     res.status(200).json({ received: true });
+//   });
 
 
 // app.use('/api/meditations', require('./routes/meditationRoutes'))
