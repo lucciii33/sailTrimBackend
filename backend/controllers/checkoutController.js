@@ -260,7 +260,11 @@ const payment = asyncHanlder(async (req, res) => {
     //   ],
     // });
 
-    res.json({ message: "Subscription created successfully", subscription });
+    return res.json({
+      message: res.locals.message || "Subscription created successfully",
+      subscription,
+    });
+    
   } catch (error) {
     console.error("Error processing payment:", error);
     res
