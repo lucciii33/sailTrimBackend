@@ -100,9 +100,10 @@ const payment = asyncHanlder(async (req, res) => {
     }
 
     if (user.hasTrial) {
-      return res
-        .status(400)
-        .json({ message: "You have already used your free trial." });
+      // return res
+      //   .status(400)
+      //   .json({ message: "You have already used your free trial." });
+      res.locals.message = "You have already used your free trial, proceeding to charge.";
     }
     // Crear método de pago
     const paymentMethod = await stripe.paymentMethods.create({
