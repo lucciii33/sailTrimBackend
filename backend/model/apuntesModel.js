@@ -6,6 +6,10 @@ const ApuntesSchema = mongoose.Schema({
         type: String,
         required: false
     },
+    titulo: {
+        type: String,
+        required: false
+    },
     preguntas: {
         type: [{
             pregunta: String,

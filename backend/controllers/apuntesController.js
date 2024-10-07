@@ -4,7 +4,7 @@ const Apuntes = require('../model/apuntesModel')
 const getSheetNotesByUserId = asyncHanlder(async(req, res) => {
     const notesDelUsuario = await Apuntes.find({ userId: req.params.userId });
 
-    if (!notesDelUsuario || notesDelUsuario.length === 0) {
+    if (!notesDelUsuario) {
         res.status(404);
         throw new Error("No se encontraron notas para este usuario");
     }
@@ -14,19 +14,19 @@ const getSheetNotesByUserId = asyncHanlder(async(req, res) => {
 
 const createSheetNotes = asyncHanlder(async(req, res) => {
     const {
-        preguntas, argumentos, conclusiones, evidencias, name, date, userId
+        preguntas, argumentos, conclusiones, evidencias, name, date, userId, titulo
       } = req.body;
     
       console.log(req.body);
 
     
-      if (!preguntas || !argumentos || !conclusiones || !evidencias || !userId ) {
+      if (!titulo|| !preguntas || !argumentos || !conclusiones || !evidencias || !userId ) {
         res.status(400);
         throw new Error("Please add all required fields");
       }
     
       const nuevosApuntes = await Apuntes.create({
-        preguntas, argumentos, conclusiones, evidencias, userId
+        preguntas, titulo, argumentos, conclusiones, evidencias, userId
       });
     
       if (nuevosApuntes) {
@@ -36,6 +36,7 @@ const createSheetNotes = asyncHanlder(async(req, res) => {
           conclusiones: nuevosApuntes.conclusiones,
           argumentos: nuevosApuntes.argumentos,
           evidencias: nuevosApuntes.evidencias,
+          titulo: nuevosApuntes.titulo,
           userId: nuevosApuntes.userId
         });
       } else {
