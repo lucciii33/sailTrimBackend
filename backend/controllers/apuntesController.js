@@ -12,6 +12,21 @@ const getSheetNotesByUserId = asyncHanlder(async(req, res) => {
     res.json(notesDelUsuario);
 })
 
+const getApuntesById = asyncHanlder(async(req, res) => {
+  console.log("req", req.params)
+  const resumeId = req.params.apunteId; // Obtén el ID de la tarea desde los parámetros de la URL
+  
+  // Implementa la lógica para buscar la tarea por su ID
+  const resume = await Apuntes.findById(resumeId);
+  
+  if (!resume) {
+      res.status(404);
+      throw new Error('Apunte sin encontrar');
+  }
+  
+  res.json(resume);
+})
+
 const createSheetNotes = asyncHanlder(async(req, res) => {
     const {
         preguntas, argumentos, conclusiones, evidencias, name, date, userId, titulo
@@ -76,4 +91,5 @@ module.exports = {
   createSheetNotes,
   editSheetNotes,
   deleteSheetNotes,
+  getApuntesById
 }

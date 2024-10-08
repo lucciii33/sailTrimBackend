@@ -5,10 +5,12 @@ const {
   createSheetNotes,
   editSheetNotes,
   deleteSheetNotes,
+  getApuntesById
 } = require("../controllers/apuntesController");
 const { protect } = require("../middleware/authMiddleware");
 
 router.route("/getSheetNotesByUserId/:userId").get(protect, getSheetNotesByUserId);
+router.route("/getApuntesById/:apunteId").get(protect, getApuntesById);
 router.route("/createSheetNotes").post(protect, createSheetNotes);
 router.route("/editSheetNotes/:id").put(protect, editSheetNotes);
 router.route("/deleteSheetNotes/:id").delete(protect, deleteSheetNotes);
