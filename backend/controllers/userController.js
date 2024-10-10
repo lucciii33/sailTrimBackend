@@ -87,9 +87,19 @@ const registerUser = asyncHandler(async (req, res) => {
             Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
           },
         ],
-        Subject: "Welcome to Our Service!",
-        TextPart: `Dear ${user.firstName}, welcome to our service! We're glad to have you on board.`,
-        HTMLPart: `<h3>Dear ${user.firstName}, welcome to our service!</h3><p>We're glad to have you on board.</p>`,
+        Subject: "¡Bienvenido a Nova! 🎉",
+        TextPart: `hola ${user.firstName}, Bienvenido a NOVA AI!`,
+        HTMLPart: `
+        <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
+            <img src="https://bluenova.s3.us-east-2.amazonaws.com/WhatsApp+Image+2024-09-18+at+22.34.16.jpeg" style="width: 50%; max-width: 300px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
+        <h3 style="color: #007BFF; margin-bottom: 10px;">Hola ${user.firstName}, ¡Bienvenido a NOVA AI!</h3>
+        <p style="font-size: 16px; margin-bottom: 20px;">Estamos emocionados de que te unas a nuestra comunidad de aprendizaje. En Nova, nos apasiona ayudarte a estudiar de manera más efectiva y alcanzar tus objetivos. Prepárate para descubrir nuevas técnicas, mejorar tus habilidades y disfrutar del proceso de aprendizaje.</p>
+        <p style="font-size: 16px; margin-bottom: 20px;">¡Empecemos juntos este viaje! 🚀</p>
+        <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos.</p>
+        <p style="font-weight: bold; font-size: 16px;">A por todas!</p>
+        <p style="font-size: 12px; color: #777777; margin-top: 20px;"><small>El equipo de Nova</small></p>
+        </div>
+        `,
       },
     ],
   });
@@ -205,12 +215,19 @@ const forgotPassword = asyncHandler(async (req, res) => {
           ],
           Subject: "Recupera tu contraseña de NOVA AI",
           TextPart: `Hola ${user.firstName}, Haz clic en el siguiente enlace para restablecer tu contraseña: ${resetUrl}`,
-          HTMLPart: `<h3>Hola ${user.firstName} ${user.lastName},</h3>
-                          <h6>Parece que has solicitado restablecer tu contraseña en NOVA AI. No te preocupes, ¡estamos aquí para ayudarte!</h6>
-                           <p>Haz clic en el siguiente enlace para restablecer tu contraseña:</p>
-                           <a href="${resetUrl}">Resetear Contraseña</a>
-                           <p>Este enlace es válido por 5 minutos. Si no solicitaste este cambio, simplemente ignora este correo. Tu cuenta está segura..</p>
-                           <p>Un saludo, El equipo de NOVA AI</p>`,
+          HTMLPart: `
+          <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
+            <h3 style="color: #0d1a36; margin-bottom: 10px;">Hola ${user.firstName} ${user.lastName},</h3>
+            <h6 style="font-size: 16px; color: #555555; margin-bottom: 20px;">Parece que has solicitado restablecer tu contraseña en NOVA AI. No te preocupes, ¡estamos aquí para ayudarte!</h6>
+            <p style="font-size: 16px; margin-bottom: 20px;">Haz clic en el siguiente enlace para restablecer tu contraseña:</p>
+            <a href="${resetUrl}" style="display: inline-block; background-color: #0d1a36; color: #FFFFFF; text-decoration: none; padding: 10px 20px; border-radius: 5px; font-size: 16px; margin-bottom: 20px;">Resetear Contraseña</a>
+            <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">Este enlace es válido por 5 minutos. Si no solicitaste este cambio, simplemente ignora este correo. Tu cuenta está segura.</p>
+            <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">Si necesitas más ayuda, estamos disponibles para asistirte.</p>
+            <p style="font-size: 12px; color: #777777; margin-top: 20px;"><small>Un saludo, el equipo de Nova</small></p>
+          </div>
+
+          `,
+                           
         },
       ],
     });

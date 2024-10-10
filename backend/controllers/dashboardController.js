@@ -265,12 +265,12 @@ async function gradeExam(req, res) {
 }
     
 async function generateText(req, res) {
-    const { prompt } = req.body;
+    const { prompt, level } = req.body;
     try {
 
         const chatCompletion = await Openai.chat.completions.create({
             model: "gpt-3.5-turbo",
-            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 10.(SPANISH ONLY PLEASE)`}],
+            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 12. The level provided is: ${level}(SPANISH ONLY PLEASE)`}],
           });
 
         const contentString = chatCompletion?.choices[0]?.message.content;
