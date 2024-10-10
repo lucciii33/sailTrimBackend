@@ -357,7 +357,7 @@ async function generateWordsCombination(req, res) {
 
 async function generateHomework(req, res) {
     const { homework, level } = req.body;
-    if (!homework) {
+    if (!homework || !level) {
         return res.status(400).send("A homework is required.");
     }
 
