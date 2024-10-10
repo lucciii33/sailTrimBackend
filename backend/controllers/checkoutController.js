@@ -326,7 +326,7 @@ const updatePaymentMethod = async (req, res) => {
 
     // Adjuntar el nuevo método de pago al cliente en Stripe
     await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: user.customerId,
+      customer: user.customerIdStripe,
     });
 
     // Establecer el nuevo método como predeterminado
