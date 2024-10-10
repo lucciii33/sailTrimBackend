@@ -154,27 +154,41 @@ const payment = asyncHanlder(async (req, res) => {
               Name: `${user.firstName} ${user.lastName}` 
             },
             ],
-            Subject: "¡Bienvenido! Que alegría tenerte aquí",
-  
+            Subject: "¡Bienvenido a la familia NOVA AI! ",
+            TextPart: `Hola ${user.firstName}, el estudio siempre será la mejor inversión`,
             HTMLPart: `
-          <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f9f9f9;">
-           <h2 style="color: #ff8313;">¡Bienvenido, ${user.firstName}!</h2>
-            <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Login.png" alt="Nova te da la bienvenida" style="width: 100%; max-width: 400px; height: auto; margin-bottom: 20px;"/>
+          <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
+            <h2 style="color: #007BFF; margin-bottom: 10px;">Hola ${user.firstName}, ¡Bienvenido a la familia NOVA AI!</h2>
+            <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Login.png" alt="Nova te da la bienvenida" style="width: 100%; max-width: 400px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
             <p style="font-size: 18px; color: #333;">
-              Hola ${user.firstName}, soy <strong>Nova</strong>, tu asistente personal. ¡Qué alegría tenerte con nosotros!
+                Estamos emocionados de que te unas a nuestra comunidad de estudiantes comprometidos con el aprendizaje eficiente y dinámico.
             </p>
-            <p style="font-size: 16px; color: #333;">
-              Tu periodo de prueba ha comenzado y finalizará el <strong>${formattedTrialEndDate}</strong>. Durante este tiempo, puedes explorar todas las funcionalidades que hemos creado para ayudarte a alcanzar tus sueños.
+            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                Durante los próximos 7 días, tendrás acceso completo a todas nuestras herramientas:
             </p>
-            <p style="font-size: 16px; color: #333;">
-              No dudes en aprovechar este periodo para sacar el máximo provecho. ¡Sigue esforzándote y no te rindas!
+            <ul style="list-style-type: none; padding: 0; color: #333; font-size: 16px; text-align: left; max-width: 400px; margin: 0 auto; line-height: 1.5;">
+                <li>🔍 <strong>Motor de búsqueda impulsado por inteligencia artificial:</strong> Genera información relevante y precisa en segundos.</li>
+                <li>📝 <strong>Generador de pruebas:</strong> Evalúa tu conocimiento y prepárate para tus exámenes con facilidad.</li>
+                <li>📖 <strong>Tarjetas de memoria interactivas:</strong> Memoriza y repasa de manera eficiente.</li>
+                <li>🌐 <strong>Técnicas de estudio recomendadas</strong> por las universidades más prestigiosas.</li>
+            </ul>
+            <p style="font-size: 16px; color: #333; margin-top: 20px;">
+                ¡Y mucho más!
             </p>
-            <p style="font-size: 14px; color: #666;">
-              Saludos,<br/>
-              <strong>NOVA</strong><br/>
-              El equipo de <strong>Blue Light Tech</strong>
+            <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                Una vez que termine tu prueba gratuita, tu suscripción se activará automáticamente para que continúes teniendo acceso a todas nuestras herramientas, sin interrupciones.
             </p>
-          </div>
+            <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">
+                Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos. Estamos aquí para apoyarte.
+            </p>
+            <p style="font-size: 16px; font-weight: bold; color: #007BFF;">
+                ¡Comienza tu viaje hacia el éxito académico con NOVA AI!
+            </p>
+            <p style="font-size: 14px; color: #666666; margin-top: 20px;">
+                Un saludo,<br/>
+                <strong>El equipo de NOVA AI</strong>
+            </p>
+        </div>
         `,
           },
         ],
@@ -380,10 +394,10 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
                 <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
                 <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
                 <p style="font-size: 16px; color: #333;">
-                  Hola ${user.firstName}, lamentamos que hayas decidido irte. Estamos trabajando duro para mejorar.
+                  Hola ${user.firstName}, Lamentamos verte partir, pero queremos que sepas que siempre serás bienvenido en NOVA AI. Entendemos que las necesidades cambian, pero si decides regresar, estamos aquí para ayudarte a alcanzar tus metas académicas.
                 </p>
                 <p style="font-size: 14px; color: #666;">
-                  Saludos,<br/>El equipo de <strong>Blue Light Tech</strong>
+                  Saludos,<br/>El equipo de <strong>NOVA AI</strong>
                 </p>
               </div>
             `,
@@ -419,16 +433,20 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
             Subject: "Sentimos mucho que te vayas",
             TextPart: `Hola ${user.firstName} ${user.lastName}, tu suscripción ha sido cancelada y terminará al final del periodo de facturación actual.`,
             HTMLPart: `
-              <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
-                <h2 style="color: #ff8313;">Esperamos vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
-                <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 100%; max-width: 600px; height: auto; border-radius: 10px;"/>
-                <p style="font-size: 16px; color: #333;">
-                  Hola ${user.firstName}, tu suscripción ha sido cancelada exitosamente. Continuarás teniendo acceso hasta el final del periodo de facturación.
+              <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
+                <h2 style="color: #FF8313; margin-bottom: 10px;">Esperamos que vuelvas pronto, ${user.firstName} ${user.lastName}.</h2>
+                <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de despedida" style="width: 80%; max-width: 400px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
+                <p style="font-size: 18px; color: #333; margin-bottom: 20px;">
+                    Hola ${user.firstName}, tu suscripción ha sido cancelada exitosamente. Continuarás teniendo acceso hasta el final del periodo de facturación.
                 </p>
-                <p style="font-size: 14px; color: #666;">
-                  Saludos,<br/>El equipo de <strong>Blue Light Tech</strong>
+                <p style="font-size: 16px; color: #555; margin-bottom: 20px;">
+                    Lamentamos verte partir, pero siempre serás bienvenido a regresar. Si en algún momento decides volver, estaremos aquí para ayudarte a continuar tu viaje de aprendizaje.
                 </p>
-              </div>
+                <p style="font-size: 14px; color: #777; margin-top: 20px;">
+                    Saludos,<br/>
+                    <strong>El equipo de Blue Light Tech</strong>
+                </p>
+            </div>
             `,
           },
         ],

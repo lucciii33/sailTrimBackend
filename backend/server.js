@@ -101,8 +101,15 @@ app.post('/webhookFailPayments', express.raw({ type: 'application/json' }), asyn
                           ],
                           Subject: "¡Pago exitoso de tu suscripción!",
                           TextPart: `Hola ${user.firstName}, el pago de tu suscripción se procesó correctamente.`,
-                          HTMLPart: `<h3>Hola ${user.firstName},</h3>
-                            <p>El pago de tu suscripción ha sido exitoso. Gracias por tu confianza.</p>`,
+                          HTMLPart: `
+                          <h3>Hola ${user.firstName},</h3>
+                          <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Login.png" alt="Nova te da la bienvenida" style="width: 100%; max-width: 400px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
+                          <p>El pago de tu suscripción se procesó correctamente.</p>
+                          <p style="font-size: 14px; color: #666666; margin-top: 20px;">
+                            Un saludo,<br/>
+                            <strong>El equipo de NOVA AI</strong>
+                        </p>
+                        `,
                       },
                   ],
               });
