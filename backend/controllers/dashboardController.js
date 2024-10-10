@@ -356,12 +356,12 @@ async function generateWordsCombination(req, res) {
 }
 
 async function generateHomework(req, res) {
-    const { homework } = req.body;
+    const { homework, level } = req.body;
     if (!homework) {
         return res.status(400).send("A homework is required.");
     }
 
-    const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta`;
+    const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta para un nivel de ${level}`;
 
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });

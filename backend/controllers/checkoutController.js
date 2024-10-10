@@ -130,12 +130,9 @@ const payment = asyncHanlder(async (req, res) => {
       expand: ["latest_invoice.payment_intent"],
     });
 
-    console.log("subscriptionsubscriptionsubscription", subscription)
     const paymentIntent = subscription.latest_invoice
       ? subscription.latest_invoice.payment_intent
       : null;
-
-      console.log("latest_invoicelatest_invoicelatest_invoicelatest_invoice", subscription.latest_invoice)
     // Si la suscripción está en período de prueba, no esperes `payment_intent`
     if (subscription.status === 'trialing') {
       const trialEndDate = new Date(subscription.current_period_end * 1000);
@@ -267,9 +264,7 @@ const payment = asyncHanlder(async (req, res) => {
     
   } catch (error) {
     console.error("Error processing payment:", error);
-    res
-      .status(500)
-      .json({ message: "Error processing payment", error: error.message });
+    throw new Error(`Error processing payment: ${error.message}`);
   }
 });
 
