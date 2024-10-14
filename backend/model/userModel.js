@@ -77,6 +77,10 @@ const userSchema = mongoose.Schema({
         type: Boolean, 
         default: false 
     },
+    secretKeyStripe: {
+        type: String,
+        required: false
+    }
 }, {
     timestamps: true
 });

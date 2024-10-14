@@ -99,6 +99,30 @@ const payment = asyncHanlder(async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    if (user.customerId) {
+      const subscription = await stripe.subscriptions.retrieve(user.customerId);
+
+      // Si la suscripción está marcada para cancelarse al final del ciclo, se puede reactivar
+      if (subscription.status === 'active' && subscription.cancel_at_period_end) {
+        const updatedSubscription = await stripe.subscriptions.update(
+          user.customerId, {
+            cancel_at_period_end: false // Reactivar la suscripción antes de que termine el ciclo de facturación
+          }
+        );
+        return res.json({
+          message: "Subscription reactivated successfully",
+          subscription: updatedSubscription,
+        });
+      }
+
+      // Si la suscripción está completamente cancelada, crear una nueva
+      if (subscription.status === 'canceled' || 
+        subscription.status === 'incomplete_expired' || 
+        subscription.status === 'unpaid') {
+        return createNewSubscription(req, res, user, token);
+      }
+    }
+
     if (user.hasTrial) {
       // return res
       //   .status(400)
@@ -282,6 +306,56 @@ const payment = asyncHanlder(async (req, res) => {
   }
 });
 
+const createNewSubscription = async (req, res, user, token) => {
+  try {
+    console.log("Seeee llamo estoooooooo")
+    const paymentMethod = await stripe.paymentMethods.create({
+      type: "card",
+      card: { token: token },
+    });
+
+    const customer = await stripe.customers.create({
+      payment_method: paymentMethod.id,
+      name: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      invoice_settings: {
+        default_payment_method: paymentMethod.id,
+      },
+    });
+
+    const newSubscription = await stripe.subscriptions.create({
+      customer: customer.id,
+      items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Cambia con tu ID de plan real
+      trial_period_days: 0, // Nunca dar trial aquí porque ya lo usaron
+      payment_behavior: "allow_incomplete", // Cobrar inmediatamente si es posible
+      expand: ["latest_invoice.payment_intent"],
+    });
+
+    const paymentIntent = newSubscription.latest_invoice
+      ? newSubscription.latest_invoice.payment_intent
+      : null;
+
+    if (!paymentIntent) {
+      return res.status(400).json({ message: "Payment intent not found" });
+    }
+
+    // Guardar los datos actualizados en el usuario
+    user.customerIdStripe = customer.id;
+    user.customerId = newSubscription.id;
+    user.hasTrial = true; // Ya ha usado el trial
+    await user.save();
+
+    return res.json({
+      message: "New subscription created successfully without trial",
+      subscription: newSubscription,
+    });
+
+  } catch (error) {
+    console.error("Error creating new subscription:", error);
+    res.status(500).json({ message: "Error creating new subscription", error: error.message });
+  }
+};
+
 const checkpayment = asyncHanlder(async (req, res) => {
   const { userId } = req.params;
 
@@ -336,7 +410,22 @@ const updatePaymentMethod = async (req, res) => {
       },
     });
 
-    res.json({ message: "Payment method updated successfully" });
+    const invoices = await stripe.invoices.list({
+      customer: user.customerIdStripe,
+      status: 'open', // Facturas abiertas o pendientes de pago
+    });
+
+    // Intentar pagar las facturas pendientes si existen
+    if (invoices.data.length > 0) {
+      for (const invoice of invoices.data) {
+        await stripe.invoices.pay(invoice.id, {
+          payment_method: paymentMethodId, // Usa el nuevo método de pago
+        });
+      }
+    }
+
+    res.json({ message: "Payment method updated and pending invoices paid if any" });
+
   } catch (error) {
     console.error("Error updating payment method:", error);
     res
