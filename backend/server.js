@@ -171,6 +171,7 @@ app.use("/api/checkout", require("./routes/checkoutRoutes"));
 app.use("/api/motivationalNotes", require("./routes/notesRoutes"));
 app.use("/api/resume", require("./routes/resumeRoutes"));
 app.use("/api/apuntes", require("./routes/apuntesRoutes"));
+app.use("/api/quizes", require("./routes/quizesRoutes.js"));
 
 app.use(errorHandler);
 
