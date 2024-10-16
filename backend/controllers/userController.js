@@ -28,29 +28,29 @@ const registerUser = asyncHandler(async (req, res) => {
     !terms
   ) {
     res.status(400);
-    throw new Error("Please complete all required fields.");
+    throw new Error("Por Favor completa todo los campos.");
   }
 
   if (!email || email == "" || !email.includes("@") || !email.includes(".")) {
     res.status(400);
-    throw new Error("Please complete email field correctly.");
+    throw new Error("Por favor, completa el campo de correo electrónico correctamente.");
   }
 
   if (password.length < 9) {
     res.status(400);
-    throw new Error("Password must be 9 characters or more.");
+    throw new Error("La contraseña debe tener 9 caracteres o más.");
   }
   if (!/[A-Z]/.test(password)) {
     res.status(400);
-    throw new Error("Password must contain at least one capital letter.");
+    throw new Error("La contraseña debe contener al menos una letra mayúscula.");
   }
   if (!/\d/.test(password)) {
     res.status(400);
-    throw new Error("Password must contain at least one number.");
+    throw new Error("La contraseña debe contener al menos un número.");
   }
   if (!/[!@#$%^&*]/.test(password)) {
     res.status(400);
-    throw new Error("Password must contain at least one symbol (!@#$%^&*).");
+    throw new Error("La contraseña debe contener al menos un símbolo (!@#$%^&*).");
   }
 
   const userExists = await User.findOne({ email });
