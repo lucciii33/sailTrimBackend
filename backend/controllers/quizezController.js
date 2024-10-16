@@ -26,14 +26,14 @@ const getQuizesById = asyncHanlder(async(req, res) => {
 })
 
 const createQuizes = asyncHanlder(async(req, res) => {
-    const { gradedExam, userId } = req.body; // Asegúrate de enviar el `gradedExam` en el cuerpo del request
+    const { gradedExam, userId, title } = req.body; // Asegúrate de enviar el `gradedExam` en el cuerpo del request
 
-    if (!gradedExam || !userId) {
+    if (!gradedExam || !userId || !title) {
         res.status(400);
-        throw new Error('Por favor provee el examen evaluado y el userId');
+        throw new Error('Por favor provee el examen evaluado y el userId y el titulo');
     }
 
-    const newExam = new GradedExam({ gradedExam, userId });
+    const newExam = new GradedExam({ gradedExam, userId, title });
     const savedExam = await newExam.save();
 
     res.status(201).json(savedExam);

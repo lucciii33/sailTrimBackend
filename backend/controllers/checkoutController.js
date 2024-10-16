@@ -328,6 +328,7 @@ const createNewSubscription = async (req, res, user, token) => {
       items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Cambia con tu ID de plan real
       trial_period_days: 0, // Nunca dar trial aquí porque ya lo usaron
       payment_behavior: "allow_incomplete", // Cobrar inmediatamente si es posible
+      automatic_tax: { enabled: true },
       expand: ["latest_invoice.payment_intent"],
     });
 
