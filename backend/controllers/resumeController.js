@@ -33,6 +33,7 @@ const getResumesByUserId = asyncHanlder(async(req, res) => {
 const createResume = asyncHanlder(async(req, res) => {
     const {
         resume,
+        novaResume,
         UserId,
         title
       } = req.body;
@@ -46,6 +47,7 @@ const createResume = asyncHanlder(async(req, res) => {
       const newResume = await Resume.create({
         resume,
         title,
+        novaResume,
         UserId
 
       });
@@ -54,7 +56,8 @@ const createResume = asyncHanlder(async(req, res) => {
         res.status(201).json({
             resume: newResume.resume,
             title: newResume.title,
-            UserId: newResume.UserId
+            UserId: newResume.UserId,
+            novaResume: newResume.novaResume
         });
       } else {
         res.status(400);

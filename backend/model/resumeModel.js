@@ -9,6 +9,10 @@ const resumeSchema = mongoose.Schema({
         type: String,
         required: false
     },
+    novaResume:{
+        type: String,
+        required: false
+    },
     UserId: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,

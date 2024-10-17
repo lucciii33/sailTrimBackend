@@ -9,6 +9,6 @@ const { protect } = require('../middleware/authMiddleware')
 router.route('/createQuizes').post(protect, createQuizes)
 router.route('/getQuizesById/:id').get(protect, getQuizesById)
 router.route('/getQuizesUserId/:userId').get(protect, getQuizesUserId)
-router.route('/updatePaymentMethod').delete(protect, deleteQuizes)
+router.route('/deleteQuizes/:examId').delete(protect, deleteQuizes)
 
 module.exports = router
