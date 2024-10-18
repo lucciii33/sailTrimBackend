@@ -48,6 +48,53 @@ app.post(
         user.secretKeyStripe = paymentIntent.client_secret;
         await user.save();
 
+        const request = mailjet.post("send", { version: "v3.1" }).request({
+          Messages: [
+            {
+              From: {
+                Email: "bluelighttech22@gmail.com", // Cambia a tu correo
+                Name: "Blue Light Tech", // Nombre que aparecerá como remitente
+              },
+              To: [
+                {
+                  Email: user.email, // Email del usuario (se obtiene desde la base de datos)
+                  Name: `${user.firstName} ${user.lastName}`, // Nombre completo del usuario
+                },
+              ],
+              Subject: "Atención: tu banco necesita confirmar este pago!!!!!!!!!!",
+              TextPart: `Hola ${user.firstName}, el pago de tu suscripción falló. Tu banco necesita una autorizacion para procesar este pago`,
+              HTMLPart: `
+              <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
+                <h3 style="color: #FF4C4C; margin-bottom: 10px;">Hola ${user.firstName},</h3>
+                <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Logout.png" alt="Imagen de pago fallido" style="width: 80%; max-width: 400px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
+                <p style="font-size: 18px; color: #333; margin-bottom: 20px;">
+                    Hola ${user.firstName}, el pago de tu suscripción falló. Tu banco necesita una autorizacion para procesar este pago, tienes 24 horas para poder aturoizarte.
+                </p>
+                <p style="font-size: 16px; color: #007BFF; margin-bottom: 20px;">
+                   <a href="https://mentorai.netlify.app/" style="text-decoration: none; color: #007BFF; font-weight: bold;">Haz clic aquí para actualizar tu método de pago</a>
+                </p>
+                <p style="font-size: 14px; color: #555; margin-top: 20px;">
+                    Si necesitas ayuda o tienes alguna pregunta, no dudes en contactarnos. Estamos aquí para asistirte.
+                </p>
+                <p style="font-size: 14px; color: #777; margin-top: 20px;">
+                    Saludos,<br/>
+                    <strong>El equipo de NOVA AI</strong>
+                </p>
+            </div>
+                `,
+            },
+          ],
+        });
+
+        // Manejo de la respuesta del envío de email
+        request
+          .then((result) => {
+            console.log("Correo enviado exitosamente:", result.body);
+          })
+          .catch((err) => {
+            console.error("Error al enviar el correo:", err.statusCode);
+          });
+
         // Notificar al frontend que se requiere 3D Secure
         return res.json({
           message: "3D Secure required",
