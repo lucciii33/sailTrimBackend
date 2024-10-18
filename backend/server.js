@@ -36,6 +36,26 @@ app.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
+    if (event.type === "payment_intent.requires_action") {
+      const paymentIntent = event.data.object;
+      const customerId = paymentIntent.customer;
+
+      // Buscar al usuario en la base de datos
+      const user = await User.findOne({ customerIdStripe: customerId });
+
+      if (user) {
+        // Guardar el `client_secret` en el campo `secretKeyStripe` del usuario
+        user.secretKeyStripe = paymentIntent.client_secret;
+        await user.save();
+
+        // Notificar al frontend que se requiere 3D Secure
+        return res.json({
+          message: "3D Secure required",
+          clientSecret: paymentIntent.client_secret, // Envías el `client_secret` al frontend
+        });
+      }
+    }
+
     // Manejar el evento de pago fallido
     if (event.type === "invoice.payment_failed") {
       const invoice = event.data.object;

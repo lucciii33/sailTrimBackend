@@ -11,79 +11,7 @@ const mailjet = Mailjet.apiConnect(
   process.env.MJ_APIKEY_PRIVATE
 );
 
-// const payment = asyncHanlder(async (req, res) => {
-//   const { token, trial_end_date, userId } = req.body;
 
-//   // Create a payment method using the provided token
-//   const paymentMethod = await stripe?.paymentMethods.create({
-//     type: "card",
-//     card: { token: token },
-//   });
-
-//   // Create a Stripe customer and attach the payment method
-//   const customer = await stripe?.customers.create({
-//     payment_method: paymentMethod.id,
-//   });
-
-//   // Subscribe the customer to the plan
-//   const subscription = await stripe?.subscriptions.create({
-//     customer: customer.id,
-//     items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Reemplaza con tu ID de plan real
-//     trial_end: trial_end_date,
-//     expand: ["latest_invoice.payment_intent"],
-//   });
-
-//   const user = await User.findById(userId);
-//   if (!user) {
-//     return res.status(404).json({ message: "User not found" });
-//   }
-
-//   const updatedUser = await User.findByIdAndUpdate(
-//     userId,
-//     { customerId: subscription.id },
-//     { new: true }
-//   );
-//   console.log("Updated User:", updatedUser);
-//   if (subscription) {
-//     const trialEndDate = new Date(subscription.current_period_end * 1000);
-//     const options = { year: "numeric", month: "long", day: "numeric" };
-//     const formattedTrialEndDate = trialEndDate.toLocaleDateString(
-//       "es-ES",
-//       options
-//     );
-//     const request = mailjet.post("send", { version: "v3.1" }).request({
-//       Messages: [
-//         {
-//           From: {
-//             Email: "bluelighttech22@gmail.com", // Tu email
-//             Name: "bluelighttech22", // Tu nombre o el de tu empresa
-//           },
-//           To: [
-//             {
-//               Email: user.email, // Email del usuario registrado
-//               Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
-//             },
-//           ],
-//           Subject: "Bienvenidoo! Que alegria tenert aqui",
-//           TextPart: `hola`,
-//           HTMLPart: `<h3>Ha estudair ${user.firstName} soy nova, te dejo saber que tu periodo de prueba a comenzado exitosamente, recuerda que puedes lograr todos tus suenos si te esfuerzas mucho, tu periodo de prueba terminara el ${formattedTrialEndDate}<h3>`,
-//         },
-//       ],
-//     });
-//     request
-//       .then((result) => {
-//         console.log("Email sent successfully:", result.body);
-//       })
-//       .catch((err) => {
-//         console.error("Error sending email:", err.statusCode);
-//       });
-//       res.json({ message: "Subscription creaddted successfully", subscription });
-//   } else {
-//     res.status(404).json({ message: "Subscription not found" });
-//   }
-
-//   res.json({ message: "Subscription creaddted successfully", subscription });
-// });
 
 const payment = asyncHanlder(async (req, res) => {
   const { token, trial_end_date, userId } = req.body;
@@ -117,8 +45,7 @@ const payment = asyncHanlder(async (req, res) => {
 
       // Si la suscripción está completamente cancelada, crear una nueva
       if (subscription.status === 'canceled' || 
-        subscription.status === 'incomplete_expired' || 
-        subscription.status === 'unpaid') {
+        subscription.status === 'incomplete_expired' ) {
         return createNewSubscription(req, res, user, token);
       }
     }
@@ -556,9 +483,55 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
   }
 });
 
+const createNewPaymentIntent = async (req, res) => {
+  const { customerIdStripe } = req.body; // Obtener customerIdStripe del body
+
+  if (!customerIdStripe) {
+    return res.status(400).json({ message: "Customer ID is required" });
+  }
+
+  try {
+    // Crear un nuevo PaymentIntent con el customerIdStripe recibido
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: 1000, // Ajusta el monto según tu producto o suscripción
+      currency: 'usd',
+      customer: customerIdStripe, // Pasamos el ID del cliente de Stripe
+      payment_method_types: ['card'],
+    });
+
+    // Devolver el nuevo client_secret para el frontend
+    res.status(200).json({ clientSecret: paymentIntent.client_secret });
+  } catch (error) {
+    console.error('Error creando nuevo PaymentIntent:', error);
+    res.status(500).json({ message: 'Error al crear el PaymentIntent', error: error.message });
+  }
+};
+
+
+const confirmPayment = async (req, res) => {
+  const { paymentIntentId } = req.body;
+
+  try {
+    // Confirmar el Payment Intent en Stripe
+    const paymentIntent = await stripe.paymentIntents.confirm(paymentIntentId);
+
+    if (paymentIntent.status === 'succeeded') {
+      // El pago se ha completado con éxito
+      return res.json({ message: 'Pago confirmado exitosamente' });
+    } else {
+      // El pago no se completó
+      return res.status(400).json({ message: 'Error al confirmar el pago' });
+    }
+  } catch (error) {
+    console.error('Error al confirmar el pago:', error);
+    return res.status(500).json({ message: 'Error al confirmar el pago', error: error.message });
+  }
+};
+
 module.exports = {
   payment,
   checkpayment,
   cancelSuscription,
   updatePaymentMethod,
+  createNewPaymentIntent
 };

@@ -80,7 +80,11 @@ const userSchema = mongoose.Schema({
     secretKeyStripe: {
         type: String,
         required: false
-    }
+    },
+    daysStudy: {
+        type: Number,
+        required: false
+    },
 }, {
     timestamps: true
 });
