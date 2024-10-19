@@ -162,7 +162,14 @@ const payment = asyncHanlder(async (req, res) => {
     }
 
     // Manejar el caso de 3D Secure
-    if (paymentIntent.status === "requires_action" && paymentIntent.next_action.type === "use_stripe_sdk") {
+    if (paymentIntent && paymentIntent.status === "requires_action" && paymentIntent.next_action.type === "use_stripe_sdk") {
+      // Guardar el client_secret en el usuario
+      user.secretKeyStripe = paymentIntent.client_secret;
+      user.customerIdStripe = customer.id; // Guarda el ID del cliente de Stripe en `customerIdStripe`
+      user.customerId = subscription.id; 
+      await user.save();
+
+      // Devolver el client_secret al frontend para manejar el 3D Secure
       return res.json({
         requiresAction: true,
         clientSecret: paymentIntent.client_secret,
