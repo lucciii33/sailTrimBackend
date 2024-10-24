@@ -490,30 +490,35 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
   }
 });
 
-const createNewPaymentIntent = async (req, res) => {
-  const { customerIdStripe } = req.body; // Obtener customerIdStripe del body
-
-  if (!customerIdStripe) {
-    return res.status(400).json({ message: "Customer ID is required" });
-  }
+const createNewSecretKey = async (req, res) => {
+  const { userId } = req.body;
 
   try {
-    // Crear un nuevo PaymentIntent con el customerIdStripe recibido
+    // Buscar al usuario por su ID
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Usuario no encontrado" });
+    }
+
+    // Crear un nuevo PaymentIntent para generar un nuevo client_secret
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: 1000, // Ajusta el monto según tu producto o suscripción
+      customer: user?.customerIdStripe, // ID del cliente de Stripe guardado en la base de datos
+      amount: 1000, // Monto de la transacción (ajústalo según tu caso)
       currency: 'usd',
-      customer: customerIdStripe, // Pasamos el ID del cliente de Stripe
       payment_method_types: ['card'],
     });
 
-    // Devolver el nuevo client_secret para el frontend
-    res.status(200).json({ clientSecret: paymentIntent.client_secret });
+    // Guardar el nuevo client_secret en la base de datos del usuario
+    user.secretKeyStripe = paymentIntent.client_secret;
+    await user.save();
+
+    // Enviar el nuevo client_secret al frontend para continuar el pago
+    return res.status(200).json({ clientSecret: paymentIntent.client_secret });
   } catch (error) {
-    console.error('Error creando nuevo PaymentIntent:', error);
-    res.status(500).json({ message: 'Error al crear el PaymentIntent', error: error.message });
+    console.error("Error al regenerar el client_secret:", error);
+    return res.status(500).json({ message: "Error al regenerar el client_secret", error: error.message });
   }
 };
-
 
 const confirmPayment = async (req, res) => {
   const { paymentIntentId } = req.body;
@@ -540,5 +545,5 @@ module.exports = {
   checkpayment,
   cancelSuscription,
   updatePaymentMethod,
-  createNewPaymentIntent
+  createNewSecretKey
 };

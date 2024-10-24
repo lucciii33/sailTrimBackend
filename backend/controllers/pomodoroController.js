@@ -42,7 +42,7 @@ const createTask = asyncHanlder(async(req, res) => {
 
       if (!description || !taskName) {
         res.status(400);
-        throw new Error("Please add all required fields");
+        throw new Error("completa todos los campos");
       }
     
       const newTask = await Task.create({
