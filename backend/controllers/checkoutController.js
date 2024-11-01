@@ -11,8 +11,6 @@ const mailjet = Mailjet.apiConnect(
   process.env.MJ_APIKEY_PRIVATE
 );
 
-
-
 const payment = asyncHanlder(async (req, res) => {
   const { token, trial_end_date, userId } = req.body;
 
@@ -31,10 +29,14 @@ const payment = asyncHanlder(async (req, res) => {
       const subscription = await stripe.subscriptions.retrieve(user.customerId);
 
       // Si la suscripción está marcada para cancelarse al final del ciclo, se puede reactivar
-      if (subscription.status === 'active' && subscription.cancel_at_period_end) {
+      if (
+        subscription.status === "active" &&
+        subscription.cancel_at_period_end
+      ) {
         const updatedSubscription = await stripe.subscriptions.update(
-          user.customerId, {
-            cancel_at_period_end: false // Reactivar la suscripción antes de que termine el ciclo de facturación
+          user.customerId,
+          {
+            cancel_at_period_end: false, // Reactivar la suscripción antes de que termine el ciclo de facturación
           }
         );
         return res.json({
@@ -44,8 +46,10 @@ const payment = asyncHanlder(async (req, res) => {
       }
 
       // Si la suscripción está completamente cancelada, crear una nueva
-      if (subscription.status === 'canceled' || 
-        subscription.status === 'incomplete_expired' ) {
+      if (
+        subscription.status === "canceled" ||
+        subscription.status === "incomplete_expired"
+      ) {
         return createNewSubscription(req, res, user, token);
       }
     }
@@ -54,7 +58,8 @@ const payment = asyncHanlder(async (req, res) => {
       // return res
       //   .status(400)
       //   .json({ message: "You have already used your free trial." });
-      res.locals.message = "You have already used your free trial, proceeding to charge.";
+      res.locals.message =
+        "You have already used your free trial, proceeding to charge.";
     }
     // Crear método de pago
     const paymentMethod = await stripe.paymentMethods.create({
@@ -85,7 +90,7 @@ const payment = asyncHanlder(async (req, res) => {
       ? subscription.latest_invoice.payment_intent
       : null;
     // Si la suscripción está en período de prueba, no esperes `payment_intent`
-    if (subscription.status === 'trialing') {
+    if (subscription.status === "trialing") {
       const trialEndDate = new Date(subscription.current_period_end * 1000);
       const formattedTrialEndDate = trialEndDate.toLocaleDateString("es-ES", {
         year: "numeric",
@@ -100,10 +105,10 @@ const payment = asyncHanlder(async (req, res) => {
               Name: "bluelighttech22",
             },
             To: [
-              { 
-              Email: user.email, 
-              Name: `${user.firstName} ${user.lastName}` 
-            },
+              {
+                Email: user.email,
+                Name: `${user.firstName} ${user.lastName}`,
+              },
             ],
             Subject: "¡Bienvenido a la familia NOVA AI! ",
             TextPart: `Hola ${user.firstName}, el estudio siempre será la mejor inversión`,
@@ -162,11 +167,15 @@ const payment = asyncHanlder(async (req, res) => {
     }
 
     // Manejar el caso de 3D Secure
-    if (paymentIntent && paymentIntent.status === "requires_action" && paymentIntent.next_action.type === "use_stripe_sdk") {
+    if (
+      paymentIntent &&
+      paymentIntent.status === "requires_action" &&
+      paymentIntent.next_action.type === "use_stripe_sdk"
+    ) {
       // Guardar el client_secret en el usuario
       user.secretKeyStripe = paymentIntent.client_secret;
       user.customerIdStripe = customer.id; // Guarda el ID del cliente de Stripe en `customerIdStripe`
-      user.customerId = subscription.id; 
+      user.customerId = subscription.id;
       await user.save();
 
       // Devolver el client_secret al frontend para manejar el 3D Secure
@@ -198,9 +207,9 @@ const payment = asyncHanlder(async (req, res) => {
     //         Name: "bluelighttech22",
     //       },
     //       To: [
-    //         { 
-    //         Email: user.email, 
-    //         Name: `${user.firstName} ${user.lastName}` 
+    //         {
+    //         Email: user.email,
+    //         Name: `${user.firstName} ${user.lastName}`
     //       },
     //       ],
     //       Subject: "¡Bienvenido! Que alegría tenerte aquí",
@@ -233,7 +242,6 @@ const payment = asyncHanlder(async (req, res) => {
       message: res.locals.message || "Subscription created successfully",
       subscription,
     });
-    
   } catch (error) {
     console.error("Error processing payment:", error);
     throw new Error(`Error processing payment: ${error.message}`);
@@ -242,7 +250,7 @@ const payment = asyncHanlder(async (req, res) => {
 
 const createNewSubscription = async (req, res, user, token) => {
   try {
-    console.log("Seeee llamo estoooooooo")
+    console.log("Seeee llamo estoooooooo");
     const paymentMethod = await stripe.paymentMethods.create({
       type: "card",
       card: { token: token },
@@ -284,10 +292,12 @@ const createNewSubscription = async (req, res, user, token) => {
       message: "New subscription created successfully without trial",
       subscription: newSubscription,
     });
-
   } catch (error) {
     console.error("Error creating new subscription:", error);
-    res.status(500).json({ message: "Error creating new subscription", error: error.message });
+    res.status(500).json({
+      message: "Error creating new subscription",
+      error: error.message,
+    });
   }
 };
 
@@ -347,7 +357,7 @@ const updatePaymentMethod = async (req, res) => {
 
     const invoices = await stripe.invoices.list({
       customer: user.customerIdStripe,
-      status: 'open', // Facturas abiertas o pendientes de pago
+      status: "open", // Facturas abiertas o pendientes de pago
     });
 
     // Intentar pagar las facturas pendientes si existen
@@ -359,8 +369,9 @@ const updatePaymentMethod = async (req, res) => {
       }
     }
 
-    res.json({ message: "Payment method updated and pending invoices paid if any" });
-
+    res.json({
+      message: "Payment method updated and pending invoices paid if any",
+    });
   } catch (error) {
     console.error("Error updating payment method:", error);
     res
@@ -500,23 +511,43 @@ const createNewSecretKey = async (req, res) => {
       return res.status(404).json({ message: "Usuario no encontrado" });
     }
 
-    // Crear un nuevo PaymentIntent para generar un nuevo client_secret
+    // Verificar si el cliente tiene un método de pago guardado en Stripe
+    const paymentMethods = await stripe.paymentMethods.list({
+      customer: user.customerIdStripe,
+      type: "card",
+    });
+
+    if (paymentMethods.data.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "No hay métodos de pago guardados." });
+    }
+
+    const defaultPaymentMethod = paymentMethods.data[0].id; // Usa el primer método de pago guardado
+    console.log("defaultPaymentMethod", defaultPaymentMethod);
+    // Crear o actualizar el PaymentIntent
     const paymentIntent = await stripe.paymentIntents.create({
-      customer: user?.customerIdStripe, // ID del cliente de Stripe guardado en la base de datos
-      amount: 1000, // Monto de la transacción (ajústalo según tu caso)
-      currency: 'usd',
-      payment_method_types: ['card'],
+      customer: user.customerIdStripe, // ID del cliente de Stripe
+      amount: 1000, // Ajusta el monto según tu caso
+      currency: "usd",
+      payment_method: defaultPaymentMethod, // Asocia el método de pago guardado
+      confirmation_method: "automatic", // Maneja la confirmación automática
+      setup_future_usage: "off_session", // Para futuros pagos fuera de sesión
     });
 
     // Guardar el nuevo client_secret en la base de datos del usuario
+    console.log("enviado esta puta mierda");
     user.secretKeyStripe = paymentIntent.client_secret;
     await user.save();
 
-    // Enviar el nuevo client_secret al frontend para continuar el pago
+    // Enviar el nuevo client_secret al frontend
     return res.status(200).json({ clientSecret: paymentIntent.client_secret });
   } catch (error) {
     console.error("Error al regenerar el client_secret:", error);
-    return res.status(500).json({ message: "Error al regenerar el client_secret", error: error.message });
+    return res.status(500).json({
+      message: "Error al regenerar el client_secret",
+      error: error.message,
+    });
   }
 };
 
@@ -527,16 +558,18 @@ const confirmPayment = async (req, res) => {
     // Confirmar el Payment Intent en Stripe
     const paymentIntent = await stripe.paymentIntents.confirm(paymentIntentId);
 
-    if (paymentIntent.status === 'succeeded') {
+    if (paymentIntent.status === "succeeded") {
       // El pago se ha completado con éxito
-      return res.json({ message: 'Pago confirmado exitosamente' });
+      return res.json({ message: "Pago confirmado exitosamente" });
     } else {
       // El pago no se completó
-      return res.status(400).json({ message: 'Error al confirmar el pago' });
+      return res.status(400).json({ message: "Error al confirmar el pago" });
     }
   } catch (error) {
-    console.error('Error al confirmar el pago:', error);
-    return res.status(500).json({ message: 'Error al confirmar el pago', error: error.message });
+    console.error("Error al confirmar el pago:", error);
+    return res
+      .status(500)
+      .json({ message: "Error al confirmar el pago", error: error.message });
   }
 };
 
@@ -545,5 +578,5 @@ module.exports = {
   checkpayment,
   cancelSuscription,
   updatePaymentMethod,
-  createNewSecretKey
+  createNewSecretKey,
 };

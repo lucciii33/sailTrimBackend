@@ -61,7 +61,8 @@ app.post(
                   Name: `${user.firstName} ${user.lastName}`, // Nombre completo del usuario
                 },
               ],
-              Subject: "Atención: tu banco necesita confirmar este pago!!!!!!!!!!",
+              Subject:
+                "Atención: tu banco necesita confirmar este pago!!!!!!!!!!",
               TextPart: `Hola ${user.firstName}, el pago de tu suscripción falló. Tu banco necesita una autorizacion para procesar este pago`,
               HTMLPart: `
               <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
@@ -127,7 +128,8 @@ app.post(
                     Name: `${user.firstName} ${user.lastName}`, // Nombre completo del usuario
                   },
                 ],
-                Subject: "Atención: Hubo un problema con el pago de tu suscripción",
+                Subject:
+                  "Atención: Hubo un problema con el pago de tu suscripción",
                 TextPart: `Hola ${user.firstName}, el pago de tu suscripción falló. Por favor, actualiza tu método de pago.`,
                 HTMLPart: `
                 <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
@@ -241,10 +243,11 @@ app.use("/api/motivationalNotes", require("./routes/notesRoutes"));
 app.use("/api/resume", require("./routes/resumeRoutes"));
 app.use("/api/apuntes", require("./routes/apuntesRoutes"));
 app.use("/api/quizes", require("./routes/quizesRoutes.js"));
+app.use("/api/calendar", require("./routes/calendarRoutes.js"));
+app.use("/api/report", require("./routes/reportController.js"));
 
 app.use(errorHandler);
 
 app.listen(port, () => console.log(`Server started on port ${port}`));
 
 resetLoginDaysJob();
-console.log("funcion se envio");
