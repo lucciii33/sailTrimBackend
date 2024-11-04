@@ -33,7 +33,9 @@ const registerUser = asyncHandler(async (req, res) => {
 
   if (!email || email == "" || !email.includes("@") || !email.includes(".")) {
     res.status(400);
-    throw new Error("Por favor, completa el campo de correo electrónico correctamente.");
+    throw new Error(
+      "Por favor, completa el campo de correo electrónico correctamente."
+    );
   }
 
   if (password.length < 9) {
@@ -42,7 +44,9 @@ const registerUser = asyncHandler(async (req, res) => {
   }
   if (!/[A-Z]/.test(password)) {
     res.status(400);
-    throw new Error("La contraseña debe contener al menos una letra mayúscula.");
+    throw new Error(
+      "La contraseña debe contener al menos una letra mayúscula."
+    );
   }
   if (!/\d/.test(password)) {
     res.status(400);
@@ -50,7 +54,9 @@ const registerUser = asyncHandler(async (req, res) => {
   }
   if (!/[!@#$%^&*]/.test(password)) {
     res.status(400);
-    throw new Error("La contraseña debe contener al menos un símbolo (!@#$%^&*).");
+    throw new Error(
+      "La contraseña debe contener al menos un símbolo (!@#$%^&*)."
+    );
   }
 
   const userExists = await User.findOne({ email });
@@ -135,7 +141,7 @@ const loginUser = asyncHandler(async (req, res) => {
   const isMatch = await bcrypt.compare(password, user.password);
   if (user && isMatch) {
     const currentDay = new Date().getDay().toString();
-  
+
     user.daysStudy = (user.daysStudy || 0) + 1;
     user.loginDays.set(currentDay, true);
     await user.save();
@@ -151,7 +157,7 @@ const loginUser = asyncHandler(async (req, res) => {
       loginDays: user.loginDays,
       customerId: user.customerId,
       secretKeyStripe: user.secretKeyStripe,
-      daysStudy: user.daysStudy
+      daysStudy: user.daysStudy,
     });
   } else {
     res.status(400);
@@ -181,7 +187,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
   await user.save();
 
   // URL de frontend para que el usuario cambie la contraseña
-  const resetUrl = `https://mentorai.netlify.app/reset-password/${resetToken}`;
+  const resetUrl = `https://novaaiapp.com/reset-password/${resetToken}`;
   console.log("Generated Reset URL:", resetUrl); // Cambia el enlace si usas un dominio real
 
   // Enviar el correo electrónico con Mailjet
@@ -213,7 +219,6 @@ const forgotPassword = asyncHandler(async (req, res) => {
           </div>
 
           `,
-                           
         },
       ],
     });

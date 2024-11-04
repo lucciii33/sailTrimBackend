@@ -5,6 +5,7 @@ const port = process.env.PORT || 5000;
 const { errorHandler } = require("./middleware/errorMiddleware");
 const connectDB = require("./config/db");
 const resetLoginDaysJob = require("./jobs/jobsLoginDays"); // Ruta al cron job
+const sessionDeleteCronJob = require("./jobs/deleteSession.js");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const Mailjet = require("node-mailjet"); // Para enviar correos
@@ -251,3 +252,4 @@ app.use(errorHandler);
 app.listen(port, () => console.log(`Server started on port ${port}`));
 
 resetLoginDaysJob();
+sessionDeleteCronJob();

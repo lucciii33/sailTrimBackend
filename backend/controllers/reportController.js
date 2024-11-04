@@ -21,12 +21,12 @@ const reportAndIssue = asyncHanlder(async (req, res) => {
     Messages: [
       {
         From: {
-          Email: user.email,
-          Name: `${user.firstName} ${user.lastName}`,
+          Email: "bluelighttech22@gmail.com",
+          Name: `bluelighttech22@gmail.com`,
         },
         To: [
           {
-            Email: "bluelighttech22@gmail.com",
+            Email: "novaappai@gmail.com",
             Name: "Blue Light Tech",
           },
         ],
