@@ -84,6 +84,7 @@ const payment = asyncHanlder(async (req, res) => {
       trial_period_days: user.hasTrial ? 0 : 1,
       payment_behavior: "default_incomplete",
       expand: ["latest_invoice.payment_intent"],
+      default_payment_method: paymentMethod.id,
     });
 
     const paymentIntent = subscription.latest_invoice
@@ -272,11 +273,21 @@ const createNewSubscription = async (req, res, user, token) => {
       payment_behavior: "allow_incomplete", // Cobrar inmediatamente si es posible
       // automatic_tax: { enabled: true },
       expand: ["latest_invoice.payment_intent"],
+      default_payment_method: paymentMethod.id,
     });
 
     const paymentIntent = newSubscription.latest_invoice
       ? newSubscription.latest_invoice.payment_intent
       : null;
+
+    if (
+      paymentIntent &&
+      paymentIntent.status === "requires_action" &&
+      paymentIntent.client_secret
+    ) {
+      user.secretKeyStripe = paymentIntent.client_secret;
+      await user.save();
+    }
 
     if (!paymentIntent) {
       return res.status(400).json({ message: "Payment intent not found" });
