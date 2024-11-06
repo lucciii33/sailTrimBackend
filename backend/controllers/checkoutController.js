@@ -82,7 +82,9 @@ const payment = asyncHanlder(async (req, res) => {
       customer: customer.id,
       items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Reemplaza con tu ID de plan real
       trial_period_days: user.hasTrial ? 0 : 1,
-      payment_behavior: "default_incomplete",
+      payment_behavior: user.hasTrial
+        ? "allow_incomplete"
+        : "default_incomplete",
       expand: ["latest_invoice.payment_intent"],
       default_payment_method: paymentMethod.id,
     });
