@@ -1,14 +1,14 @@
 // const { Configuration, OpenAIApi } = require('openai');
 
 // const OpenAI = require("openai");
-const { parse, stringify } = require('flatted'); 
-const levenshtein = require('fast-levenshtein');
+const { parse, stringify } = require("flatted");
+const levenshtein = require("fast-levenshtein");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const apiKey = process.env.GEMINI_KEY; // Replace with your actual key
 
 const genAI = new GoogleGenerativeAI("AIzaSyDa3W2MKxBBjxnjCp6cJfHO8iJcn55B4v4");
 
-const OpenAI = require('openai');
+const OpenAI = require("openai");
 // console.log("OpenAI", OpenAI)
 
 // const configuration = new OpenAI.Configuration({
@@ -17,61 +17,61 @@ const OpenAI = require('openai');
 
 // const openai = new OpenAI.OpenAIApi(configuration);
 
-
 const Openai = new OpenAI({
-  apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt"
+  apiKey: "sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt",
 });
-console.log("Openai", Openai)
-
+console.log("Openai", Openai);
 
 async function generateTextGoole(req, res) {
-    const { prompt } = req.body;
+  const { prompt } = req.body;
 
-    if (!prompt) {
-        return res.status(400).send("Prompt is required.");
-    }
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash"});
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-        console.log(text);
-        res.status(200).json({ generatedText: text });
-    } catch (error) {
-        console.error("Error generating text:", error);
-        return "An error occurred while generating text.";
-    }
+  if (!prompt) {
+    return res.status(400).send("Prompt is required.");
+  }
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    console.log(text);
+    res.status(200).json({ generatedText: text });
+  } catch (error) {
+    console.error("Error generating text:", error);
+    return "An error occurred while generating text.";
+  }
 }
 
 async function generateTestQuestions(req, res) {
-    const { topic, level } = req.body;
-    console.log("levellevellevellevel", level)
-    console.log("body generateTestQuestions", req.body )
-    if (!topic) {
-        return res.status(400).send("Topic is required.");
-    }
+  const { topic, level } = req.body;
+  console.log("levellevellevellevel", level);
+  console.log("body generateTestQuestions", req.body);
+  if (!topic) {
+    return res.status(400).send("Topic is required.");
+  }
 
-    const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas) y hazlo para un niverl ${level}`;
+  const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas) y hazlo para un niverl ${level}`;
 
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = await response.text();
-        
-        // Assuming the response is a list of questions, split them accordingly
-        const questions = text.split('\n').filter(question => question.trim() !== '');
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
 
-        console.log(questions);
-        res.status(200).json({ generatedQuestions: questions });
-    } catch (error) {
-        console.error("Error generating questions:", error);
-        res.status(500).send("An error occurred while generating questions.");
-    }
+    // Assuming the response is a list of questions, split them accordingly
+    const questions = text
+      .split("\n")
+      .filter((question) => question.trim() !== "");
+
+    console.log(questions);
+    res.status(200).json({ generatedQuestions: questions });
+  } catch (error) {
+    console.error("Error generating questions:", error);
+    res.status(500).send("An error occurred while generating questions.");
+  }
 }
 
 async function generateflashCards(req, res) {
-    const { topic } = req.body;
+  const { topic } = req.body;
 
   if (!topic) {
     return res.status(400).send("Topic is required.");
@@ -81,7 +81,7 @@ async function generateflashCards(req, res) {
     Cada tarjeta de estudio debe contener una pregunta y una respuesta correspondiente. Por favor, formatea el resultado de la siguiente manera: P: [Question] R: [Answer] , Genera un conjunto de tarjetas de estudio para el tema "${topic}".  `;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "pro-1.5"});
+    const model = genAI.getGenerativeModel({ model: "pro-1.5" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
@@ -173,223 +173,268 @@ async function generateflashCards(req, res) {
 //     }
 // }
 async function generateFeynman(req, res) {
+  const { resume, level } = req.body;
+  console.log("body Feyman", req.body);
 
-    const { resume, level } = req.body;
-    console.log("body Feyman", req.body )
+  if (!resume) {
+    return res.status(400).send("A resume is required.");
+  }
 
-    if (!resume) {
-        return res.status(400).send("A resume is required.");
-    }
+  // Eliminar las etiquetas HTML del texto para que la IA no se confunda
+  const plainTextResume = resume.replace(/<\/?[^>]+>/gi, "");
 
-    // Eliminar las etiquetas HTML del texto para que la IA no se confunda
-    const plainTextResume = resume.replace(/<\/?[^>]+>/gi, '');
+  const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} hazlo con una exigencia nivel ${level} `;
 
-    const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} hazlo con una exigencia nivel ${level} `;
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
 
+    // Procesar la respuesta de la AI
+    const resumeAi = text.trim();
 
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = await response.text();
-        
-        // Procesar la respuesta de la AI
-        const resumeAi = text.trim();
-
-        console.log({ resumeAi, resume });
-        res.status(200).json({ 
-            resumeAi,
-            resume
-        });
-    } catch (error) {
-        console.error("Error generating summary:", error);
-        res.status(500).send("An error occurred while generating the summary.");
-    }
+    console.log({ resumeAi, resume });
+    res.status(200).json({
+      resumeAi,
+      resume,
+    });
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    res.status(500).send("An error occurred while generating the summary.");
+  }
 }
 
 async function gradeExam(req, res) {
-    if (!levenshtein) {
-        return res.status(500).send("Levenshtein module not loaded.");
-    }
+  if (!levenshtein) {
+    return res.status(500).send("Levenshtein module not loaded.");
+  }
 
-    const { answers, questions } = req.body;
+  const { answers, questions } = req.body;
 
-    if (!answers || !questions) {
-        return res.status(400).send("Answers and questions are required.");
-    }
+  if (!answers || !questions) {
+    return res.status(400).send("Answers and questions are required.");
+  }
 
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const gradedExam = {};
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const gradedExam = {};
 
-        for (const key in questions) {
-            if (questions.hasOwnProperty(key)) {
-                const question = questions[key];
-                const studentAnswer = answers[key] ? answers[key].trim().toLowerCase() : "";
-                let evaluatedAnswer = "";
+    for (const key in questions) {
+      if (questions.hasOwnProperty(key)) {
+        const question = questions[key];
+        const studentAnswer = answers[key]
+          ? answers[key].trim().toLowerCase()
+          : "";
+        let evaluatedAnswer = "";
 
-                try {
-                    const result = await model.generateContent(question);
-                    evaluatedAnswer = await result.response.text();
-                    evaluatedAnswer = evaluatedAnswer.trim().toLowerCase();
-                } catch (error) {
-                    console.error("Error generating content:", error);
-                    evaluatedAnswer = "";
-                }
-
-                const normalizedStudentAnswer = studentAnswer.replace(/\s+/g, ' ').trim();
-                const normalizedEvaluatedAnswer = evaluatedAnswer.replace(/\s+/g, ' ').trim();
-
-                const distance = levenshtein.get(normalizedStudentAnswer, normalizedEvaluatedAnswer);
-                const maxLength = Math.max(normalizedStudentAnswer.length, normalizedEvaluatedAnswer.length);
-                const similarity = 1 - (distance / maxLength);
-
-                const isCorrect = similarity >= 0.07;
-                console.log("Distance:", distance, "Similarity:", similarity);
-
-                gradedExam[key] = {
-                    question: question,
-                    studentAnswer,
-                    expectedAnswer: evaluatedAnswer,
-                    isCorrect,
-                    explanation: `La respuesta correcta para la pregunta "${question}" es "${evaluatedAnswer}".`
-                };
-            }
+        try {
+          const result = await model.generateContent(question);
+          evaluatedAnswer = await result.response.text();
+          evaluatedAnswer = evaluatedAnswer.trim().toLowerCase();
+        } catch (error) {
+          console.error("Error generating content:", error);
+          evaluatedAnswer = "";
         }
 
-        res.status(200).json({ gradedExam });
-    } catch (error) {
-        console.error("Error grading exam:", error);
-        res.status(500).send("An error occurred while grading the exam.");
+        const normalizedStudentAnswer = studentAnswer
+          .replace(/\s+/g, " ")
+          .trim();
+        const normalizedEvaluatedAnswer = evaluatedAnswer
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const distance = levenshtein.get(
+          normalizedStudentAnswer,
+          normalizedEvaluatedAnswer
+        );
+        const maxLength = Math.max(
+          normalizedStudentAnswer.length,
+          normalizedEvaluatedAnswer.length
+        );
+        const similarity = 1 - distance / maxLength;
+
+        const isCorrect = similarity >= 0.07;
+        console.log("Distance:", distance, "Similarity:", similarity);
+
+        gradedExam[key] = {
+          question: question,
+          studentAnswer,
+          expectedAnswer: evaluatedAnswer,
+          isCorrect,
+          explanation: `La respuesta correcta para la pregunta "${question}" es "${evaluatedAnswer}".`,
+        };
+      }
     }
+
+    res.status(200).json({ gradedExam });
+  } catch (error) {
+    console.error("Error grading exam:", error);
+    res.status(500).send("An error occurred while grading the exam.");
+  }
 }
-    
+
 async function generateText(req, res) {
-    const { prompt, level } = req.body;
-    try {
+  const { prompt, level } = req.body;
+  try {
+    const chatCompletion = await Openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "user",
+          content: `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 12. The level provided is: ${level}(SPANISH ONLY PLEASE)`,
+        },
+      ],
+    });
 
-        const chatCompletion = await Openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [{"role": "user", "content": `generated study flashcards for this topic: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 12. The level provided is: ${level}(SPANISH ONLY PLEASE)`}],
-          });
+    const contentString = chatCompletion?.choices[0]?.message.content;
 
-        const contentString = chatCompletion?.choices[0]?.message.content;
+    const qaRegex =
+      /(?:Question|Pregunta):\s*(.*?)\s*(?:Answer|Respuesta):\s*(.*?)(?=\n(?:Question|Pregunta):|$)/gs;
+    console.log("qaRegex", qaRegex);
+    const qaPairs = [];
+    let match;
 
-        const qaRegex = /(?:Question|Pregunta):\s*(.*?)\s*(?:Answer|Respuesta):\s*(.*?)(?=\n(?:Question|Pregunta):|$)/gs;
-        console.log("qaRegex", qaRegex)
-        const qaPairs = [];
-        let match;
-
-        while ((match = qaRegex.exec(contentString)) !== null) {
-            const question = match[1].trim();
-            const answer = match[2].trim();
-            if (question && answer) {
-                qaPairs.push({ question, answer });
-            }
-        }
-
-        // Prepare the response in the format you need
-        const flashCards = qaPairs.map((item, index) => ({
-            id: `card-${index + 1}`,
-            question: item.question,
-            answer: item.answer
-        }));
-
-        res.json({
-            flashCards
-        });
-
-
-    } catch (error) {
-        console.error("Error generating text:", error);
-        res.status(500).send("An error occurred while generating text.");
+    while ((match = qaRegex.exec(contentString)) !== null) {
+      const question = match[1].trim();
+      const answer = match[2].trim();
+      if (question && answer) {
+        qaPairs.push({ question, answer });
+      }
     }
+
+    // Prepare the response in the format you need
+    const flashCards = qaPairs.map((item, index) => ({
+      id: `card-${index + 1}`,
+      question: item.question,
+      answer: item.answer,
+    }));
+
+    res.json({
+      flashCards,
+    });
+  } catch (error) {
+    console.error("Error generating text:", error);
+    res.status(500).send("An error occurred while generating text.");
+  }
 }
 
 async function imagesStory(req, res) {
-    const { topic } = req.body;
-    try {
+  const { topic } = req.body;
+  try {
+    const chatCompletion = await Openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "user",
+          content: `puedes ayudarme si te paso este topic: ${topic} a generar imagenes mentales y asociativas para yo entender mejor este tema, methodo de locci`,
+        },
+      ],
+    });
 
-        const chatCompletion = await Openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [{"role": "user", "content": `puedes ayudarme si te paso este topic: ${topic} a generar imagenes mentales y asociativas para yo entender mejor este tema, methodo de locci`}],
-          });
+    const contentString = chatCompletion?.choices[0]?.message.content;
 
-        const contentString = chatCompletion?.choices[0]?.message.content;
-
-
-        res.json({
-            contentString
-        });
-
-    } catch (error) {
-        console.error("Error generating text:", error);
-        res.status(500).send("An error occurred while generating text.");
-    }
+    res.json({
+      contentString,
+    });
+  } catch (error) {
+    console.error("Error generating text:", error);
+    res.status(500).send("An error occurred while generating text.");
+  }
 }
 
 async function generateWordsCombination(req, res) {
-    const { word } = req.body;
-    if (!word) {
-        return res.status(400).send("A resume is required.");
-    }
+  const { word } = req.body;
+  if (!word) {
+    return res.status(400).send("A resume is required.");
+  }
 
-    const prompt = `con esta palabra: ${word}. Necesito que me ayudes a crear una asociación mnemotécnica para recordarla más fácilmente. Puedes hacerlo sugiriendo palabras similares, rimas, o una frase creativa que me ayude a relacionar esta palabra con algo que ya conozco. Por ejemplo, si la palabra es 'felaraquidio', podrías sugerir algo como 'fecalo' o 'estafano' como asociaciones que suenen similares o que sean fáciles de recordar. También puedes crear una pequeña historia o frase que haga que la palabra sea más memorable.`;
+  const prompt = `con esta palabra: ${word}. Necesito que me ayudes a crear una asociación mnemotécnica para recordarla más fácilmente. Puedes hacerlo sugiriendo palabras similares, rimas, o una frase creativa que me ayude a relacionar esta palabra con algo que ya conozco. Por ejemplo, si la palabra es 'felaraquidio', podrías sugerir algo como 'fecalo' o 'estafano' como asociaciones que suenen similares o que sean fáciles de recordar. También puedes crear una pequeña historia o frase que haga que la palabra sea más memorable.`;
 
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = await response.text();
-        
-        // Procesar la respuesta de la AI
-        const textAi = text.trim();
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
 
-        res.status(200).json({ 
-            word,
-            textAi
-        });
-    } catch (error) {
-        console.error("Error generating summary:", error);
-        res.status(500).send("An error occurred while generating the summary.");
-    }
+    // Procesar la respuesta de la AI
+    const textAi = text.trim();
+
+    res.status(200).json({
+      word,
+      textAi,
+    });
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    res.status(500).send("An error occurred while generating the summary.");
+  }
 }
 
 async function generateHomework(req, res) {
-    const { homework, level } = req.body;
-    if (!homework || !level) {
-        return res.status(400).send("A homework is required.");
-    }
+  const { homework, level } = req.body;
+  if (!homework || !level) {
+    return res.status(400).send("A homework is required.");
+  }
 
-    const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta para un nivel de ${level}`;
+  const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta para un nivel de ${level}`;
 
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = await response.text();
-        
-        // Procesar la respuesta de la AI
-        const textAi = text.trim();
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
 
-        res.status(200).json({ 
-            homework,
-            textAi
-        });
-    } catch (error) {
-        console.error("Error generating summary:", error);
-        res.status(500).send("An error occurred while generating the summary.");
-    }
+    // Procesar la respuesta de la AI
+    const textAi = text.trim();
+
+    res.status(200).json({
+      homework,
+      textAi,
+    });
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    res.status(500).send("An error occurred while generating the summary.");
+  }
+}
+
+async function generateMaps(req, res) {
+  const { topic, level } = req.body;
+  if (!topic || !level) {
+    return res.status(400).send("por favor coloca el tema y el nivel.");
+  }
+
+  const prompt = `Crea un mapa conceptual en formato JSON sobre el tema "${topic}" a un nivel de dificultad "${level}". 
+La respuesta debe tener una lista de "nodos", donde cada nodo representa un concepto con un "id" único y un "label". 
+También debe incluir una lista de "conexiones", donde cada conexión tiene un "source" y un "target" que corresponden a los "id" de los nodos relacionados.`;
+
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = await response.text();
+
+    // Procesar la respuesta de la AI
+    const textAi = text.trim();
+
+    res.status(200).json({
+      topic,
+      textAi,
+    });
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    res.status(500).send("An error occurred while generating the summary.");
+  }
 }
 
 module.exports = {
-    generateText,
-    generateTextGoole,
-    generateTestQuestions,
-    gradeExam,
-    generateflashCards,
-    generateFeynman,
-    imagesStory,
-    generateWordsCombination,
-    generateHomework
-}
+  generateText,
+  generateTextGoole,
+  generateTestQuestions,
+  gradeExam,
+  generateflashCards,
+  generateFeynman,
+  imagesStory,
+  generateWordsCombination,
+  generateHomework,
+  generateMaps,
+};
