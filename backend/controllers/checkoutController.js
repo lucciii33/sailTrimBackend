@@ -419,7 +419,11 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
       ); // Cambié `del` a `cancel`
 
       // Actualizar la base de datos si es necesario, por ejemplo, eliminando el customerId
-      await User.findByIdAndUpdate(userId, { customerId: null }, { new: true });
+      await User.findByIdAndUpdate(
+        userId,
+        { customerId: null, customerIdStripe: null },
+        { new: true }
+      );
 
       // Enviar email de confirmación
       await mailjet.post("send", { version: "v3.1" }).request({
@@ -586,10 +590,39 @@ const confirmPayment = async (req, res) => {
   }
 };
 
+const activeOldSuscription = asyncHanlder(async (req, res) => {
+  const { userId } = req.params;
+
+  // Buscar al usuario por userId
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  if (user.customerId) {
+    const subscription = await stripe.subscriptions.retrieve(user.customerId);
+
+    // Si la suscripción está marcada para cancelarse al final del ciclo, se puede reactivar
+    if (subscription.status === "active" && subscription.cancel_at_period_end) {
+      const updatedSubscription = await stripe.subscriptions.update(
+        user.customerId,
+        {
+          cancel_at_period_end: false, // Reactivar la suscripción antes de que termine el ciclo de facturación
+        }
+      );
+      return res.json({
+        message: "Subscription reactivated successfully",
+        subscription: updatedSubscription,
+      });
+    }
+  }
+});
+
 module.exports = {
   payment,
   checkpayment,
   cancelSuscription,
   updatePaymentMethod,
   createNewSecretKey,
+  activeOldSuscription,
 };

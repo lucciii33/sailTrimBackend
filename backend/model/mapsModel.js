@@ -7,13 +7,13 @@ const mapsMentalSchema = mongoose.Schema(
       required: false,
     },
     textAi: {
-      nodes: [
+      nodos: [
         {
           id: { type: String, required: false },
           label: { type: String, required: false },
         },
       ],
-      connections: [
+      conexiones: [
         {
           source: { type: String, required: false },
           target: { type: String, required: false },

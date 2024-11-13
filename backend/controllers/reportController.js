@@ -86,6 +86,87 @@ const reportAndIssue = asyncHanlder(async (req, res) => {
   }
 });
 
+const customerService = asyncHanlder(async (req, res) => {
+  const { issue, userId } = req.body;
+  const user = await User.findById(userId);
+
+  if (!user) {
+    res.status(400);
+    throw new Error("El usuario no existe");
+  }
+
+  // Correo a "Nova"
+  const sendToNova = mailjet.post("send", { version: "v3.1" }).request({
+    Messages: [
+      {
+        From: {
+          Email: "bluelighttech22@gmail.com",
+          Name: `bluelighttech22@gmail.com`,
+        },
+        To: [
+          {
+            Email: "novaappai@gmail.com",
+            Name: "Blue Light Tech",
+          },
+        ],
+        Subject: "REPORT!!!!!!",
+        TextPart: "REPORT",
+        HTMLPart: `
+            <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
+              <p>${user.firstName} ${user.lastName} ha enviado un problema:</p>
+              <p>${issue}</p>
+            </div>
+          `,
+      },
+    ],
+  });
+
+  // Correo de confirmación al usuario
+  const sendToUser = mailjet.post("send", { version: "v3.1" }).request({
+    Messages: [
+      {
+        From: {
+          Email: "bluelighttech22@gmail.com",
+          Name: "Blue Light Tech",
+        },
+        To: [
+          {
+            Email: user.email,
+            Name: `${user.firstName} ${user.lastName}`,
+          },
+        ],
+        Subject: "Hemos recibido tu reporte",
+        TextPart: "REPORT",
+        HTMLPart: `
+            <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
+                <p>Hemos recibido tu reporte en pronto nos comunicaremos contigo</p>
+            </div>
+          `,
+      },
+    ],
+  });
+
+  // Enviar ambos correos en paralelo y manejar errores
+  try {
+    const [resultNova, resultUser] = await Promise.all([
+      sendToNova,
+      sendToUser,
+    ]);
+    console.log("Email sent successfully to Nova:", resultNova.body);
+    console.log(
+      "Confirmation email sent successfully to User:",
+      resultUser.body
+    );
+    return res.status(200).json({ message: "Reporte enviado exitosamente" });
+  } catch (error) {
+    console.error("Error sending emails:", error.statusCode);
+    return res
+      .status(500)
+      .json({ error: "Hubo un problema al enviar los correos" });
+  }
+});
+
 module.exports = {
   reportAndIssue,
+  customerService,
 };
