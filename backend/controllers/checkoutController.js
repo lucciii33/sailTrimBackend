@@ -59,7 +59,7 @@ const payment = asyncHanlder(async (req, res) => {
       //   .status(400)
       //   .json({ message: "You have already used your free trial." });
       res.locals.message =
-        "You have already used your free trial, proceeding to charge.";
+        "Ya has usado tu período de prueba gratuito. Procediendo a cobrar.";
     }
     // Crear método de pago
     const paymentMethod = await stripe.paymentMethods.create({
@@ -302,7 +302,7 @@ const createNewSubscription = async (req, res, user, token) => {
     await user.save();
 
     return res.json({
-      message: "New subscription created successfully without trial",
+      message: "Nueva suscripción creada correctamente sin período de prueba",
       subscription: newSubscription,
     });
   } catch (error) {
