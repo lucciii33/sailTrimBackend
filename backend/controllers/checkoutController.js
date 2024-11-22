@@ -414,15 +414,20 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
     // Verificar si la suscripción está en período de prueba
     if (subscription.status === "trialing") {
       // CASO: Si la suscripción está en el período de prueba, usar `cancel` en lugar de `del`
-      const deletedSubscription = await stripe.subscriptions.cancel(
-        subscription.id
-      ); // Cambié `del` a `cancel`
+      // const deletedSubscription = await stripe.subscriptions.cancel(
+      //   subscription.id
+      // );
 
-      // Actualizar la base de datos si es necesario, por ejemplo, eliminando el customerId
-      await User.findByIdAndUpdate(
-        userId,
-        { customerId: null, customerIdStripe: null },
-        { new: true }
+      // // Actualizar la base de datos si es necesario, por ejemplo, eliminando el customerId
+      // await User.findByIdAndUpdate(
+      //   userId,
+      //   { customerId: null, customerIdStripe: null },
+      //   { new: true }
+      // );
+
+      const deletedSubscription = await stripe.subscriptions.update(
+        subscription.id,
+        { cancel_at: subscription.trial_end } // Cancelar exactamente al final del período de prueba
       );
 
       // Enviar email de confirmación
