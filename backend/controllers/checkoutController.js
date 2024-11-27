@@ -80,7 +80,7 @@ const payment = asyncHanlder(async (req, res) => {
     // Crear la suscripción
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
-      items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Reemplaza con tu ID de plan real
+      items: [{ price: process.env.STRIPE_PRICE_ID }], // Reemplaza con tu ID de plan real
       trial_period_days: user.hasTrial ? 0 : 1,
       payment_behavior: user.hasTrial
         ? "allow_incomplete"
@@ -270,7 +270,7 @@ const createNewSubscription = async (req, res, user, token) => {
 
     const newSubscription = await stripe.subscriptions.create({
       customer: customer.id,
-      items: [{ price: "price_1Pc5OgEM69ysvIJbkNWRzVay" }], // Cambia con tu ID de plan real
+      items: [{ price: process.env.STRIPE_PRICE_ID }], // Cambia con tu ID de plan real
       trial_period_days: 0, // Nunca dar trial aquí porque ya lo usaron
       payment_behavior: "allow_incomplete", // Cobrar inmediatamente si es posible
       // automatic_tax: { enabled: true },
