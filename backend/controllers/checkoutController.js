@@ -52,6 +52,13 @@ const payment = asyncHanlder(async (req, res) => {
       ) {
         return createNewSubscription(req, res, user, token);
       }
+
+      if (
+        subscription.status === "trialing" ||
+        subscription.status === "active"
+      ) {
+        throw new Error("Ya tienes una suscripción creada.");
+      }
     }
 
     if (user.hasTrial) {
@@ -247,7 +254,7 @@ const payment = asyncHanlder(async (req, res) => {
     });
   } catch (error) {
     console.error("Error processing payment:", error);
-    throw new Error(`Error processing payment: ${error.message}`);
+    throw new Error(`${error.message}`);
   }
 });
 
