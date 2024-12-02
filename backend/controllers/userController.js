@@ -17,11 +17,11 @@ console.log("process.env.MJ_APIKEY_PUBLIC", process.env.MJ_APIKEY_PUBLIC);
 // Access:      Public
 const registerUser = asyncHandler(async (req, res) => {
   const { firstName, lastName, email, password, pais, edad, terms } = req.body;
-
+  const normalizedEmail = email.toLowerCase();
   if (
     !firstName ||
     !lastName ||
-    !email ||
+    !normalizedEmail ||
     !password ||
     !pais ||
     !edad ||
@@ -31,7 +31,11 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new Error("Por Favor completa todo los campos.");
   }
 
-  if (!email || email == "" || !email.includes("@") || !email.includes(".")) {
+  if (
+    normalizedEmail == "" ||
+    !normalizedEmail.includes("@") ||
+    !normalizedEmail.includes(".")
+  ) {
     res.status(400);
     throw new Error(
       "Por favor, completa el campo de correo electrónico correctamente."
@@ -59,7 +63,7 @@ const registerUser = asyncHandler(async (req, res) => {
     );
   }
 
-  const userExists = await User.findOne({ email });
+  const userExists = await User.findOne({ email: normalizedEmail });
 
   if (userExists) {
     res.status(400);
@@ -72,7 +76,7 @@ const registerUser = asyncHandler(async (req, res) => {
   const user = await User.create({
     firstName,
     lastName,
-    email,
+    email: normalizedEmail,
     password: hashedPassword,
     pais,
     edad,
@@ -130,8 +134,8 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const loginUser = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-
-  const user = await User.findOne({ email });
+  const normalizedEmail = email.toLowerCase();
+  const user = await User.findOne({ email: normalizedEmail });
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
     res.status(400);
