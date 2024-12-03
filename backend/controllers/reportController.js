@@ -115,6 +115,7 @@ const customerService = asyncHanlder(async (req, res) => {
             <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
               <p>${user.firstName} ${user.lastName} ha enviado un problema:</p>
               <p>${issue}</p>
+              <p>${user._id}</p>
             </div>
           `,
       },
