@@ -88,8 +88,8 @@ const registerUser = asyncHandler(async (req, res) => {
     Messages: [
       {
         From: {
-          Email: "bluelighttech22@gmail.com", // Tu email
-          Name: "bluelighttech22", // Tu nombre o el de tu empresa
+          Email: "novaappai@gmail.com", // Tu email
+          Name: "NOVA AI", // Tu nombre o el de tu empresa
         },
         To: [
           {
@@ -200,8 +200,8 @@ const forgotPassword = asyncHandler(async (req, res) => {
       Messages: [
         {
           From: {
-            Email: "bluelighttech22@gmail.com",
-            Name: "bluelighttech22",
+            Email: "novaappai@gmail.com",
+            Name: "NOVA AI",
           },
           To: [
             {

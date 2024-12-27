@@ -46,8 +46,8 @@ const reportAndIssue = asyncHanlder(async (req, res) => {
     Messages: [
       {
         From: {
-          Email: "bluelighttech22@gmail.com",
-          Name: "Blue Light Tech",
+          Email: "novaappai@gmail.com",
+          Name: "Nova ai",
         },
         To: [
           {
@@ -60,6 +60,7 @@ const reportAndIssue = asyncHanlder(async (req, res) => {
         HTMLPart: `
             <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
                 <p>Hemos recibido tu reporte</p>
+                <p>Pronto nos comunicaremos contigo</p>
             </div>
           `,
       },
@@ -127,8 +128,8 @@ const customerService = asyncHanlder(async (req, res) => {
     Messages: [
       {
         From: {
-          Email: "bluelighttech22@gmail.com",
-          Name: "Blue Light Tech",
+          Email: "novaappai@gmail.com",
+          Name: "NOVA AI",
         },
         To: [
           {

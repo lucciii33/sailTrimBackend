@@ -111,8 +111,8 @@ const payment = asyncHanlder(async (req, res) => {
         Messages: [
           {
             From: {
-              Email: "bluelighttech22@gmail.com",
-              Name: "bluelighttech22",
+              Email: "novaappai@gmail.com",
+              Name: "NOVA AI",
             },
             To: [
               {
@@ -442,8 +442,8 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
         Messages: [
           {
             From: {
-              Email: "bluelighttech22@gmail.com",
-              Name: "bluelighttech22",
+              Email: "novaappai@gmail.com",
+              Name: "novaappai",
             },
             To: [
               {
@@ -485,8 +485,8 @@ const cancelSuscription = asyncHanlder(async (req, res) => {
         Messages: [
           {
             From: {
-              Email: "bluelighttech22@gmail.com",
-              Name: "bluelighttech22",
+              Email: "novaappai@gmail.com",
+              Name: "novaappai",
             },
             To: [
               {
