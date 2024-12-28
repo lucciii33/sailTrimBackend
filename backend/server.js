@@ -194,12 +194,13 @@ app.post(
                     Name: `${user.firstName} ${user.lastName}`, // Nombre completo del usuario
                   },
                 ],
-                Subject: "¡Pago exitoso de tu suscripción!",
-                TextPart: `Hola ${user.firstName}, el pago de tu suscripción se procesó correctamente.`,
+                Subject: "¡Bienvenido!",
+                TextPart: `Hola ${user.firstName}, ¡Bienvenido a NOVA AI! Estamos emocionados de que te unas a nosotros.`,
                 HTMLPart: `
                           <h3>Hola ${user.firstName},</h3>
                           <img src="https://bluenova.s3.us-east-2.amazonaws.com/Cara-Sad-Login.png" alt="Nova te da la bienvenida" style="width: 100%; max-width: 400px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
-                          <p>El pago de tu suscripción se procesó correctamente.</p>
+                          <p>¡Gracias por unirte a NOVA AI! Estamos emocionados de que formes parte de nuestra comunidad. Prepárate para explorar nuevas maneras de aprender y crecer con nosotros.</p>
+                          <p>Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos.</p>
                           <p style="font-size: 14px; color: #666666; margin-top: 20px;">
                             Un saludo,<br/>
                             <strong>El equipo de NOVA AI</strong>
