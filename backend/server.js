@@ -62,8 +62,7 @@ app.post(
                   Name: `${user.firstName} ${user.lastName}`, // Nombre completo del usuario
                 },
               ],
-              Subject:
-                "Atención: Tu banco necesita confirmar este pago!!!!!!!!!!",
+              Subject: "Atención: Tu banco necesita confirmar este pago",
               TextPart: `Hola ${user.firstName}, el pago de tu suscripción falló. Tu banco necesita una autorizacion para procesar este pago`,
               HTMLPart: `
               <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #F7F7F7;">
@@ -185,8 +184,8 @@ app.post(
             Messages: [
               {
                 From: {
-                  Email: "bluelighttech22@gmail.com", // Cambia a tu correo
-                  Name: "Blue Light Tech", // Nombre que aparecerá como remitente
+                  Email: "novaappai@gmail.com", // Cambia a tu correo
+                  Name: " Nova AI", // Nombre que aparecerá como remitente
                 },
                 To: [
                   {
