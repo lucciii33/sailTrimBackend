@@ -88,7 +88,7 @@ const payment = asyncHanlder(async (req, res) => {
     const subscription = await stripe.subscriptions.create({
       customer: customer.id,
       items: [{ price: process.env.STRIPE_PRICE_ID }], // Reemplaza con tu ID de plan real
-      trial_period_days: user.hasTrial ? 0 : 1,
+      trial_period_days: user.hasTrial ? 0 : 7,
       payment_behavior: user.hasTrial
         ? "allow_incomplete"
         : "default_incomplete",
