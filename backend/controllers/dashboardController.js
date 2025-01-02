@@ -4,6 +4,9 @@
 const { parse, stringify } = require("flatted");
 const levenshtein = require("fast-levenshtein");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const fs = require("fs");
+const multer = require("multer");
+const path = require("path");
 const apiKey = process.env.GEMINI_KEY; // Replace with your actual key
 
 const genAI = new GoogleGenerativeAI("AIzaSyDa3W2MKxBBjxnjCp6cJfHO8iJcn55B4v4");
@@ -426,6 +429,46 @@ También debe incluir una lista de "conexiones", donde cada conexión tiene un "
   }
 }
 
+async function audioToText(req, res) {
+  console.log("req.file", req.file);
+  if (!req.file) {
+    return res.status(400).send("Audio file is required.");
+  }
+
+  try {
+    // Crea la carpeta temporal si no existe
+    const tempDir = path.join(__dirname, "../temp");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir); // Crea la carpeta si no existe
+    }
+
+    // Define la ruta del archivo temporal
+    const filePath = path.join(tempDir, req.file.originalname);
+
+    // Escribe el archivo en el disco temporalmente
+    fs.writeFileSync(filePath, req.file.buffer);
+
+    // Llama a la API de OpenAI
+    const transcriptionResponse = await Openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file: fs.createReadStream(filePath), // Usamos un stream para enviar el archivo
+    });
+
+    const transcript = transcriptionResponse.text;
+
+    console.log("Transcripción del audio:", transcript);
+    res.status(200).json({ transcript });
+
+    // Elimina el archivo temporal
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    console.error("Error procesando el audio:", error.message || error);
+    res
+      .status(500)
+      .send("Error procesando el audio o generando la transcripción.");
+  }
+}
+
 module.exports = {
   generateText,
   generateTextGoole,
@@ -437,4 +480,5 @@ module.exports = {
   generateWordsCombination,
   generateHomework,
   generateMaps,
+  audioToText,
 };
