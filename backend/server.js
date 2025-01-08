@@ -247,6 +247,7 @@ app.use("/api/quizes", require("./routes/quizesRoutes.js"));
 app.use("/api/calendar", require("./routes/calendarRoutes.js"));
 app.use("/api/report", require("./routes/reportController.js"));
 app.use("/api/mapasMentales", require("./routes/mapaMentalRoutes.js"));
+app.use("/api/audioToText", require("./routes/audioToTextRoutes.js"));
 
 app.use(errorHandler);
 
