@@ -14,8 +14,8 @@ const getAudiosByUserId = asyncHanlder(async (req, res) => {
 });
 
 const createText = asyncHanlder(async (req, res) => {
-  const { transcript, userId } = req.body;
-  if (!transcript || !userId) {
+  const { transcript, userId, title } = req.body;
+  if (!transcript || !userId || !title) {
     res.status(400);
     throw new Error("Please add all required fields");
   }
@@ -23,6 +23,7 @@ const createText = asyncHanlder(async (req, res) => {
   const newTextFromAudio = await Audio.create({
     transcript,
     userId,
+    title,
   });
 
   if (newTextFromAudio) {
@@ -30,6 +31,7 @@ const createText = asyncHanlder(async (req, res) => {
       _id: newTextFromAudio.id,
       transcript: newTextFromAudio.transcript,
       userId: newTextFromAudio.userId,
+      title: newTextFromAudio.title,
     });
   } else {
     res.status(400);

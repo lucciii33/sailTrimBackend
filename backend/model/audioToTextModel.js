@@ -11,6 +11,10 @@ const AudioToTextSchema = mongoose.Schema(
       required: false,
       ref: "User",
     },
+    title: {
+      type: String,
+      required: false,
+    },
   },
   {
     timestamps: true,
