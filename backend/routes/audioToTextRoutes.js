@@ -6,9 +6,11 @@ const {
   createText,
   deleteAudioByUserId,
   editAudiosByUserId,
+  getAudioToTextById,
 } = require("../controllers/audioToTextController");
 
 router.route("/getAudiosByUserId/:userId").get(protect, getAudiosByUserId);
+router.route("/getAudioToTextById/:audioId").get(protect, getAudioToTextById);
 router.route("/createText").post(protect, createText);
 router.route("/editAudiosByUserId/:audioId").put(protect, editAudiosByUserId);
 router

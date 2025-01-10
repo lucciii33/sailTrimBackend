@@ -66,9 +66,24 @@ const deleteAudioByUserId = asyncHanlder(async (req, res) => {
   });
 });
 
+const getAudioToTextById = asyncHanlder(async (req, res) => {
+  const audioToTextId = req.params.audioId;
+  console.log("audioToTextId", audioToTextId);
+
+  const response = await Audio.findById(audioToTextId);
+
+  if (!response) {
+    res.status(404);
+    throw new Error("Apunte sin encontrar");
+  }
+
+  res.json(response);
+});
+
 module.exports = {
   getAudiosByUserId,
   createText,
   editAudiosByUserId,
   deleteAudioByUserId,
+  getAudioToTextById,
 };
