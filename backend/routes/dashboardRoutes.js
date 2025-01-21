@@ -13,6 +13,8 @@ const {
   generateHomework,
   generateMaps,
   audioToText,
+  textToAudio,
+  generateflashCardsV2,
 } = require("../controllers/dashboardController");
 const { protect } = require("../middleware/authMiddleware");
 const multer = require("multer");
@@ -30,6 +32,8 @@ router
   .post(protect, generateWordsCombination);
 router.route("/generateHomework").post(protect, generateHomework);
 router.route("/generateMaps").post(protect, generateMaps);
+router.route("/textToAudio").post(protect, textToAudio);
 router.route("/audioToText").post(protect, upload.single("file"), audioToText);
+router.route("/generateflashCardsV2").post(protect, generateflashCardsV2);
 
 module.exports = router;

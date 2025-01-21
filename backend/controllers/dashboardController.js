@@ -1,6 +1,9 @@
 // const { Configuration, OpenAIApi } = require('openai');
 
 // const OpenAI = require("openai");
+// const axios = require("axios");
+const { generateAudio, uploadToS3 } = require("../services/aws");
+
 const { parse, stringify } = require("flatted");
 const levenshtein = require("fast-levenshtein");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -469,6 +472,115 @@ async function audioToText(req, res) {
   }
 }
 
+async function textToAudio(req, res) {
+  const { text } = req.body; // Texto recibido desde el body
+  if (!text) {
+    return res.status(400).send("Text is required.");
+  }
+
+  try {
+    const audioData = await generateAudio(text);
+
+    // Configura los headers para que el cliente pueda descargar el archivo
+    res.set({
+      "Content-Type": "audio/mpeg", // Especifica el tipo de archivo
+      "Content-Disposition": 'attachment; filename="audio.mp3"', // Configura el archivo para descarga
+    });
+
+    // Envía el flujo de audio como respuesta
+    res.send(audioData.AudioStream);
+  } catch (error) {
+    console.error("Error procesando el texto a audio:", error.message || error);
+    res.status(500).send("Error procesando el texto o generando el audio.");
+  }
+}
+
+// console.log("Texto recibido para síntesis de voz:", text);
+
+//     // Llama al modelo TTS usando la API de OpenAI directamente
+//     const response = await axios.post(
+//       "https://api.openai.com/v1/audio/tts", // Endpoint de TTS
+//       {
+//         model: "tts-1",
+//         input: text, // Texto para convertir en audio
+//       },
+//       {
+//         headers: {
+//           Authorization: `Bearer sk-proj-Fwc8MxeXaCJuDr7Rlx1AT3BlbkFJmYQFNyeTqkbXYFyNyewt`, // Tu clave API
+//           "Content-Type": "application/json",
+//         },
+//       }
+//     );
+
+//     const audioContent = response.data.audio; // Base64 del archivo de audio generado
+
+//     // Guarda el audio en un archivo temporal
+//     const audioDir = path.join(__dirname, "../audio");
+//     if (!fs.existsSync(audioDir)) {
+//       fs.mkdirSync(audioDir); // Crea la carpeta si no existe
+//     }
+
+//     const audioPath = path.join(audioDir, "output.mp3");
+//     fs.writeFileSync(audioPath, Buffer.from(audioContent, "base64"));
+
+//     console.log("Audio generado exitosamente en:", audioPath);
+
+//     // Envía el archivo de audio como respuesta
+//     res.status(200).sendFile(audioPath, (err) => {
+//       if (err) {
+//         console.error("Error enviando el archivo:", err);
+//       } else {
+//         console.log("Archivo enviado exitosamente.");
+//         // Limpia el archivo después de enviarlo
+//         fs.unlinkSync(audioPath);
+//       }
+//     });
+
+async function generateflashCardsV2(req, res) {
+  const { prompt, level } = req.body;
+  try {
+    const chatCompletion = await Openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "user",
+          content: `generated study flashcards for this text: ${prompt} make sure you add a questions and an anwser both if not this is not going to work, also try to add always more than 12. The level provided is: ${level} generated more if the text is not enogh (SPANISH ONLY PLEASE)`,
+        },
+      ],
+    });
+
+    const contentString = chatCompletion?.choices[0]?.message.content;
+
+    const qaRegex =
+      /(?:Question|Pregunta):\s*(.*?)\s*(?:Answer|Respuesta):\s*(.*?)(?=\n(?:Question|Pregunta):|$)/gs;
+    console.log("qaRegex", qaRegex);
+    const qaPairs = [];
+    let match;
+
+    while ((match = qaRegex.exec(contentString)) !== null) {
+      const question = match[1].trim();
+      const answer = match[2].trim();
+      if (question && answer) {
+        qaPairs.push({ question, answer });
+      }
+    }
+
+    // Prepare the response in the format you need
+    const flashCards = qaPairs.map((item, index) => ({
+      id: `card-${index + 1}`,
+      question: item.question,
+      answer: item.answer,
+    }));
+
+    res.json({
+      flashCards,
+    });
+  } catch (error) {
+    console.error("Error generating text:", error);
+    res.status(500).send("An error occurred while generating text.");
+  }
+}
+
 module.exports = {
   generateText,
   generateTextGoole,
@@ -481,4 +593,6 @@ module.exports = {
   generateHomework,
   generateMaps,
   audioToText,
+  textToAudio,
+  generateflashCardsV2,
 };
