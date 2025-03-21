@@ -35,7 +35,7 @@ async function generateTextGoole(req, res) {
     return res.status(400).send("Prompt is required.");
   }
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
@@ -58,7 +58,7 @@ async function generateTestQuestions(req, res) {
   const prompt = `Genera preguntas de prueba sobre el tema ${topic}. Añade "@" al inicio de cada pregunta de respuesta completa, "-" al inicio de cada pregunta de verdadero/falso y "^" al inicio de cada pregunta de respuesta corta. (máximo 10 preguntas) no envies preguntas de selecion multiple(no agreges titulos, necesito exclusivamente solo las preguntas) y hazlo para un niverl ${level}`;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = await response.text();
@@ -87,7 +87,7 @@ async function generateflashCards(req, res) {
     Cada tarjeta de estudio debe contener una pregunta y una respuesta correspondiente. Por favor, formatea el resultado de la siguiente manera: P: [Question] R: [Answer] , Genera un conjunto de tarjetas de estudio para el tema "${topic}".  `;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "pro-1.5" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
@@ -192,7 +192,7 @@ async function generateFeynman(req, res) {
   const prompt = `Estoy practicando la tecnica de Feyman puedes corregirme este resumen: ${plainTextResume} hazlo con una exigencia nivel ${level} `;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = await response.text();
@@ -223,7 +223,7 @@ async function gradeExam(req, res) {
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const gradedExam = {};
 
     for (const key in questions) {
@@ -358,7 +358,7 @@ async function generateWordsCombination(req, res) {
   const prompt = `con esta palabra: ${word}. Necesito que me ayudes a crear una asociación mnemotécnica para recordarla más fácilmente. Puedes hacerlo sugiriendo palabras similares, rimas, o una frase creativa que me ayude a relacionar esta palabra con algo que ya conozco. Por ejemplo, si la palabra es 'felaraquidio', podrías sugerir algo como 'fecalo' o 'estafano' como asociaciones que suenen similares o que sean fáciles de recordar. También puedes crear una pequeña historia o frase que haga que la palabra sea más memorable.`;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = await response.text();
@@ -385,7 +385,7 @@ async function generateHomework(req, res) {
   const prompt = `Ayudame hacer mi tarea: ${homework} explicamela y hazmela de manera correcta y perfecta para un nivel de ${level}`;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = await response.text();
@@ -414,7 +414,7 @@ La respuesta debe tener una lista de "nodos", donde cada nodo representa un conc
 También debe incluir una lista de "conexiones", donde cada conexión tiene un "source" y un "target" que corresponden a los "id" de los nodos relacionados.`;
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = await response.text();
