@@ -6,10 +6,10 @@ console.log("process.env.STRIPE_SECRET_KEY", process.env.STRIPE_SECRET_KEY);
 const User = require("../model/userModel");
 const Mailjet = require("node-mailjet");
 
-const mailjet = Mailjet.apiConnect(
-  process.env.MJ_APIKEY_PUBLIC,
-  process.env.MJ_APIKEY_PRIVATE
-);
+// const mailjet = Mailjet.apiConnect(
+//   process.env.MJ_APIKEY_PUBLIC,
+//   process.env.MJ_APIKEY_PRIVATE
+// );
 
 const payment = asyncHanlder(async (req, res) => {
   const { token, trial_end_date, userId } = req.body;

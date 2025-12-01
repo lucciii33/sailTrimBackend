@@ -3,14 +3,14 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
-const Mailjet = require("node-mailjet");
+// const Mailjet = require("node-mailjet");
 
-const mailjet = Mailjet.apiConnect(
-  process.env.MJ_APIKEY_PUBLIC,
-  process.env.MJ_APIKEY_PRIVATE
-);
+// const mailjet = Mailjet.apiConnect(
+//   process.env.MJ_APIKEY_PUBLIC,
+//   process.env.MJ_APIKEY_PRIVATE
+// );
 
-console.log("process.env.MJ_APIKEY_PUBLIC", process.env.MJ_APIKEY_PUBLIC);
+// console.log("process.env.MJ_APIKEY_PUBLIC", process.env.MJ_APIKEY_PUBLIC);
 
 // Description: Register a user
 // Route:       POST /api/users/
@@ -84,42 +84,42 @@ const registerUser = asyncHandler(async (req, res) => {
     terms,
   });
 
-  const request = mailjet.post("send", { version: "v3.1" }).request({
-    Messages: [
-      {
-        From: {
-          Email: "novaappai@gmail.com", // Tu email
-          Name: "NOVA AI", // Tu nombre o el de tu empresa
-        },
-        To: [
-          {
-            Email: user.email, // Email del usuario registrado
-            Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
-          },
-        ],
-        Subject: "¡Bienvenido a Nova! 🎉",
-        TextPart: `hola ${user.firstName}, Bienvenido a NOVA AI!`,
-        HTMLPart: `
-        <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
-            <img src="https://bluenova.s3.us-east-2.amazonaws.com/WhatsApp+Image+2024-09-18+at+22.34.16.jpeg" style="width: 50%; max-width: 300px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
-        <h3 style="color: #007BFF; margin-bottom: 10px;">Hola ${user.firstName}, ¡Bienvenido a NOVA AI!</h3>
-        <p style="font-size: 16px; margin-bottom: 20px;">Estamos emocionados de que te unas a nuestra comunidad de aprendizaje. En Nova, nos apasiona ayudarte a estudiar de manera más efectiva y alcanzar tus objetivos. Prepárate para descubrir nuevas técnicas, mejorar tus habilidades y disfrutar del proceso de aprendizaje.</p>
-        <p style="font-size: 16px; margin-bottom: 20px;">¡Empecemos juntos este viaje! 🚀</p>
-        <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos.</p>
-        <p style="font-weight: bold; font-size: 16px;">A por todas!</p>
-        <p style="font-size: 12px; color: #777777; margin-top: 20px;"><small>El equipo de Nova</small></p>
-        </div>
-        `,
-      },
-    ],
-  });
-  request
-    .then((result) => {
-      console.log("Email sent successfully:", result.body);
-    })
-    .catch((err) => {
-      console.error("Error sending email:", err.statusCode);
-    });
+  // const request = mailjet.post("send", { version: "v3.1" }).request({
+  //   Messages: [
+  //     {
+  //       From: {
+  //         Email: "novaappai@gmail.com", // Tu email
+  //         Name: "NOVA AI", // Tu nombre o el de tu empresa
+  //       },
+  //       To: [
+  //         {
+  //           Email: user.email, // Email del usuario registrado
+  //           Name: `${user.firstName} ${user.lastName}`, // Nombre del usuario
+  //         },
+  //       ],
+  //       Subject: "¡Bienvenido a Nova! 🎉",
+  //       TextPart: `hola ${user.firstName}, Bienvenido a NOVA AI!`,
+  //       HTMLPart: `
+  //       <div style="font-family: Arial, sans-serif; color: #333333; line-height: 1.6; background-color: #F7F7F7; padding: 20px; text-align: center;">
+  //           <img src="https://bluenova.s3.us-east-2.amazonaws.com/WhatsApp+Image+2024-09-18+at+22.34.16.jpeg" style="width: 50%; max-width: 300px; height: auto; border-radius: 10px; margin-bottom: 20px;"/>
+  //       <h3 style="color: #007BFF; margin-bottom: 10px;">Hola ${user.firstName}, ¡Bienvenido a NOVA AI!</h3>
+  //       <p style="font-size: 16px; margin-bottom: 20px;">Estamos emocionados de que te unas a nuestra comunidad de aprendizaje. En Nova, nos apasiona ayudarte a estudiar de manera más efectiva y alcanzar tus objetivos. Prepárate para descubrir nuevas técnicas, mejorar tus habilidades y disfrutar del proceso de aprendizaje.</p>
+  //       <p style="font-size: 16px; margin-bottom: 20px;">¡Empecemos juntos este viaje! 🚀</p>
+  //       <p style="font-size: 14px; color: #555555; margin-bottom: 20px;">Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos.</p>
+  //       <p style="font-weight: bold; font-size: 16px;">A por todas!</p>
+  //       <p style="font-size: 12px; color: #777777; margin-top: 20px;"><small>El equipo de Nova</small></p>
+  //       </div>
+  //       `,
+  //     },
+  //   ],
+  // });
+  // request
+  //   .then((result) => {
+  //     console.log("Email sent successfully:", result.body);
+  //   })
+  //   .catch((err) => {
+  //     console.error("Error sending email:", err.statusCode);
+  //   });
 
   res.status(201).json({
     _id: user.id,

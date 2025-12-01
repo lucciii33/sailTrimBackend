@@ -1,92 +1,66 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const userSchema = mongoose.Schema({
+const userSchema = mongoose.Schema(
+  {
     firstName: {
-        type: String,
-        required: true
+      type: String,
+      required: true,
     },
     lastName: {
-        type: String,
-        required: true
+      type: String,
+      required: true,
     },
     email: {
-        type: String,
-        required: true
+      type: String,
+      required: true,
     },
     password: {
-        type: String,
-        required: true
+      type: String,
+      required: true,
     },
     edad: {
-        type: Number,
-        required: false
+      type: Number,
+      required: false,
     },
     pais: {
-        type: String,
-        required: false
+      type: String,
+      required: false,
     },
-    role: {
-        type: String,
-        required: true
+    customerId: {
+      type: String,
+      required: false,
     },
-    loginDays: { 
-        type: Map,
-        of: Boolean,
-        default: {
-          "0": false, // Sunday
-          "1": false, // Monday
-          "2": false, // Tuesday
-          "3": false, // Wednesday
-          "4": false, // Thursday
-          "5": false, // Friday
-          "6": false  // Saturday
-        }
+    customerIdStripe: {
+      type: String,
+      required: false,
     },
-    lastWeekNumber: {
-        type: Number,
-        default: Math.floor(Date.now() / (1000 * 60 * 60 * 24 * 7))
+    terms: {
+      type: Boolean,
+      required: false,
     },
-    customerId:{
-        type: String,
-        required: false
+    resetPasswordToken: {
+      type: String,
+      required: false,
     },
-    customerIdStripe:{
-        type: String,
-        required: false
-    },
-    tasks: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Task"
-    }],
-    terms:{
-        type: Boolean,
-        required: false
-    },
-    resetPasswordToken:{
-        type: String,
-        required: false
-    },
-    resetPasswordExpire:{
-        type: Date,
-        required: false
+    resetPasswordExpire: {
+      type: Date,
+      required: false,
     },
     lastReset: {
-        type: Date, // Este es el campo que necesitas para guardar la fecha de reinicio
+      type: Date, // Este es el campo que necesitas para guardar la fecha de reinicio
     },
-    hasTrial: { 
-        type: Boolean, 
-        default: false 
+    hasTrial: {
+      type: Boolean,
+      default: false,
     },
     secretKeyStripe: {
-        type: String,
-        required: false
+      type: String,
+      required: false,
     },
-    daysStudy: {
-        type: Number,
-        required: false
-    },
-}, {
-    timestamps: true
-});
+  },
+  {
+    timestamps: true,
+  }
+);
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model("User", userSchema);
