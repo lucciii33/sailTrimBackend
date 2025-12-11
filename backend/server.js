@@ -238,9 +238,16 @@ const endpointSecret = process.env.WEB_HOOK_STRIPE;
 app.use("/api/user", require("./routes/userRoutes"));
 app.use("/api/checkout", require("./routes/checkoutRoutes"));
 
+app.use("/api/trip", require("./routes/tripRoutes"));
+app.use("/api/ship", require("./routes/shipRoutes"));
+
 app.use(errorHandler);
 
-app.listen(port, () => console.log(`Server started on port ${port}`));
+// app.listen(port, () => console.log(`Server started on port ${port}`));
+if (process.env.NODE_ENV !== "test") {
+  app.listen(port, () => console.log(`Server started on port ${port}`));
+}
 
 // resetLoginDaysJob();
-scrapMarinasApify();
+// scrapMarinasApify();
+module.exports = app;

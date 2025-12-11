@@ -144,10 +144,6 @@ const loginUser = asyncHandler(async (req, res) => {
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (user && isMatch) {
-    const currentDay = new Date().getDay().toString();
-
-    user.daysStudy = (user.daysStudy || 0) + 1;
-    user.loginDays.set(currentDay, true);
     await user.save();
 
     res.json({
@@ -300,10 +296,16 @@ const resetPassword = asyncHandler(async (req, res) => {
 //   }
 // };
 
+// const generateToken = (id) => {
+//   return jwt.sign({ id }, `${process.env.JWT_SECRET_NODE}`, {
+//     expiresIn: "8h",
+//   });
+// };
+
 const generateToken = (id) => {
-  return jwt.sign({ id }, `${process.env.JWT_SECRET_NODE}`, {
-    expiresIn: "8h",
-  });
+  const t = jwt.sign({ id }, process.env.JWT_SECRET_NODE, { expiresIn: "8h" });
+  console.log("🔥 TOKEN GENERADO BACKEND:", t);
+  return t;
 };
 
 module.exports = {

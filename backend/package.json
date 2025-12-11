@@ -1,34 +1,39 @@
 {
-    "name": "lucci",
-    "version": "1.0.0",
-    "description": "",
-    "main": "server.js",
-    "scripts": {
-        "start": "node backend/server.js ",
-        "server": "nodemon backend/server.js"
-    },
-    "author": "Angelo Maiele",
-    "license": "ISC",
-    "dependencies": {
-        "@google/generative-ai": "^0.14.0",
-        "aws-sdk": "^2.1692.0",
-        "axios": "^1.13.2",
-        "bcryptjs": "^2.4.3",
-        "body-parser": "^1.20.3",
-        "colors": "^1.4.0",
-        "cors": "^2.8.5",
-        "dotenv": "^16.4.5",
-        "express": "^4.19.2",
-        "express-async-handler": "^1.2.0",
-        "fast-levenshtein": "^3.0.0",
-        "jsonwebtoken": "^9.0.2",
-        "levenshtein-edit-distance": "^3.0.1",
-        "moment-timezone": "^0.5.45",
-        "mongoose": "^8.4.4",
-        "multer": "^1.4.5-lts.1",
-        "node-cron": "^3.0.3",
-        "node-mailjet": "^6.0.6",
-        "openai": "^4.52.2",
-        "stripe": "^16.2.0"
-    }
+  "name": "lucci",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node backend/server.js ",
+    "server": "nodemon backend/server.js",
+    "test": "jest"
+  },
+  "author": "Angelo Maiele",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.14.0",
+    "aws-sdk": "^2.1692.0",
+    "axios": "^1.13.2",
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.20.3",
+    "colors": "^1.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-handler": "^1.2.0",
+    "fast-levenshtein": "^3.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "levenshtein-edit-distance": "^3.0.1",
+    "moment-timezone": "^0.5.45",
+    "mongoose": "^8.4.4",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "node-mailjet": "^6.0.6",
+    "openai": "^4.52.2",
+    "stripe": "^16.2.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "supertest": "^7.1.4"
+  }
 }
