@@ -15,8 +15,7 @@ jobs:
         image: mongo:latest
         ports:
           - 27017:27017
-        options: >
-          --name mongodb-service
+        options: "--name mongodb-service"
 
     steps:
       - name: 1. Checkout Code
