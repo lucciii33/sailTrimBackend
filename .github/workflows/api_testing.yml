@@ -42,11 +42,10 @@ jobs:
         working-directory: ./backend # <--- ¡CLAVE!
 
       - name: 6. Wait for API to be Online (Port 5000)
-        uses: softprops/action-wait-on@v2
-        with:
-          resource: http://localhost:5000
-          delay: 5
-          timeout: 60
+        run: |
+          for i in {1..30}; do
+            curl -s http://localhost:5000 && break || sleep 2
+          done
 
       # 7. Ejecutar los tests: Navega a backend
       - name: 7. Run API Tests and Generate Allure Report Data
