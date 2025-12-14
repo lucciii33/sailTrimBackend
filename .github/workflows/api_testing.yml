@@ -42,7 +42,7 @@ jobs:
         working-directory: ./backend # <--- ¡CLAVE!
 
       - name: 6. Wait for API to be Online (Port 5000)
-        uses: softprops/wait-on-action@v2
+        uses: softprops/action-wait-on@v2
         with:
           resource: http://localhost:5000
           delay: 5
