@@ -1,3 +1,3 @@
 module.exports = {
-  setupFilesAfterEnv: ["<rootDir>/backend/tests/setup/db.js"],
+  setupFilesAfterEnv: ["<rootDir>/backend/test/setup/db.js"],
 };
