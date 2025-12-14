@@ -1,0 +1,73 @@
+# /.github/workflows/api_testing.yml
+
+name: "API Quality Gate (Jest, Supertest & Allure Reports)"
+
+on:
+  pull_request:
+    branches: [dev]
+
+jobs:
+  test_api:
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+        options: >
+          --name mongodb-service
+
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v4
+
+      # Tu .nvmrc y .github están en la raíz, pero el código está en backend.
+      - name: 2. Setup Node.js (Using .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      # 3. INSTALAR DEPENDENCIAS: Navega a backend
+      - name: 3. Install Dependencies in Backend Folder
+        run: npm install
+        working-directory: ./backend # <--- ¡CLAVE!
+
+      - name: 4. Set MongoDB URL Environment Variable
+        run: echo "MONGO_URL=mongodb://localhost:27017/test_ci" >> $GITHUB_ENV
+
+      # 5. Iniciar la API: Navega a backend
+      - name: 5. Start API Server (Background)
+        run: npm start &
+        working-directory: ./backend # <--- ¡CLAVE!
+
+      - name: 6. Wait for API to be Online (Port 5000)
+        uses: softprops/wait-on-action@v2
+        with:
+          resource: http://localhost:5000
+          delay: 5
+          timeout: 60
+
+      # 7. Ejecutar los tests: Navega a backend
+      - name: 7. Run API Tests and Generate Allure Report Data
+        run: npm run test:allure
+        working-directory: ./backend # <--- ¡CLAVE!
+
+      # --- Reportes Visuales ---
+
+      # 8. Subir los datos crudos de Allure
+      - name: 8. Upload Allure Results Data
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-data
+          # La carpeta de resultados está DENTRO de backend
+          path: backend/allure-results
+
+      # 9. Generar y Publicar el Reporte Visual
+      - name: 9. Publish Allure Report to GitHub Pages
+        uses: simple-elf/allure-report-action@master
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allure_history: backend/allure-history
+          allure_results: backend/allure-results # <--- Ubicación corregida

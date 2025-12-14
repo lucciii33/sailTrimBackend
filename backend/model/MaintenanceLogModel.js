@@ -36,6 +36,40 @@ const MaintenanceLogSchema = new mongoose.Schema(
       required: false,
     },
 
+    isDIY: {
+      type: Boolean,
+      required: false, // CLAVE: Distingue el flujo de datos (Factura vs. Secuencia)
+    },
+    protocolID: {
+      type: String,
+      required: false, // ID del Protocolo de Mantenimiento Oficial (IOM) seguido
+    },
+    evidenceSequence: {
+      type: [
+        {
+          photoURL: String,
+          stepNumber: Number,
+          geoHash: String, // Ubicación sellada de la evidencia (refuta el "fue en tierra")
+          stepCompletionTime: Date,
+        },
+      ],
+      required: false,
+    },
+    // --- CAMPO ADICIONAL: RASTREO DE PIEZAS ---
+    partsInstalledSerial: {
+      type: [String],
+      required: false, // Números de serie de las piezas instaladas (refuta el "es pirata")
+    },
+    // --- AUDITORÍA DE TIEMPO Y VERIFICACIÓN ---
+    estimatedDurationMinutes: {
+      type: Number,
+      required: false, // Tiempo estimado del manual vs. tiempo real del usuario
+    },
+    isInspectedByProfessional: {
+      type: Boolean,
+      required: false, // Si el trabajo DIY fue verificado a posteriori
+    },
+
     // --- 6. El Sello Legal ---
     cryptographicHash: { type: String, required: true, unique: true },
     previousHash: { type: String, required: false },

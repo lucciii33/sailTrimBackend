@@ -3,6 +3,7 @@ const app = require("../server");
 const authUser = require("./setup/authUtils.test");
 const Trip = require("../model/tripModel");
 const createBoat = require("../test/utils/createBoat");
+const { buildShipPayload } = require("../test/factories/ship.factory");
 
 let token;
 let userId;
@@ -16,7 +17,7 @@ beforeAll(async () => {
 
 describe("Trip creation", () => {
   it("should create a trip", async () => {
-    const boatFunc = await createBoat({ owner: userId, name: "new boat" });
+    const boatFunc = await createBoat(buildShipPayload({ owner: userId }));
     const ship = {
       owner: boatFunc.owner,
       ship: boatFunc._id,
@@ -35,5 +36,8 @@ describe("Trip creation", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.departurePort).toBe("Miami");
+    expect(new Date(res.body.departureTime).toString()).not.toBe(
+      "Invalid Date"
+    );
   });
 });

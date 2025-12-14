@@ -17,24 +17,26 @@ const asyncHandler = require("express-async-handler");
 // });
 const createShip = asyncHandler(async (req, res) => {
   const resp = req.body;
-  console.log("DATA PARA CREAR SHIP:", resp);
 
   try {
-    console.log("ANTES DE CREATE");
     const ship = await Ship.create(resp);
-    console.log("SHIP CREADO:", ship);
-    console.log("SHIP ID:", ship._id);
     return res.status(201).json(ship);
   } catch (error) {
-    console.error("ERROR EN CREATE:", error);
-    console.error("ERROR MESSAGE:", error.message);
-    console.error("ERROR NAME:", error.name);
-    if (error.errors) {
-      console.error("VALIDATION ERRORS:", error.errors);
+    if (error.name === "ValidationError") {
+      const fields = {};
+
+      for (const key in error.errors) {
+        fields[key] = error.errors[key].message;
+      }
+
+      return res.status(400).json({
+        message: "Validation error",
+        fields,
+      });
     }
-    return res.status(400).json({
-      message: "Error creando ship",
-      error: error.message,
+
+    return res.status(500).json({
+      message: "Internal server error",
     });
   }
 });
