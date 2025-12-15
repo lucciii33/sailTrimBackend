@@ -28,9 +28,20 @@ const authUser = async () => {
 
   const res = await request(app).post("/api/user/login").send(validCredentials);
 
+  const finalToken = res.body
+    ? res.body.token
+    : res._body
+    ? res._body.token
+    : undefined;
+  const finalUserId = res.body
+    ? res.body._id
+    : res._body
+    ? res._body._id
+    : undefined;
+
   return {
-    token: res.body.token,
-    userId: res.body._id,
+    token: finalToken,
+    userId: finalUserId,
   };
 };
 
