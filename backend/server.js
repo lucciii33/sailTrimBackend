@@ -240,6 +240,7 @@ app.use("/api/checkout", require("./routes/checkoutRoutes"));
 
 app.use("/api/trip", require("./routes/tripRoutes"));
 app.use("/api/ship", require("./routes/shipRoutes"));
+app.use("/api/maintenance", require("./routes/maintenanceRoutes"));
 
 app.use(errorHandler);
 

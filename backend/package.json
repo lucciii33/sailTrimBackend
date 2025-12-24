@@ -23,6 +23,7 @@
     "express": "^4.19.2",
     "express-async-handler": "^1.2.0",
     "fast-levenshtein": "^3.0.0",
+    "javascript-opentimestamps": "^0.4.5",
     "jsonwebtoken": "^9.0.2",
     "levenshtein-edit-distance": "^3.0.1",
     "moment-timezone": "^0.5.45",

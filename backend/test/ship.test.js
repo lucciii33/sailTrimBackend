@@ -22,6 +22,7 @@ describe("Boat creation", () => {
       .post("/api/ship/createShip")
       .set("Authorization", `Bearer ${token}`)
       .send(boatData);
+    console.log("res", res);
 
     expect(res.statusCode).toBe(201);
     expect(res.body.name).toBe(boatData.name);
