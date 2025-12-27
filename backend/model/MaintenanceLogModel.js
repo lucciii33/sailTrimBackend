@@ -11,6 +11,10 @@ const MaintenanceLogSchema = new mongoose.Schema(
 
     // --- 2. Metadatos y Clasificación ---
     recordTime: { type: Date, required: true },
+    maintenanceDueDate: {
+      type: Date,
+      required: false, // Puede ser false porque DIY a veces no tiene fecha oficial
+    },
     systemAffected: { type: String, required: true }, // Motor, Eléctrico, Casco
     maintenanceType: { type: String, required: true }, // Preventivo, Correctivo
 
@@ -49,30 +53,37 @@ const MaintenanceLogSchema = new mongoose.Schema(
         {
           photoURL: String,
           stepNumber: Number,
-          geoHash: String, // Ubicación sellada de la evidencia (refuta el "fue en tierra")
+          photoHash: String,
+          geoHash: String,
           stepCompletionTime: Date,
         },
       ],
       required: false,
     },
-    // --- CAMPO ADICIONAL: RASTREO DE PIEZAS ---
+
     partsInstalledSerial: {
       type: [String],
       required: false, // Números de serie de las piezas instaladas (refuta el "es pirata")
     },
-    // --- AUDITORÍA DE TIEMPO Y VERIFICACIÓN ---
+
     estimatedDurationMinutes: {
       type: Number,
-      required: false, // Tiempo estimado del manual vs. tiempo real del usuario
+      required: false,
     },
     isInspectedByProfessional: {
       type: Boolean,
-      required: false, // Si el trabajo DIY fue verificado a posteriori
+      required: false,
     },
 
-    // --- 6. El Sello Legal ---
     cryptographicHash: { type: String, required: true, unique: true },
     previousHash: { type: String, required: false },
+
+    blockchainTimestamp: {
+      otsProof: String,
+      stampedAt: Date,
+      verified: Boolean,
+      verifiedAt: Date,
+    },
   },
   { timestamps: true }
 );
