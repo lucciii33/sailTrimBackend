@@ -9,6 +9,8 @@ on:
 jobs:
   test_api:
     runs-on: ubuntu-latest
+    env:
+      JWT_SECRET_NODE: ${{ secrets.JWT_SECRET_NODE }}
 
     services:
       mongo:
