@@ -237,10 +237,7 @@ const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
 app.use("/api/user", require("./routes/userRoutes"));
 app.use("/api/checkout", require("./routes/checkoutRoutes"));
-
-app.use("/api/trip", require("./routes/tripRoutes"));
-app.use("/api/ship", require("./routes/shipRoutes"));
-app.use("/api/maintenance", require("./routes/maintenanceRoutes"));
+app.use("/api/fridge", require("./routes/fridgeRoutes"));
 
 app.use(errorHandler);
 
