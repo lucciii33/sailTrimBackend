@@ -24,5 +24,6 @@ router.post("/createFridge", protect, createFridge);
 router.get("/getFridgeById/:id", protect, getFridgeById);
 router.get("/getFridgeByUserId/:id", protect, getFridgeByUserId);
 router.delete("/deleteFridgeById/:id", protect, deleteFridgeById);
+router.put("/updateFridgeById/:id", protect, updateFridgeById);
 
 module.exports = router;
