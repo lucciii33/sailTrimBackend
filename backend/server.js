@@ -5,7 +5,7 @@ require("dotenv").config();
 const port = process.env.PORT || 5000;
 const { errorHandler } = require("./middleware/errorMiddleware");
 const connectDB = require("./config/db");
-const scrapMarinasApify = require("./jobs/marinaCornJob.js"); // Ruta al cron job
+
 // const sessionDeleteCronJob = require("./jobs/deleteSession.js");
 const cors = require("cors");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
