@@ -239,6 +239,7 @@ app.use("/api/user", require("./routes/userRoutes"));
 app.use("/api/checkout", require("./routes/checkoutRoutes"));
 app.use("/api/fridge", require("./routes/fridgeRoutes"));
 app.use("/api/recipe", require("./routes/recipeRoutes"));
+app.use("/api/inventory", require("./routes/inventoryRoutes"));
 
 app.use(errorHandler);
 
