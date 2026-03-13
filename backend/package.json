@@ -13,6 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "@google/generative-ai": "^0.14.0",
+    "@octokit/app": "^16.1.2",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",

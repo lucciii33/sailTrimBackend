@@ -229,6 +229,12 @@ const app = express();
 //   }
 // );
 
+app.use(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  require("./routes/webhook")
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cors());
