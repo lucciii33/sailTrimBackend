@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const Installation = require("../model/Installation");
 const { getOctokit, getPRDiff, commentOnPR } = require("../services/githubService");
 const { generateTestCases } = require("../services/aiService");
+const { generateAndSaveDocs } = require("../services/docService");
 
 async function handleWebhook(req, res) {
   try {
@@ -84,7 +85,10 @@ async function handlePullRequest(payload) {
       return;
     }
 
-    const testCases = await generateTestCases(diff);
+    const [testCases] = await Promise.all([
+      generateTestCases(diff),
+      generateAndSaveDocs(diff, prNumber, repo, owner),
+    ]);
     await commentOnPR(octokit, owner, repo, prNumber, testCases);
   } catch (err) {
     console.error("Error handling pull_request event:", err);
