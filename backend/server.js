@@ -21,6 +21,9 @@ const bodyParser = require("body-parser");
 connectDB();
 
 const app = express();
+app.get("/", (req, res) => {
+  res.status(200).send("ok");
+});
 
 // app.post(
 //   "/webhookFailPayments",
@@ -232,7 +235,7 @@ const app = express();
 app.use(
   "/webhook",
   express.raw({ type: "application/json" }),
-  require("./routes/webhook")
+  require("./routes/webhook"),
 );
 
 app.use(express.json());
