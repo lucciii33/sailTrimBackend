@@ -20,11 +20,14 @@ async function getOctokit(installationId) {
 }
 
 async function getPRDiff(octokit, owner, repo, prNumber) {
-  const { data: files } = await octokit.rest.pulls.listFiles({
-    owner,
-    repo,
-    pull_number: prNumber,
-  });
+  const { data: files } = await octokit.request(
+    "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+    {
+      owner,
+      repo,
+      pull_number: prNumber,
+    },
+  );
 
   return files
     .filter((file) => file.patch)
@@ -36,12 +39,15 @@ async function getPRDiff(octokit, owner, repo, prNumber) {
 }
 
 async function commentOnPR(octokit, owner, repo, prNumber, body) {
-  await octokit.rest.issues.createComment({
-    owner,
-    repo,
-    issue_number: prNumber,
-    body: `## 🤖 QA Agent — Suggested Test Cases\n\n${body}`,
-  });
+  await octokit.request(
+    "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    {
+      owner,
+      repo,
+      issue_number: prNumber,
+      body: `## 🤖 QA Agent — Suggested Test Cases\n\n${body}`,
+    },
+  );
 }
 
 module.exports = { getOctokit, getPRDiff, commentOnPR };
