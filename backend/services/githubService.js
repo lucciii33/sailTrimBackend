@@ -6,10 +6,7 @@ async function getApp() {
     githubApp = new App({
       appId: process.env.GITHUB_APP_ID,
       privateKey: process.env.GITHUB_PRIVATE_KEY
-        ? process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, "\n").replace(
-            /\r/g,
-            "",
-          )
+        ? Buffer.from(process.env.GITHUB_PRIVATE_KEY, "base64").toString("utf8")
         : "",
       webhooks: { secret: process.env.GITHUB_WEBHOOK_SECRET },
     });
