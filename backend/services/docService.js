@@ -48,11 +48,17 @@ Only document routes defined with express router methods (get, post, put, delete
 
   if (endpoints.length === 0) return [];
 
-  const docs = await Doc.insertMany(
-    endpoints.map((ep) => ({ ...ep, prNumber, repo, owner }))
-  );
+  const ops = endpoints.map((ep) => ({
+    updateOne: {
+      filter: { method: ep.method, path: ep.path, repo, owner },
+      update: { $set: { ...ep, prNumber, repo, owner } },
+      upsert: true,
+    },
+  }));
 
-  return docs;
+  await Doc.bulkWrite(ops);
+
+  return endpoints;
 }
 
 module.exports = { generateAndSaveDocs };
