@@ -18,7 +18,7 @@ Return a JSON object with this exact shape:
     {
       "method": "POST",
       "path": "/api/example",
-      "description": "Brief description of what this endpoint does",
+      "description": "Deep description of what this endpoint does",
       "requestBody": [
         { "name": "fieldName", "type": "String", "required": true, "description": "what it is" }
       ],
