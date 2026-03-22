@@ -10,7 +10,7 @@ async function githubCallback(req, res) {
   await Installation.findOneAndUpdate(
     { installationId: Number(installation_id) },
     { userId: state },
-    { new: true }
+    { new: true, upsert: true }
   );
 
   res.status(200).json({ message: "Installation linked to user" });
