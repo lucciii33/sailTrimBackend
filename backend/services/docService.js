@@ -3,7 +3,7 @@ const Doc = require("../model/DocModel");
 
 const openai = new OpenAI({ apiKey: process.env.OPEN_IA });
 
-async function generateAndSaveDocs(diff, prNumber, repo, owner) {
+async function generateAndSaveDocs(diff, prNumber, repo, owner, userId) {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     response_format: { type: "json_object" },
@@ -51,7 +51,7 @@ Only document routes defined with express router methods (get, post, put, delete
   const ops = endpoints.map((ep) => ({
     updateOne: {
       filter: { method: ep.method, path: ep.path, repo, owner },
-      update: { $set: { ...ep, prNumber, repo, owner } },
+      update: { $set: { ...ep, prNumber, repo, owner, userId } },
       upsert: true,
     },
   }));

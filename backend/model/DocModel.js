@@ -30,6 +30,7 @@ const docSchema = new mongoose.Schema({
   repo: { type: String, required: true },
   owner: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 });
 
 module.exports = mongoose.model("Doc", docSchema);

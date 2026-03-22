@@ -77,6 +77,9 @@ async function handlePullRequest(payload) {
     const repo = repository.name;
     const prNumber = pull_request.number;
 
+    const installationRecord = await Installation.findOne({ installationId: installation.id });
+    const userId = installationRecord?.userId || null;
+
     const octokit = await getOctokit(installation.id);
     const diff = await getPRDiff(octokit, owner, repo, prNumber);
 
@@ -87,7 +90,7 @@ async function handlePullRequest(payload) {
 
     const [testCases] = await Promise.all([
       generateTestCases(diff),
-      generateAndSaveDocs(diff, prNumber, repo, owner),
+      generateAndSaveDocs(diff, prNumber, repo, owner, userId),
     ]);
     await commentOnPR(octokit, owner, repo, prNumber, testCases);
   } catch (err) {
