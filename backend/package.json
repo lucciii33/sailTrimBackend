@@ -12,7 +12,9 @@
   "author": "Angelo Maiele",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
     "@google/generative-ai": "^0.14.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/app": "^16.1.2",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.13.2",

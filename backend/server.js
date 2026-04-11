@@ -252,6 +252,7 @@ app.use("/api/inventory", require("./routes/inventoryRoutes"));
 app.use("/api/order", require("./routes/orderRoutes"));
 app.use("/api/docs", require("./routes/docRoutes"));
 app.use("/api/github", require("./routes/githubRoutes"));
+app.use("/api/mcp-lab", require("./routes/mcpLabRoutes"));
 
 app.use(errorHandler);
 

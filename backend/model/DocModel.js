@@ -26,10 +26,14 @@ const docSchema = new mongoose.Schema({
   requestBody: [paramSchema],
   queryParams: [paramSchema],
   responses: [responseSchema],
-  prNumber: { type: Number, required: true },
+  prNumber: { type: Number },
   repo: { type: String, required: true },
   owner: { type: String, required: true },
+  source: { type: String, enum: ["pr", "backfill"], default: "pr" },
+  sourceFile: { type: String },
+  sourceSha: { type: String },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 });
 
