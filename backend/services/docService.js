@@ -1,24 +1,37 @@
-const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
 const Doc = require("../model/DocModel");
 
-const openai = new OpenAI({ apiKey: process.env.OPEN_IA });
+// Lazy init so a missing key doesn't crash module load.
+let _anthropic = null;
+function getAnthropic() {
+  if (!_anthropic) {
+    _anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY || "missing",
+    });
+  }
+  return _anthropic;
+}
 
-async function generateAndSaveDocs(diff, prNumber, repo, owner, userId) {
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o",
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `You are an API documentation generator. Given a code diff, detect any new or modified API endpoints and return structured documentation for them.
+// Claude Opus 4.7 — Anthropic's most capable model. Use claude-sonnet-4-6
+// for faster/cheaper runs if backfills get expensive.
+const CLAUDE_MODEL = process.env.CLAUDE_DOCS_MODEL || "claude-opus-4-7";
 
-Return a JSON object with this exact shape:
+// ---------- Prompt building ----------
+
+const DOC_SYSTEM_PROMPT = `You are an API documentation generator.
+You will be given:
+  (A) Optional entry files (server.js, app.js, index.js) showing where sub-routers are mounted with app.use("/prefix", router).
+  (B) A single source file that may define HTTP endpoints.
+
+Your job: detect every HTTP endpoint in (B) and output its FULL URL, resolving any prefix from (A).
+
+Return STRICT JSON only, starting with {, matching this exact shape:
 {
   "endpoints": [
     {
       "method": "POST",
-      "path": "/api/example",
-      "description": "Deep description of what this endpoint does",
+      "path": "/api/example/login",
+      "description": "What this endpoint does (be specific, infer from handler logic if present)",
       "requestBody": [
         { "name": "fieldName", "type": "String", "required": true, "description": "what it is" }
       ],
@@ -26,84 +39,114 @@ Return a JSON object with this exact shape:
         { "name": "paramName", "type": "String", "required": false, "description": "what it is" }
       ],
       "responses": [
-        { "status": 200, "description": "Success description", "example": { "key": "value" } },
-        { "status": 400, "description": "Error description", "example": { "message": "error" } }
+        { "status": 200, "description": "Success", "example": { "key": "value" } },
+        { "status": 400, "description": "Error", "example": { "message": "error" } }
       ]
     }
   ]
 }
 
-If no API endpoints are added or modified, return { "endpoints": [] }.
-Only document routes defined with express router methods (get, post, put, delete, patch).`,
-      },
-      {
-        role: "user",
-        content: `Generate API documentation for the following code diff:\n\n${diff}`,
-      },
-    ],
+Rules:
+- If no endpoints exist, return {"endpoints": []}.
+- ALWAYS resolve the mount prefix. Example: if server.js has app.use("/api/user", userRoutes) and the file has router.post("/login"), the path is "/api/user/login" — NEVER just "/login".
+- Only document handler-based routes (express router/app .get/.post/.put/.patch/.delete, fastify, NestJS @Get/@Post decorators, etc.).
+- Do not include middleware-only lines.`;
+
+function buildMountContextBlock(mountContext) {
+  if (!mountContext || mountContext.length === 0) return "(no entry files provided)";
+  return mountContext
+    .map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join("\n\n");
+}
+
+function buildUserMessage({ filePath, content, mountContext, diff }) {
+  const mountBlock = buildMountContextBlock(mountContext);
+  if (diff) {
+    return `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nDIFF:\n${diff}`;
+  }
+  return `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nFILE: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+}
+
+function safeParseJson(txt) {
+  if (!txt) return null;
+  try {
+    return JSON.parse(txt);
+  } catch (_) {
+    const m = txt.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        return JSON.parse(m[0]);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+// ---------- Core Claude call ----------
+
+async function callClaudeForDocs({ filePath, content, mountContext, diff }) {
+  const userMsg = buildUserMessage({ filePath, content, mountContext, diff });
+
+  const response = await getAnthropic().messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 4096,
+    system: DOC_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userMsg }],
   });
 
-  const parsed = JSON.parse(completion.choices[0].message.content);
-  const endpoints = parsed.endpoints || [];
+  const raw = (response.content || []).map((c) => c.text || "").join("");
+  const parsed = safeParseJson(raw);
+  const endpoints = parsed?.endpoints || [];
 
-  if (endpoints.length === 0) return [];
+  const usage = {
+    inputTokens: response.usage?.input_tokens || 0,
+    outputTokens: response.usage?.output_tokens || 0,
+    model: CLAUDE_MODEL,
+  };
+
+  return { endpoints, usage };
+}
+
+// ---------- Public API ----------
+
+/**
+ * PR-mode: called from webhook when a PR is opened/updated.
+ * mountContext is optional — webhook flow currently doesn't scan the repo.
+ */
+async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountContext = []) {
+  const { endpoints, usage } = await callClaudeForDocs({ diff, mountContext });
+  if (endpoints.length === 0) return { endpoints: [], usage };
 
   const ops = endpoints.map((ep) => ({
     updateOne: {
       filter: { method: ep.method, path: ep.path, repo, owner },
-      update: { $set: { ...ep, prNumber, repo, owner, userId } },
+      update: {
+        $set: {
+          ...ep,
+          prNumber,
+          repo,
+          owner,
+          userId,
+          source: "pr",
+          updatedAt: new Date(),
+        },
+      },
       upsert: true,
     },
   }));
 
   await Doc.bulkWrite(ops);
-
-  return endpoints;
+  return { endpoints, usage };
 }
 
-async function generateDocsFromFile({ filePath, content }) {
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o",
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `You are an API documentation generator. Given a source file, detect every HTTP API endpoint defined in it and return structured documentation.
-
-Return a JSON object with this exact shape:
-{
-  "endpoints": [
-    {
-      "method": "POST",
-      "path": "/api/example",
-      "description": "Deep description of what this endpoint does",
-      "requestBody": [
-        { "name": "fieldName", "type": "String", "required": true, "description": "what it is" }
-      ],
-      "queryParams": [
-        { "name": "paramName", "type": "String", "required": false, "description": "what it is" }
-      ],
-      "responses": [
-        { "status": 200, "description": "Success description", "example": { "key": "value" } },
-        { "status": 400, "description": "Error description", "example": { "message": "error" } }
-      ]
-    }
-  ]
-}
-
-If no API endpoints are defined, return { "endpoints": [] }.
-Only document routes defined with HTTP verb handlers (express router/app .get/.post/.put/.patch/.delete, fastify, NestJS @Get/@Post decorators, etc.).
-Infer the full URL path when possible. If the file only mounts a sub-router with a prefix, still document each endpoint with its relative path.`,
-      },
-      {
-        role: "user",
-        content: `File: ${filePath}\n\n\`\`\`\n${content}\n\`\`\``,
-      },
-    ],
-  });
-
-  const parsed = JSON.parse(completion.choices[0].message.content);
-  return parsed.endpoints || [];
+/**
+ * Backfill-mode: called per source file.
+ * Returns { endpoints, usage } so the caller can aggregate token counts.
+ */
+async function generateDocsFromFile({ filePath, content, mountContext }) {
+  return callClaudeForDocs({ filePath, content, mountContext });
 }
 
 async function saveBackfillDocs({
@@ -139,4 +182,25 @@ async function saveBackfillDocs({
   return endpoints.length;
 }
 
-module.exports = { generateAndSaveDocs, generateDocsFromFile, saveBackfillDocs };
+/**
+ * Removes backfill docs for this repo whose sourceSha is no longer in
+ * the latest scan — i.e. endpoints that no longer exist in the code.
+ */
+async function cleanupZombieDocs({ owner, repo, liveShas }) {
+  if (!liveShas || liveShas.length === 0) return 0;
+  const result = await Doc.deleteMany({
+    owner,
+    repo,
+    source: "backfill",
+    sourceSha: { $nin: liveShas },
+  });
+  return result.deletedCount || 0;
+}
+
+module.exports = {
+  generateAndSaveDocs,
+  generateDocsFromFile,
+  saveBackfillDocs,
+  cleanupZombieDocs,
+  CLAUDE_MODEL,
+};

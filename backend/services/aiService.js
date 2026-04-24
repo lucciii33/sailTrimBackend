@@ -1,11 +1,15 @@
 const OpenAI = require("openai");
 
-const openai = new OpenAI({
-  apiKey: process.env.OPEN_IA,
-});
+let _openai = null;
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 async function generateTestCases(diff) {
-  const completion = await openai.chat.completions.create({
+  const completion = await getOpenAI().chat.completions.create({
     model: "gpt-4o",
     messages: [
       {
