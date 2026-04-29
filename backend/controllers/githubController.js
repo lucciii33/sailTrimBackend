@@ -2,6 +2,7 @@ const Installation = require("../model/Installation");
 const BackfillJob = require("../model/BackfillJob");
 const Doc = require("../model/DocModel");
 const {
+  getApp,
   getOctokit,
   scanRepoTree,
   fetchBlobContent,
@@ -62,20 +63,83 @@ function hasSourceExtension(p) {
   return SOURCE_EXTENSIONS.some((ext) => p.endsWith(ext));
 }
 
+async function fetchInstallationRepos(octokit) {
+  const repos = [];
+  let page = 1;
+  while (true) {
+    const { data } = await octokit.request("GET /installation/repositories", {
+      per_page: 100,
+      page,
+    });
+    repos.push(...data.repositories);
+    if (data.repositories.length < 100) break;
+    page += 1;
+  }
+  return repos;
+}
+
 async function githubCallback(req, res) {
   const { installation_id, state } = req.query;
 
-  if (!installation_id || !state) {
-    return res.status(400).json({ message: "Missing installation_id or state" });
+  if (!installation_id) {
+    return res.status(400).json({ message: "Missing installation_id" });
   }
 
-  await Installation.findOneAndUpdate(
-    { installationId: Number(installation_id) },
-    { userId: state },
-    { new: true, upsert: true }
-  );
+  const installationId = Number(installation_id);
 
-  res.status(200).json({ message: "Installation linked to user" });
+  try {
+    const octokit = await getOctokit(installationId);
+    const ghRepos = await fetchInstallationRepos(octokit);
+
+    const repos = ghRepos.map((r) => ({
+      repoName: r.name,
+      repoFullName: r.full_name,
+    }));
+
+    let accountLogin;
+    let accountType;
+    if (ghRepos.length > 0) {
+      accountLogin = ghRepos[0].owner.login;
+      accountType = ghRepos[0].owner.type;
+    } else {
+      const app = await getApp();
+      const { data } = await app.octokit.request(
+        "GET /app/installations/{installation_id}",
+        { installation_id: installationId }
+      );
+      accountLogin = data.account.login;
+      accountType = data.account.type;
+    }
+
+    const update = {
+      installationId,
+      accountLogin,
+      accountType,
+      repos,
+    };
+    if (state) update.userId = state;
+
+    await Installation.findOneAndUpdate(
+      { installationId },
+      update,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    const frontendUrl = process.env.FRONTEND_URL;
+    if (frontendUrl) {
+      return res.redirect(`${frontendUrl}/docs?installed=1`);
+    }
+    return res.status(200).json({
+      message: "Installation linked to user",
+      installationId,
+      repos,
+    });
+  } catch (err) {
+    console.error("githubCallback failed:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to sync installation", error: err.message });
+  }
 }
 
 async function runBackfill(jobId) {

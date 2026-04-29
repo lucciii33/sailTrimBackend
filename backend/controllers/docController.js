@@ -3,7 +3,8 @@ const Doc = require("../model/DocModel");
 async function getDocs(req, res) {
   const { owner, repo } = req.query;
 
-  const filter = repo ? { repo } : { userId: req.user._id };
+  const filter = { userId: req.user._id };
+  if (repo) filter.repo = repo;
   if (owner) filter.owner = owner;
 
   const docs = await Doc.find(filter).sort({ createdAt: -1 });

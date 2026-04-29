@@ -272,6 +272,7 @@ async function fetchMountContextAtRef(octokit, owner, repo, ref) {
 }
 
 module.exports = {
+  getApp,
   getOctokit,
   getPRDiff,
   commentOnPR,
