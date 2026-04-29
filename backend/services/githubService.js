@@ -84,10 +84,27 @@ const API_PATH_HINTS = [
   "endpoints",
 ];
 
-// Entry files: these contain `app.use("/prefix", routes)` calls that we
-// need to resolve full URLs. We send their contents to the LLM as context.
-const ENTRY_FILE_NAMES = ["server.js", "app.js", "index.js", "main.js"];
-const ENTRY_DIR_ALLOW = ["", "src", "backend", "api", "app"];
+// Entry files used to resolve mount prefixes across frameworks:
+// - JS/TS: server.js, app.js, index.js (Express `app.use("/api", routes)`)
+// - Python: main.py, app.py (FastAPI `app.include_router(prefix=...)`),
+//           urls.py (Django `path("api/", include(...))`)
+// - Ruby: routes.rb (Rails `namespace :api do`)
+// - Go: main.go
+// - PHP: web.php, api.php (Laravel `Route::prefix(...)`)
+const ENTRY_FILE_NAMES = [
+  "server.js", "app.js", "index.js", "main.js",
+  "server.ts", "app.ts", "index.ts", "main.ts",
+  "main.py", "app.py", "asgi.py", "wsgi.py", "urls.py",
+  "routes.rb", "config/routes.rb",
+  "main.go",
+  "web.php", "api.php", "routes/web.php", "routes/api.php",
+  "Program.cs", "Startup.cs",
+];
+const ENTRY_DIR_ALLOW = [
+  "", "src", "backend", "api", "app", "server",
+  "config", "routes",
+  "cmd",
+];
 
 // Cap per-file size sent to the LLM. 200KB is already plenty for a routes file.
 const MAX_FILE_BYTES = 200_000;
@@ -104,12 +121,63 @@ const EXCLUDED_DIRS = [
   "tests",
   "spec",
   ".git",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "env",
+  "target",
+  "bin",
+  "obj",
+  "out",
 ];
 
-const SOURCE_EXTENSIONS = [".js", ".ts", ".mjs", ".cjs", ".tsx"];
+const SOURCE_EXTENSIONS = [
+  ".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx",
+  ".py",
+  ".rb",
+  ".go",
+  ".java", ".kt",
+  ".php",
+  ".cs",
+  ".rs",
+  ".ex", ".exs",
+  ".scala",
+  ".swift",
+];
 
-const ROUTE_REGEX =
-  /(router|app|fastify|server)\s*\.\s*(get|post|put|patch|delete|options|head)\s*\(|@(Get|Post|Put|Patch|Delete)\s*\(/i;
+// Multi-framework route detection. Cheap pre-filter to skip files that
+// obviously don't define endpoints. Anything matched is sent to the LLM,
+// which makes the final call.
+const ROUTE_REGEX = new RegExp(
+  [
+    // JS/TS: Express, Fastify, Koa, Hapi
+    /(router|app|fastify|server|api)\s*\.\s*(get|post|put|patch|delete|options|head|all|use)\s*\(\s*["'`]/.source,
+    // JS/TS decorators: NestJS / TS-controllers
+    /@(Get|Post|Put|Patch|Delete|All|Controller|Route|Mapping|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\s*\(/.source,
+    // Python: FastAPI / Flask / blueprints
+    /@(app|router|api|bp|blueprint|[a-z_]+)\.(get|post|put|patch|delete|route|api_route|websocket)\s*\(/.source,
+    /@api_view\s*\(/.source,
+    // Python: Django urls
+    /\b(path|re_path|url)\s*\(\s*r?["']/.source,
+    // Ruby: Rails routes.rb / Sinatra
+    /^\s*(get|post|put|patch|delete|match|resources|resource|namespace|scope)\s+["':]/m.source,
+    // Go: Gin / Echo / Mux / chi / stdlib
+    /\.\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|HandleFunc|Handle|Group|Route)\s*\(/.source,
+    // PHP: Laravel / Symfony
+    /Route::(get|post|put|patch|delete|any|match|resource|apiResource|prefix|group)\s*\(/.source,
+    /#\[Route\s*\(/.source,
+    // C#/.NET attributes
+    /\[Http(Get|Post|Put|Patch|Delete)\s*[\(\]]/.source,
+    /\[Route\s*\(/.source,
+    // Rust: actix-web / axum / rocket macros
+    /#\[(get|post|put|patch|delete|head|route)\s*\(/.source,
+    // Java/Kotlin Spring
+    /@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\b/.source,
+    // Elixir Phoenix
+    /\b(get|post|put|patch|delete|resources)\s+"/.source,
+  ].join("|"),
+  "im"
+);
 
 function isExcludedPath(filePath) {
   const parts = filePath.split("/");
@@ -206,6 +274,104 @@ async function fetchMountContext(octokit, owner, repo, treeNodes) {
   return out;
 }
 
+// Path segments where schema/model definitions live across frameworks:
+// - Python/FastAPI: schemas/, models/
+// - Node/TS: dto/, dtos/, types/, interfaces/, models/, entities/
+// - Java/Spring: dto/, entity/, model/
+// - Go: model/, types/
+// - Rails: app/models/
+// - .NET: Models/, Dtos/, Entities/
+const SCHEMA_PATH_SEGMENTS = new Set([
+  "model", "models",
+  "schema", "schemas",
+  "dto", "dtos",
+  "entity", "entities",
+  "type", "types",
+  "interface", "interfaces",
+  "domain",
+  "serializer", "serializers",
+]);
+
+function isSchemaCandidate(filePath) {
+  const parts = filePath.toLowerCase().split("/");
+  return parts.some((p) => SCHEMA_PATH_SEGMENTS.has(p));
+}
+
+/**
+ * Pulls EVERY schema/model file in the repo. No global cap — works for any
+ * repo size. Per-route filtering happens in the caller via
+ * `pickSchemasForFile`, which only includes schemas actually referenced
+ * by the route file. So a repo with 1000 schemas still costs little: each
+ * Claude call only carries the handful of schemas its route imports.
+ */
+async function fetchSchemaContext(octokit, owner, repo, treeNodes) {
+  const candidates = treeNodes
+    .filter((n) => n.type === "blob")
+    .filter((n) => hasSourceExtension(n.path))
+    .filter((n) => !isExcludedPath(n.path))
+    .filter((n) => isSchemaCandidate(n.path));
+
+  const out = [];
+  for (const node of candidates) {
+    if (node.size && node.size > MAX_FILE_BYTES) continue;
+    try {
+      const content = await fetchBlobContent(octokit, owner, repo, node.sha);
+      out.push({ path: node.path, content });
+    } catch (_) {
+      /* skip unreadable files */
+    }
+  }
+  return out;
+}
+
+/**
+ * Given a route file's content and the full repo-wide schema pool, return
+ * only the schemas the route actually references. Heuristic: for each
+ * schema file, if any of its class/type names (or its filename basename)
+ * appears in the route content, include it. False positives are fine,
+ * false negatives lose detail — so the matcher is intentionally loose.
+ *
+ * Detected definition keywords across languages:
+ *   - Python: class
+ *   - JS/TS: class, interface, type, enum
+ *   - Java/Kotlin/C#/Scala: class, interface, record, enum, struct
+ *   - Go: type X struct, type X interface
+ *   - Ruby: class, module
+ *   - Rust: struct, enum, trait
+ */
+const TYPE_DEF_REGEX =
+  /\b(?:class|interface|type|enum|struct|record|trait|module)\s+([A-Z][A-Za-z0-9_]*)/g;
+
+function basenameNoExt(p) {
+  const file = p.split("/").pop() || "";
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
+function pickSchemasForFile(routeContent, schemaContext) {
+  if (!schemaContext || schemaContext.length === 0) return [];
+  const out = [];
+  for (const schema of schemaContext) {
+    const names = new Set();
+    names.add(basenameNoExt(schema.path));
+    let m;
+    TYPE_DEF_REGEX.lastIndex = 0;
+    while ((m = TYPE_DEF_REGEX.exec(schema.content)) !== null) {
+      names.add(m[1]);
+    }
+    for (const n of names) {
+      if (!n) continue;
+      // word-boundary match so "User" doesn't fire on "useRouter"
+      const re = new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (re.test(routeContent)) {
+        out.push(schema);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 async function scanRepoTree(octokit, owner, repo) {
   const branch = await getDefaultBranch(octokit, owner, repo);
   const { data: branchData } = await octokit.request(
@@ -276,6 +442,8 @@ module.exports = {
   getOctokit,
   getPRDiff,
   commentOnPR,
+  fetchSchemaContext,
+  pickSchemasForFile,
   scanRepoForApiFiles,
   scanRepoTree,
   fetchBlobContent,

@@ -7,6 +7,8 @@ const {
   scanRepoTree,
   fetchBlobContent,
   fetchMountContext,
+  fetchSchemaContext,
+  pickSchemasForFile,
   fileLooksLikeApi,
   MAX_FILE_BYTES,
 } = require("../services/githubService");
@@ -19,19 +21,6 @@ const {
 
 const CONCURRENCY = 5;
 
-// Same filters that used to live behind scanRepoForApiFiles. Kept inline now
-// because we also need the full tree for mount-context detection.
-const API_PATH_HINTS = [
-  "route",
-  "routes",
-  "controller",
-  "controllers",
-  "api",
-  "handler",
-  "handlers",
-  "endpoint",
-  "endpoints",
-];
 const EXCLUDED_DIRS = [
   "node_modules",
   "dist",
@@ -44,20 +33,38 @@ const EXCLUDED_DIRS = [
   "tests",
   "spec",
   ".git",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "env",
+  "target",
+  "bin",
+  "obj",
+  "out",
 ];
-const SOURCE_EXTENSIONS = [".js", ".ts", ".mjs", ".cjs", ".tsx"];
+const SOURCE_EXTENSIONS = [
+  ".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx",
+  ".py",
+  ".rb",
+  ".go",
+  ".java", ".kt",
+  ".php",
+  ".cs",
+  ".rs",
+  ".ex", ".exs",
+  ".scala",
+  ".swift",
+];
 
 function isExcludedPath(p) {
   const parts = p.split("/");
   return (
     parts.some((part) => EXCLUDED_DIRS.includes(part)) ||
     p.endsWith(".min.js") ||
-    /\.(test|spec)\.[jt]sx?$/.test(p)
+    /\.(test|spec)\.[jt]sx?$/.test(p) ||
+    /_test\.(go|py|rb)$/.test(p) ||
+    /_spec\.rb$/.test(p)
   );
-}
-function hasApiPathHint(p) {
-  const lower = p.toLowerCase();
-  return API_PATH_HINTS.some((hint) => lower.includes(hint));
 }
 function hasSourceExtension(p) {
   return SOURCE_EXTENSIONS.some((ext) => p.endsWith(ext));
@@ -156,17 +163,38 @@ async function runBackfill(jobId) {
 
     // 1) Full tree once — used both for mount context and candidate selection.
     const tree = await scanRepoTree(octokit, job.owner, job.repo);
+    console.log(`[backfill ${job._id}] tree size:`, tree.length);
+    console.log(
+      `[backfill ${job._id}] first 20 paths:`,
+      tree.slice(0, 20).map((n) => `${n.type}:${n.path}`)
+    );
 
-    // 2) Mount context (server.js, app.js, …) fetched once and reused.
-    const mountContext = await fetchMountContext(octokit, job.owner, job.repo, tree);
+    // 2) Mount context (server.js, app.js, …) and schema context
+    //    (models/, schemas/, dto/, …) fetched once and reused on every
+    //    per-route Claude call so nested types get fully expanded.
+    const [mountContext, schemaContext] = await Promise.all([
+      fetchMountContext(octokit, job.owner, job.repo, tree),
+      fetchSchemaContext(octokit, job.owner, job.repo, tree),
+    ]);
+    console.log(
+      `[backfill ${job._id}] mount=${mountContext.length} schemas=${schemaContext.length}`
+    );
 
-    // 3) Pick candidates: route/controller/api files only.
-    const candidates = tree
-      .filter((n) => n.type === "blob")
-      .filter((n) => hasSourceExtension(n.path))
+    // 3) Pick candidates: every source file in the repo. The regex check
+    //    on content (fileLooksLikeApi) does the real filtering — path
+    //    structure varies too much across repos to gate on it.
+    const blobs = tree.filter((n) => n.type === "blob");
+    const sourceFiles = blobs.filter((n) => hasSourceExtension(n.path));
+    const candidates = sourceFiles
       .filter((n) => !isExcludedPath(n.path))
-      .filter((n) => hasApiPathHint(n.path))
       .map((n) => ({ path: n.path, sha: n.sha, size: n.size }));
+    console.log(
+      `[backfill ${job._id}] blobs=${blobs.length} sourceFiles=${sourceFiles.length} candidates=${candidates.length}`
+    );
+    console.log(
+      `[backfill ${job._id}] candidate paths:`,
+      candidates.map((c) => c.path)
+    );
 
     // 4) Hydrate + pre-filter by route-regex. Skip oversized files.
     const hydrated = [];
@@ -236,10 +264,15 @@ async function runBackfill(jobId) {
               };
             }
 
+            const relevantSchemas = pickSchemasForFile(file.content, schemaContext);
+            console.log(
+              `[backfill ${job._id}] ${file.path}: schemas=${relevantSchemas.length}/${schemaContext.length}`
+            );
             const { endpoints, usage } = await generateDocsFromFile({
               filePath: file.path,
               content: file.content,
               mountContext,
+              schemaContext: relevantSchemas,
             });
             const saved = await saveBackfillDocs({
               endpoints,
@@ -299,9 +332,15 @@ async function runBackfill(jobId) {
 }
 
 async function startBackfill(req, res) {
-  const { installationId, owner, repo } = req.body;
+  console.log("==================================================");
+  console.log("[startBackfill] HIT");
+  console.log("[startBackfill] body:", req.body);
+  console.log("==================================================");
+
+  const { installationId, owner, repo, force } = req.body;
 
   if (!installationId || !owner || !repo) {
+    console.log("[startBackfill] MISSING FIELDS — bailing");
     return res
       .status(400)
       .json({ message: "installationId, owner and repo are required" });
@@ -310,8 +349,23 @@ async function startBackfill(req, res) {
   const installation = await Installation.findOne({
     installationId: Number(installationId),
   });
+  console.log(
+    "[startBackfill] installation lookup:",
+    installation ? `found userId=${installation.userId} repos=${installation.repos?.length}` : "NOT FOUND"
+  );
+
   if (!installation) {
     return res.status(404).json({ message: "Installation not found" });
+  }
+
+  // force=true wipes existing backfill docs for this repo so the SHA cache
+  // (line ~250 below) doesn't short-circuit Claude and we get a clean
+  // regeneration with the latest prompt / schema context.
+  if (force) {
+    const wiped = await Doc.deleteMany({ owner, repo, source: "backfill" });
+    console.log(
+      `[startBackfill] force=true — wiped ${wiped.deletedCount} existing backfill docs`
+    );
   }
 
   const job = await BackfillJob.create({
@@ -320,9 +374,10 @@ async function startBackfill(req, res) {
     repo,
     userId: installation.userId,
   });
+  console.log("[startBackfill] job created:", job._id.toString());
 
   runBackfill(job._id).catch((err) =>
-    console.error("runBackfill crashed:", err)
+    console.error("[runBackfill] CRASHED:", err)
   );
 
   res.status(202).json({ jobId: job._id, status: job.status });

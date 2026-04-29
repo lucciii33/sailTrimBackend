@@ -18,12 +18,21 @@ const CLAUDE_MODEL = process.env.CLAUDE_DOCS_MODEL || "claude-opus-4-7";
 
 // ---------- Prompt building ----------
 
-const DOC_SYSTEM_PROMPT = `You are an API documentation generator.
+const DOC_SYSTEM_PROMPT = `You are an API documentation generator that works across ANY backend framework or language (Node/Express, Python/FastAPI/Flask/Django, Ruby/Rails/Sinatra, Go/Gin/Echo/Mux, Java/Spring, C#/.NET, PHP/Laravel/Symfony, Rust/Actix/Axum, Elixir/Phoenix, etc.).
+
 You will be given:
-  (A) Optional entry files (server.js, app.js, index.js) showing where sub-routers are mounted with app.use("/prefix", router).
+  (A) Optional entry/config files showing how sub-routers are mounted or prefixed. Examples by framework:
+      - Express: app.use("/api/user", userRoutes)
+      - FastAPI: app.include_router(user_router, prefix="/api/user")
+      - Flask: app.register_blueprint(bp, url_prefix="/api/user")
+      - Django: path("api/user/", include("users.urls"))
+      - Rails: namespace :api do; resources :users; end
+      - Laravel: Route::prefix("api")->group(...)
+      - Spring: @RequestMapping("/api/user") on the controller class
+      - Gin: r.Group("/api/user")
   (B) A single source file that may define HTTP endpoints.
 
-Your job: detect every HTTP endpoint in (B) and output its FULL URL, resolving any prefix from (A).
+Your job: detect every HTTP endpoint in (B) and output its FULL URL, resolving any prefix from (A) or from class/group decorators inside (B) itself.
 
 Return STRICT JSON only, starting with {, matching this exact shape:
 {
@@ -47,10 +56,15 @@ Return STRICT JSON only, starting with {, matching this exact shape:
 }
 
 Rules:
-- If no endpoints exist, return {"endpoints": []}.
-- ALWAYS resolve the mount prefix. Example: if server.js has app.use("/api/user", userRoutes) and the file has router.post("/login"), the path is "/api/user/login" — NEVER just "/login".
-- Only document handler-based routes (express router/app .get/.post/.put/.patch/.delete, fastify, NestJS @Get/@Post decorators, etc.).
-- Do not include middleware-only lines.`;
+- If the file defines no endpoints, return {"endpoints": []}.
+- ALWAYS resolve the mount/prefix. Combine ALL prefixes that apply (entry-file mount + class/group/blueprint prefix + route path). Example: entry has app.include_router(router, prefix="/api/v1") and the file has @router.post("/users/{id}"), the path is "/api/v1/users/{id}".
+- Detect endpoints from any of these signals: HTTP-verb decorators/annotations (@app.get, @GetMapping, [HttpGet], #[get(...)]), router method calls (router.post(...), app.GET(...), Route::post(...)), Django/Flask URL patterns (path(), url(), re_path()), Rails resources/get/post DSL, Phoenix 'get "/path"', etc.
+- Use uppercase HTTP methods ("GET", "POST", ...). For "resources :users" / "Route::resource" / similar, expand to the standard CRUD set (GET/POST/PUT/DELETE).
+- Do NOT document middleware, error handlers, or non-HTTP handlers.
+- Infer requestBody/queryParams from the handler signature when possible (Pydantic models, Rails strong params, Spring @RequestBody, Express req.body destructuring, etc.).
+- When the handler signature references a type (e.g. \`pet: PetCreate\`, \`@Body() dto: CreateUserDto\`, \`User user\`), look up that type in the SCHEMA / MODEL FILES section and EXPAND every field of that type into requestBody. Include nested objects and arrays — for arrays, document the element type as a nested object, NEVER leave an empty array. Walk transitive types (if PetCreate has \`owner: OwnerRef\`, expand OwnerRef too).
+- Response examples must reflect the response model: include EVERY field the schema declares, with realistic example values (not just \`{}\`). For list responses, include at least one fully populated element.
+- If a field in the schema has a default, mark required=false. If it is Optional/Nullable, mark required=false. Otherwise required=true.`;
 
 function buildMountContextBlock(mountContext) {
   if (!mountContext || mountContext.length === 0) return "(no entry files provided)";
@@ -59,12 +73,21 @@ function buildMountContextBlock(mountContext) {
     .join("\n\n");
 }
 
-function buildUserMessage({ filePath, content, mountContext, diff }) {
+function buildSchemaContextBlock(schemaContext) {
+  if (!schemaContext || schemaContext.length === 0) return "(no schema files provided)";
+  return schemaContext
+    .map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join("\n\n");
+}
+
+function buildUserMessage({ filePath, content, mountContext, schemaContext, diff }) {
   const mountBlock = buildMountContextBlock(mountContext);
+  const schemaBlock = buildSchemaContextBlock(schemaContext);
+  const header = `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nSCHEMA / MODEL FILES (use these to fully populate request bodies, query params, and response shapes — every field, every nested object):\n${schemaBlock}`;
   if (diff) {
-    return `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nDIFF:\n${diff}`;
+    return `${header}\n\nDIFF:\n${diff}`;
   }
-  return `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nFILE: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+  return `${header}\n\nFILE: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
 }
 
 function safeParseJson(txt) {
@@ -86,8 +109,8 @@ function safeParseJson(txt) {
 
 // ---------- Core Claude call ----------
 
-async function callClaudeForDocs({ filePath, content, mountContext, diff }) {
-  const userMsg = buildUserMessage({ filePath, content, mountContext, diff });
+async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, diff }) {
+  const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, diff });
 
   const response = await getAnthropic().messages.create({
     model: CLAUDE_MODEL,
@@ -145,8 +168,8 @@ async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountCon
  * Backfill-mode: called per source file.
  * Returns { endpoints, usage } so the caller can aggregate token counts.
  */
-async function generateDocsFromFile({ filePath, content, mountContext }) {
-  return callClaudeForDocs({ filePath, content, mountContext });
+async function generateDocsFromFile({ filePath, content, mountContext, schemaContext }) {
+  return callClaudeForDocs({ filePath, content, mountContext, schemaContext });
 }
 
 async function saveBackfillDocs({
