@@ -17,6 +17,12 @@ router.post("/compare/:traceId", c.compare);
 // --- Test case generator ---
 router.post("/generate-cases", c.generateCases);
 
+// --- Generated MCP docs ---
+router.post("/docs/generate", c.generateDocs);
+router.get("/docs", c.listDocs);
+router.get("/docs/:id", c.getDoc);
+router.delete("/docs/:id", c.deleteDoc);
+
 // --- Traces ---
 router.get("/traces", c.listTraces);
 router.get("/traces/:id", c.getTrace);

@@ -56,13 +56,16 @@ const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
 
 /**
  * Build a transport from a config object.
- * config = { transport: "http"|"sse"|"stdio", url?, command?, args?, env? }
+ * config = { transport: "http"|"sse"|"stdio", url?, command?, args?, env?, headers?, bearerToken?, apiKey?, apiKeyHeader? }
  */
 function buildTransport(config = {}) {
   const t = (config.transport || "http").toLowerCase();
   if (t === "http" || t === "sse") {
     if (!config.url) throw new Error("MCP http transport requires `url`");
-    return new StreamableHTTPClientTransport(new URL(config.url));
+    const headers = buildHttpHeaders(config);
+    return new StreamableHTTPClientTransport(new URL(config.url), {
+      requestInit: { headers },
+    });
   }
   if (t === "stdio") {
     if (!config.command)
@@ -74,6 +77,25 @@ function buildTransport(config = {}) {
     });
   }
   throw new Error(`Unsupported MCP transport: ${t}`);
+}
+
+function buildHttpHeaders(config = {}) {
+  const headers = {};
+  if (config.headers && typeof config.headers === "object" && !Array.isArray(config.headers)) {
+    for (const [key, value] of Object.entries(config.headers)) {
+      if (value !== undefined && value !== null) headers[key] = String(value);
+    }
+  }
+
+  if (config.bearerToken && !headers.Authorization && !headers.authorization) {
+    headers.Authorization = `Bearer ${config.bearerToken}`;
+  }
+
+  if (config.apiKey) {
+    headers[config.apiKeyHeader || "x-api-key"] = String(config.apiKey);
+  }
+
+  return headers;
 }
 
 /**

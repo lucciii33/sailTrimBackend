@@ -1,6 +1,8 @@
 const asyncHandler = require("express-async-handler");
 const mcpLab = require("../services/mcpLabService.js");
+const mcpDocs = require("../services/mcpDocService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
+const McpDoc = require("../model/McpDocModel.js");
 
 /**
  * POST /api/mcp-lab/connect
@@ -86,6 +88,54 @@ const generateCases = asyncHandler(async (req, res) => {
     count: count || 10,
   });
   res.json(out);
+});
+
+/**
+ * POST /api/mcp-lab/docs/generate
+ * body: { config, provider?, model?, save?, tags? }
+ * Generates product-ready docs from MCP tool schemas.
+ */
+const generateDocs = asyncHandler(async (req, res) => {
+  const { config, provider, model, save = true, tags, sampleArgsByTool } = req.body;
+  if (!config) return res.status(400).json({ message: "config required" });
+
+  const out = await mcpDocs.generateDocs({
+    config,
+    provider: provider || "anthropic",
+    model,
+    save,
+    tags: tags || [],
+    sampleArgsByTool: sampleArgsByTool || {},
+    userId: req.user?._id,
+  });
+  res.json(out);
+});
+
+/**
+ * GET /api/mcp-lab/docs?serverName=&serverUrl=&toolName=&limit=
+ */
+const listDocs = asyncHandler(async (req, res) => {
+  const docs = await mcpDocs.listDocs({
+    serverName: req.query.serverName,
+    serverUrl: req.query.serverUrl,
+    toolName: req.query.toolName,
+    limit: req.query.limit || 100,
+    userId: req.user?._id,
+  });
+  res.json({ docs });
+});
+
+/** GET /api/mcp-lab/docs/:id */
+const getDoc = asyncHandler(async (req, res) => {
+  const doc = await McpDoc.findById(req.params.id);
+  if (!doc) return res.status(404).json({ message: "Not found" });
+  res.json({ doc });
+});
+
+/** DELETE /api/mcp-lab/docs/:id */
+const deleteDoc = asyncHandler(async (req, res) => {
+  await McpDoc.findByIdAndDelete(req.params.id);
+  res.json({ ok: true });
 });
 
 /**
@@ -236,6 +286,10 @@ module.exports = {
   runPrompt,
   judge,
   generateCases,
+  generateDocs,
+  listDocs,
+  getDoc,
+  deleteDoc,
   compare,
   listTraces,
   getTrace,
