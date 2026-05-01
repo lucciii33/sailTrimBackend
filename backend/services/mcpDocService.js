@@ -384,7 +384,7 @@ async function curateToolDocs({ tools, provider, model }) {
   throw new Error(`Unknown docs provider: ${chosenProvider}`);
 }
 
-async function saveDocs({ docs, config, userId, tags = [] }) {
+async function saveDocs({ docs, config, projectId, userId, tags = [] }) {
   if (!docs.length) return 0;
 
   const serverName = config.name || config.url || "unnamed";
@@ -392,6 +392,7 @@ async function saveDocs({ docs, config, userId, tags = [] }) {
     updateOne: {
       filter: {
         serverName,
+        projectId,
         serverUrl: config.url,
         transport: config.transport || "http",
         toolName: doc.toolName,
@@ -401,6 +402,7 @@ async function saveDocs({ docs, config, userId, tags = [] }) {
         $set: {
           ...doc,
           serverName,
+          projectId,
           serverUrl: config.url,
           transport: config.transport || "http",
           userId,
@@ -418,6 +420,7 @@ async function saveDocs({ docs, config, userId, tags = [] }) {
 
 async function generateDocs({
   config,
+  projectId,
   provider = "anthropic",
   model,
   save = true,
@@ -483,8 +486,8 @@ async function generateDocs({
       provider: generatedBy.provider,
       model: generatedBy.model,
     }),
-  });
-  const savedCount = save ? await saveDocs({ docs, config, userId, tags }) : 0;
+  }).map((doc) => ({ ...doc, projectId }));
+  const savedCount = save ? await saveDocs({ docs, config, projectId, userId, tags }) : 0;
   const toolResponses = verifications.reduce((acc, verification) => {
     acc[verification.toolName] = {
       responseVerified: verification.responseVerified,
@@ -508,8 +511,9 @@ async function generateDocs({
   };
 }
 
-async function listDocs({ serverName, serverUrl, toolName, userId, limit = 100 }) {
+async function listDocs({ serverName, serverUrl, toolName, projectId, userId, limit = 100 }) {
   const q = {};
+  if (projectId) q.projectId = projectId;
   if (serverName) q.serverName = serverName;
   if (serverUrl) q.serverUrl = serverUrl;
   if (toolName) q.toolName = toolName;
@@ -520,4 +524,7 @@ async function listDocs({ serverName, serverUrl, toolName, userId, limit = 100 }
 module.exports = {
   generateDocs,
   listDocs,
+  extractToolResponseJson,
+  inferJsonSchema,
+  sampleArgsFromSchema,
 };

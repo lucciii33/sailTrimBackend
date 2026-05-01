@@ -6,6 +6,12 @@ const c = require("../controllers/mcpLabController.js");
 router.post("/connect", c.connectServer);
 router.post("/tools", c.getTools);
 
+// --- MCP projects ---
+router.post("/projects", c.saveProject);
+router.get("/projects", c.listProjects);
+router.get("/projects/:id", c.getProject);
+router.get("/projects/:id/tools", c.listProjectTools);
+
 // --- Playground / runs ---
 router.post("/invoke", c.invokeTool);
 router.post("/run", c.runPrompt);
@@ -22,6 +28,13 @@ router.post("/docs/generate", c.generateDocs);
 router.get("/docs", c.listDocs);
 router.get("/docs/:id", c.getDoc);
 router.delete("/docs/:id", c.deleteDoc);
+
+// --- MCP QA agent ---
+router.post("/qa/run", c.runQa);
+
+// --- MCP bugs ---
+router.get("/bugs", c.listBugs);
+router.patch("/bugs/:id/status", c.updateBugStatus);
 
 // --- Traces ---
 router.get("/traces", c.listTraces);

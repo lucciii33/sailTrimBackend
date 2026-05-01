@@ -1,0 +1,434 @@
+const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
+
+const McpQaRun = require("../model/McpQaRunModel.js");
+const McpBug = require("../model/McpBugModel.js");
+const mcpLab = require("./mcpLabService.js");
+const mcpDocs = require("./mcpDocService.js");
+
+let _openai = null;
+let _anthropic = null;
+
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
+
+function getAnthropic() {
+  if (!_anthropic) {
+    _anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY || "missing",
+    });
+  }
+  return _anthropic;
+}
+
+const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MCP_QA_MODEL || "gpt-4o";
+const DEFAULT_CLAUDE_MODEL = process.env.CLAUDE_MCP_QA_MODEL || "claude-sonnet-4-6";
+
+const QA_CASE_SYSTEM = `You are an expert QA engineer for MCP servers.
+Create executable test cases for MCP tools. Return STRICT JSON:
+{
+  "cases": [
+    {
+      "name": string,
+      "category": "happy_path" | "sad_path" | "boundary" | "security" | "schema",
+      "toolName": string,
+      "args": object,
+      "expectedBehavior": string,
+      "severityHint": "low" | "medium" | "high" | "critical"
+    }
+  ]
+}
+
+Rules:
+- Cases must call a concrete existing toolName.
+- Args must match the target category.
+- Include happy path, sad path, boundary, security, and schema tests when possible.
+- Use supplied sampleArgsByTool for valid happy paths.
+- Do not invent real IDs beyond supplied sample args.`;
+
+const QA_JUDGE_SYSTEM = `You are an MCP QA bug judge.
+You receive one executed MCP tool test: case, tool schema, args, raw response, parsed response, status, and error.
+Return STRICT JSON:
+{
+  "verdict": "pass" | "fail" | "warn",
+  "bug": null | {
+    "severity": "low" | "medium" | "high" | "critical",
+    "category": string,
+    "title": string,
+    "description": string,
+    "expected": string,
+    "actual": string,
+    "evidence": string,
+    "recommendation": string
+  },
+  "reasoning": string
+}
+
+Rules:
+- If the behavior clearly violates expectedBehavior or accepts dangerous invalid input, return fail with a concrete bug.
+- If the case expected rejection and the tool returns success-like data, that is a bug.
+- If the tool correctly rejects invalid/security/boundary args, pass.
+- Use the actual response/error as evidence. Do not speculate beyond the evidence.`;
+
+function safeParseJson(txt) {
+  if (!txt) return null;
+  try {
+    return JSON.parse(txt);
+  } catch (_) {
+    const m = txt.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[0]);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function schemaType(schema = {}) {
+  if (Array.isArray(schema.type)) return schema.type[0];
+  if (schema.type) return schema.type;
+  if (schema.enum) return "string";
+  if (schema.properties) return "object";
+  if (schema.items) return "array";
+  return "string";
+}
+
+function mutateValueForCategory(schema = {}, category) {
+  const type = schemaType(schema);
+  if (category === "security") {
+    if (type === "string") return "' OR '1'='1";
+    if (type === "object") return { $ne: null };
+    if (type === "array") return [{ $ne: null }];
+    return "<script>alert(1)</script>";
+  }
+  if (category === "boundary") {
+    if (type === "string") return "";
+    if (type === "number" || type === "integer") return Number.MAX_SAFE_INTEGER;
+    if (type === "array") return [];
+    if (type === "boolean") return false;
+    return {};
+  }
+  if (category === "schema") {
+    if (type === "string") return { invalid: true };
+    if (type === "number" || type === "integer") return "not-a-number";
+    if (type === "boolean") return "not-a-boolean";
+    if (type === "array") return "not-an-array";
+    if (type === "object") return "not-an-object";
+  }
+  return undefined;
+}
+
+function requiredFields(tool) {
+  return tool.inputSchema?.required || [];
+}
+
+function fallbackCasesForTool(tool, sampleArgs = {}) {
+  const properties = tool.inputSchema?.properties || {};
+  const required = requiredFields(tool);
+  const cases = [
+    {
+      name: `${tool.name} happy path`,
+      category: "happy_path",
+      toolName: tool.name,
+      args: sampleArgs,
+      expectedBehavior: "Tool should complete successfully and return a valid MCP response.",
+      severityHint: "medium",
+    },
+  ];
+
+  if (required.length) {
+    const missingField = required[0];
+    const args = { ...sampleArgs };
+    delete args[missingField];
+    cases.push({
+      name: `${tool.name} missing required ${missingField}`,
+      category: "sad_path",
+      toolName: tool.name,
+      args,
+      expectedBehavior: `Tool should reject missing required argument "${missingField}".`,
+      severityHint: "medium",
+    });
+  }
+
+  const firstField = Object.keys(properties)[0];
+  if (firstField) {
+    cases.push({
+      name: `${tool.name} boundary input`,
+      category: "boundary",
+      toolName: tool.name,
+      args: {
+        ...sampleArgs,
+        [firstField]: mutateValueForCategory(properties[firstField], "boundary"),
+      },
+      expectedBehavior: "Tool should handle boundary input safely without leaking internals or returning invalid success data.",
+      severityHint: "medium",
+    });
+    cases.push({
+      name: `${tool.name} schema violation`,
+      category: "schema",
+      toolName: tool.name,
+      args: {
+        ...sampleArgs,
+        [firstField]: mutateValueForCategory(properties[firstField], "schema"),
+      },
+      expectedBehavior: "Tool should reject arguments that violate its declared input schema.",
+      severityHint: "high",
+    });
+    cases.push({
+      name: `${tool.name} injection probe`,
+      category: "security",
+      toolName: tool.name,
+      args: {
+        ...sampleArgs,
+        [firstField]: mutateValueForCategory(properties[firstField], "security"),
+      },
+      expectedBehavior: "Tool should reject or safely handle injection-style input without returning unauthorized data.",
+      severityHint: "high",
+    });
+  }
+
+  return cases;
+}
+
+function fallbackCases({ tools, sampleArgsByTool = {}, maxCasesPerTool = 5 }) {
+  return (tools || []).flatMap((tool) =>
+    fallbackCasesForTool(
+      tool,
+      sampleArgsByTool[tool.name] || mcpDocs.sampleArgsFromSchema(tool.inputSchema || {})
+    ).slice(0, maxCasesPerTool)
+  );
+}
+
+async function callJsonLLM({ provider, model, system, user, maxTokens = 4096 }) {
+  const chosenProvider = provider || "anthropic";
+  const chosenModel =
+    model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
+
+  if (chosenProvider === "openai") {
+    const completion = await getOpenAI().chat.completions.create({
+      model: chosenModel,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    return {
+      parsed: safeParseJson(completion.choices?.[0]?.message?.content),
+      model: chosenModel,
+    };
+  }
+
+  if (chosenProvider === "anthropic") {
+    const msg = await getAnthropic().messages.create({
+      model: chosenModel,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: user }],
+    });
+    const raw = (msg.content || []).map((c) => c.text || "").join("\n");
+    return { parsed: safeParseJson(raw), model: chosenModel };
+  }
+
+  throw new Error(`Unknown provider: ${chosenProvider}`);
+}
+
+async function generateCases({ tools, docs, sampleArgsByTool, provider, model, maxCasesPerTool }) {
+  const fallback = fallbackCases({ tools, sampleArgsByTool, maxCasesPerTool });
+  try {
+    const { parsed, model: chosenModel } = await callJsonLLM({
+      provider,
+      model,
+      system: QA_CASE_SYSTEM,
+      user: JSON.stringify({ tools, docs, sampleArgsByTool, maxCasesPerTool }, null, 2),
+    });
+    const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
+    const toolNames = new Set((tools || []).map((tool) => tool.name));
+    const valid = generated.filter((testCase) => toolNames.has(testCase.toolName));
+    return { cases: valid.length ? valid : fallback, model: chosenModel, usedFallback: !valid.length };
+  } catch (err) {
+    return { cases: fallback, model: null, usedFallback: true, generationError: err.message };
+  }
+}
+
+function fallbackJudge(testCase, execution) {
+  const expectedRejection = ["sad_path", "security", "schema"].includes(testCase.category);
+  const passed = expectedRejection ? execution.status !== "ok" || !!execution.error : execution.status === "ok" && !execution.error;
+  if (passed) {
+    return { verdict: "pass", bug: null, reasoning: "Fallback judge matched the expected status pattern." };
+  }
+
+  return {
+    verdict: "fail",
+    reasoning: "Fallback judge found behavior that conflicts with the case expectation.",
+    bug: {
+      severity: testCase.severityHint || "medium",
+      category: testCase.category,
+      title: `${testCase.toolName} failed ${testCase.category} test`,
+      description: `The tool behavior did not match: ${testCase.expectedBehavior}`,
+      expected: testCase.expectedBehavior,
+      actual: execution.error || JSON.stringify(execution.response),
+      evidence: JSON.stringify({ args: testCase.args, response: execution.response, error: execution.error }),
+      recommendation: "Inspect input validation and tool response handling for this case.",
+    },
+  };
+}
+
+async function judgeCase({ testCase, tool, execution, provider, model }) {
+  try {
+    const { parsed } = await callJsonLLM({
+      provider,
+      model,
+      system: QA_JUDGE_SYSTEM,
+      user: JSON.stringify({ testCase, tool, execution }, null, 2),
+      maxTokens: 2048,
+    });
+    if (parsed?.verdict) return parsed;
+    return fallbackJudge(testCase, execution);
+  } catch (_) {
+    return fallbackJudge(testCase, execution);
+  }
+}
+
+async function runQa({
+  config,
+  projectId,
+  provider = "anthropic",
+  model,
+  save = true,
+  userId,
+  sampleArgsByTool = {},
+  maxCasesPerTool = 5,
+}) {
+  const tools = await mcpLab.listTools(config);
+  const serverName = config.name || config.url || "unnamed";
+  const docs = await mcpDocs.listDocs({
+    projectId,
+    serverName,
+    serverUrl: config.url,
+    userId,
+    limit: 500,
+  });
+  const generated = await generateCases({
+    tools,
+    docs,
+    sampleArgsByTool,
+    provider,
+    model,
+    maxCasesPerTool,
+  });
+
+  const results = [];
+  const bugs = [];
+
+  for (const testCase of generated.cases) {
+    const tool = tools.find((item) => item.name === testCase.toolName);
+    const started = Date.now();
+    const run = await mcpLab.invokeTool({
+      config,
+      toolName: testCase.toolName,
+      args: testCase.args || {},
+      saveTrace: false,
+      tags: ["mcp-qa"],
+    });
+    const parsedResponse = mcpDocs.extractToolResponseJson(run.toolResponse);
+    const execution = {
+      status: run.status,
+      error: run.error,
+      latencyMs: Date.now() - started,
+      args: testCase.args || {},
+      response: parsedResponse,
+      rawToolResponse: run.toolResponse,
+      responseSchema: run.status === "ok" && !run.error ? mcpDocs.inferJsonSchema(parsedResponse) : null,
+    };
+    const judged = await judgeCase({ testCase, tool, execution, provider, model });
+    const result = {
+      ...testCase,
+      execution,
+      verdict: judged.verdict,
+      reasoning: judged.reasoning,
+      bug: judged.bug || null,
+    };
+    results.push(result);
+
+    if (judged.bug) {
+      bugs.push({
+        id: `${testCase.toolName}:${testCase.category}:${bugs.length + 1}`,
+        toolName: testCase.toolName,
+        testCaseName: testCase.name,
+        args: testCase.args || {},
+        response: parsedResponse,
+        rawToolResponse: run.toolResponse,
+        ...judged.bug,
+      });
+    }
+  }
+
+  const summary = {
+    total: results.length,
+    passed: results.filter((r) => r.verdict === "pass").length,
+    failed: results.filter((r) => r.verdict === "fail").length,
+    warned: results.filter((r) => r.verdict === "warn").length,
+    bugs: bugs.length,
+  };
+
+  const payload = {
+    server: {
+      name: serverName,
+      url: config.url,
+      transport: config.transport || "http",
+    },
+    summary,
+    cases: generated.cases,
+    results,
+    bugs,
+    generatedBy: {
+      provider: generated.model ? provider : "none",
+      model: generated.model,
+      usedFallback: generated.usedFallback,
+      generationError: generated.generationError,
+    },
+  };
+
+  if (save) {
+    const saved = await McpQaRun.create({
+      projectId,
+      serverName,
+      serverUrl: config.url,
+      transport: config.transport || "http",
+      summary,
+      cases: generated.cases,
+      results,
+      bugs,
+      generatedBy: payload.generatedBy,
+      userId,
+    });
+    payload.runId = saved._id;
+
+    if (bugs.length) {
+      await McpBug.insertMany(
+        bugs.map((bug) => ({
+          ...bug,
+          projectId,
+          qaRunId: saved._id,
+          serverName,
+          serverUrl: config.url,
+          transport: config.transport || "http",
+          status: "open",
+          userId,
+        }))
+      );
+    }
+  }
+
+  return payload;
+}
+
+module.exports = {
+  runQa,
+};

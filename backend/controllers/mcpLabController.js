@@ -1,8 +1,11 @@
 const asyncHandler = require("express-async-handler");
 const mcpLab = require("../services/mcpLabService.js");
 const mcpDocs = require("../services/mcpDocService.js");
+const mcpQa = require("../services/mcpQaService.js");
+const mcpProjects = require("../services/mcpProjectService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
 const McpDoc = require("../model/McpDocModel.js");
+const McpBug = require("../model/McpBugModel.js");
 
 /**
  * POST /api/mcp-lab/connect
@@ -24,7 +27,79 @@ const connectServer = asyncHandler(async (req, res) => {
  * body: { config }
  */
 const getTools = asyncHandler(async (req, res) => {
-  const tools = await mcpLab.listTools(req.body.config);
+  const { projectId, config: bodyConfig } = req.body;
+  if (projectId) {
+    const tools = await mcpProjects.listProjectTools({
+      projectId,
+      userId: req.user?._id,
+    });
+    return res.json({ tools });
+  }
+
+  const config = bodyConfig;
+  if (!config) return res.status(400).json({ message: "config or projectId required" });
+  const tools = await mcpLab.listTools(config);
+  res.json({ tools });
+});
+
+/**
+ * POST /api/mcp-lab/projects
+ * body: { config, save?, tags?, sampleArgsByTool? }
+ * Saves an MCP project, stores tools, and generates docs under that project.
+ */
+const saveProject = asyncHandler(async (req, res) => {
+  const { projectName, config, save = true, tags, sampleArgsByTool } = req.body;
+  if (!projectName) return res.status(400).json({ message: "projectName required" });
+  if (!config) return res.status(400).json({ message: "config required" });
+  const out = await mcpProjects.saveProject({
+    projectName,
+    config,
+    userId: req.user?._id,
+  });
+  const projectId = out.project._id;
+
+  const docsOut = await mcpDocs.generateDocs({
+    config: out.project.config,
+    projectId,
+    save,
+    tags: tags || [],
+    sampleArgsByTool: sampleArgsByTool || {},
+    userId: req.user?._id,
+  });
+
+  const overview = await mcpProjects.getProjectOverview({
+    projectId,
+    userId: req.user?._id,
+  });
+
+  res.status(201).json({
+    projectId,
+    ...overview,
+    docsResult: docsOut,
+  });
+});
+
+/** GET /api/mcp-lab/projects */
+const listProjects = asyncHandler(async (req, res) => {
+  const projects = await mcpProjects.listProjects({ userId: req.user?._id });
+  res.json({ projects });
+});
+
+/** GET /api/mcp-lab/projects/:id */
+const getProject = asyncHandler(async (req, res) => {
+  const out = await mcpProjects.getProjectOverview({
+    projectId: req.params.id,
+    userId: req.user?._id,
+  });
+  res.json(out);
+});
+
+/** GET /api/mcp-lab/projects/:id/tools */
+const listProjectTools = asyncHandler(async (req, res) => {
+  const tools = await mcpProjects.listProjectTools({
+    projectId: req.params.id,
+    userId: req.user?._id,
+  });
   res.json({ tools });
 });
 
@@ -96,11 +171,17 @@ const generateCases = asyncHandler(async (req, res) => {
  * Generates product-ready docs from MCP tool schemas.
  */
 const generateDocs = asyncHandler(async (req, res) => {
-  const { config, provider, model, save = true, tags, sampleArgsByTool } = req.body;
-  if (!config) return res.status(400).json({ message: "config required" });
+  const { projectId, provider, model, save = true, tags, sampleArgsByTool } = req.body;
+  if (!projectId) return res.status(400).json({ message: "projectId required" });
+
+  const { config } = await mcpProjects.resolveConfig({
+    projectId,
+    userId: req.user?._id,
+  });
 
   const out = await mcpDocs.generateDocs({
     config,
+    projectId,
     provider: provider || "anthropic",
     model,
     save,
@@ -108,7 +189,19 @@ const generateDocs = asyncHandler(async (req, res) => {
     sampleArgsByTool: sampleArgsByTool || {},
     userId: req.user?._id,
   });
-  res.json(out);
+
+  const overview = projectId
+    ? await mcpProjects.getProjectOverview({ projectId, userId: req.user?._id })
+    : null;
+
+  res.json({
+    ...out,
+    projectId,
+    project: overview?.project,
+    tools: overview?.tools,
+    docs: overview?.docs,
+    bugs: overview?.bugs,
+  });
 });
 
 /**
@@ -116,6 +209,7 @@ const generateDocs = asyncHandler(async (req, res) => {
  */
 const listDocs = asyncHandler(async (req, res) => {
   const docs = await mcpDocs.listDocs({
+    projectId: req.query.projectId,
     serverName: req.query.serverName,
     serverUrl: req.query.serverUrl,
     toolName: req.query.toolName,
@@ -136,6 +230,60 @@ const getDoc = asyncHandler(async (req, res) => {
 const deleteDoc = asyncHandler(async (req, res) => {
   await McpDoc.findByIdAndDelete(req.params.id);
   res.json({ ok: true });
+});
+
+/**
+ * POST /api/mcp-lab/qa/run
+ * body: { config, sampleArgsByTool?, maxCasesPerTool?, save? }
+ * Generates QA cases, executes tools directly, and returns concrete bugs.
+ */
+const runQa = asyncHandler(async (req, res) => {
+  const { projectId, sampleArgsByTool, maxCasesPerTool, save = true } = req.body;
+  if (!projectId) return res.status(400).json({ message: "projectId required" });
+
+  const { config } = await mcpProjects.resolveConfig({
+    projectId,
+    userId: req.user?._id,
+  });
+
+  const out = await mcpQa.runQa({
+    config,
+    projectId,
+    sampleArgsByTool: sampleArgsByTool || {},
+    maxCasesPerTool: maxCasesPerTool || 5,
+    save,
+    userId: req.user?._id,
+  });
+  res.json(out);
+});
+
+/**
+ * GET /api/mcp-lab/bugs?projectId=&toolName=&status=
+ */
+const listBugs = asyncHandler(async (req, res) => {
+  const q = {};
+  if (req.query.projectId) q.projectId = req.query.projectId;
+  if (req.query.toolName) q.toolName = req.query.toolName;
+  if (req.query.status) q.status = req.query.status;
+  if (req.user?._id) q.userId = req.user._id;
+  const bugs = await McpBug.find(q).sort({ createdAt: -1 });
+  res.json({ bugs });
+});
+
+/**
+ * PATCH /api/mcp-lab/bugs/:id/status
+ * body: { status: "open"|"ignored"|"fixed" }
+ */
+const updateBugStatus = asyncHandler(async (req, res) => {
+  const { status } = req.body;
+  if (!["open", "ignored", "fixed"].includes(status)) {
+    return res.status(400).json({ message: "invalid status" });
+  }
+  const q = { _id: req.params.id };
+  if (req.user?._id) q.userId = req.user._id;
+  const bug = await McpBug.findOneAndUpdate(q, { $set: { status } }, { new: true });
+  if (!bug) return res.status(404).json({ message: "Not found" });
+  res.json({ bug });
 });
 
 /**
@@ -282,6 +430,10 @@ const runSuite = asyncHandler(async (req, res) => {
 module.exports = {
   connectServer,
   getTools,
+  saveProject,
+  listProjects,
+  getProject,
+  listProjectTools,
   invokeTool,
   runPrompt,
   judge,
@@ -290,6 +442,9 @@ module.exports = {
   listDocs,
   getDoc,
   deleteDoc,
+  runQa,
+  listBugs,
+  updateBugStatus,
   compare,
   listTraces,
   getTrace,

@@ -25,6 +25,7 @@ const exampleSchema = new mongoose.Schema(
 const mcpDocSchema = new mongoose.Schema(
   {
     serverName: { type: String, required: true },
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "McpProject", index: true },
     serverUrl: { type: String },
     transport: {
       type: String,
@@ -67,6 +68,7 @@ const mcpDocSchema = new mongoose.Schema(
 
 mcpDocSchema.index({
   serverName: 1,
+  projectId: 1,
   serverUrl: 1,
   transport: 1,
   toolName: 1,
