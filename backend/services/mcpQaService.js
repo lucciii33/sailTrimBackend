@@ -3,6 +3,8 @@ const Anthropic = require("@anthropic-ai/sdk");
 
 const McpQaRun = require("../model/McpQaRunModel.js");
 const McpBug = require("../model/McpBugModel.js");
+const McpTool = require("../model/McpToolModel.js");
+const McpDoc = require("../model/McpDocModel.js");
 const mcpLab = require("./mcpLabService.js");
 const mcpDocs = require("./mcpDocService.js");
 
@@ -306,6 +308,14 @@ async function runQa({
   maxCasesPerTool = 5,
 }) {
   const tools = await mcpLab.listTools(config);
+  const [projectTools, projectDocs] = projectId
+    ? await Promise.all([
+        McpTool.find({ projectId }),
+        McpDoc.find({ projectId }),
+      ])
+    : [[], []];
+  const toolByName = new Map(projectTools.map((tool) => [tool.name, tool]));
+  const docByToolName = new Map(projectDocs.map((doc) => [doc.toolName, doc]));
   const serverName = config.name || config.url || "unnamed";
   const docs = await mcpDocs.listDocs({
     projectId,
@@ -357,8 +367,12 @@ async function runQa({
     results.push(result);
 
     if (judged.bug) {
+      const projectTool = toolByName.get(testCase.toolName);
+      const projectDoc = docByToolName.get(testCase.toolName);
       bugs.push({
         id: `${testCase.toolName}:${testCase.category}:${bugs.length + 1}`,
+        toolId: projectTool?._id,
+        docId: projectDoc?._id,
         toolName: testCase.toolName,
         testCaseName: testCase.name,
         args: testCase.args || {},
@@ -415,6 +429,8 @@ async function runQa({
         bugs.map((bug) => ({
           ...bug,
           projectId,
+          toolId: bug.toolId,
+          docId: bug.docId,
           qaRunId: saved._id,
           serverName,
           serverUrl: config.url,

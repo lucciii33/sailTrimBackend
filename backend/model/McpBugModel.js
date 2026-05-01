@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const mcpBugSchema = new mongoose.Schema(
   {
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: "McpProject", index: true },
+    toolId: { type: mongoose.Schema.Types.ObjectId, ref: "McpTool", index: true },
+    docId: { type: mongoose.Schema.Types.ObjectId, ref: "McpDoc", index: true },
     qaRunId: { type: mongoose.Schema.Types.ObjectId, ref: "McpQaRun", index: true },
     serverName: { type: String, required: true },
     serverUrl: String,
@@ -38,6 +40,7 @@ const mcpBugSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+mcpBugSchema.index({ projectId: 1, toolId: 1, status: 1, createdAt: -1 });
 mcpBugSchema.index({ projectId: 1, toolName: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("McpBug", mcpBugSchema);

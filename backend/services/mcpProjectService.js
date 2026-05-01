@@ -82,7 +82,11 @@ async function getProjectOverview({ projectId, userId }) {
     McpDoc.find(q).sort({ updatedAt: -1 }),
     McpBug.find(q).sort({ createdAt: -1 }),
   ]);
-  return { project, tools, docs, bugs };
+  const toolsWithBugs = tools.map((tool) => ({
+    ...tool.toObject(),
+    bugs: bugs.filter((bug) => bug.toolName === tool.name),
+  }));
+  return { project, tools: toolsWithBugs, docs, bugs };
 }
 
 async function resolveConfig({ projectId, config, userId }) {
