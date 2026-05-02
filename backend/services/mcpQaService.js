@@ -300,6 +300,7 @@ async function judgeCase({ testCase, tool, execution, provider, model }) {
 async function runQa({
   config,
   projectId,
+  toolName,
   provider = "anthropic",
   model,
   save = true,
@@ -307,7 +308,13 @@ async function runQa({
   sampleArgsByTool = {},
   maxCasesPerTool = 5,
 }) {
-  const tools = await mcpLab.listTools(config);
+  const allTools = await mcpLab.listTools(config);
+  const tools = toolName
+    ? allTools.filter((t) => t.name === toolName)
+    : allTools;
+  if (toolName && !tools.length) {
+    throw new Error(`Tool "${toolName}" not found on server`);
+  }
   const [projectTools, projectDocs] = projectId
     ? await Promise.all([
         McpTool.find({ projectId }),
@@ -447,4 +454,6 @@ async function runQa({
 
 module.exports = {
   runQa,
+  callJsonLLM,
+  safeParseJson,
 };

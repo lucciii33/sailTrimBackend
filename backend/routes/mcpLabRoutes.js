@@ -32,6 +32,11 @@ router.delete("/docs/:id", c.deleteDoc);
 // --- MCP QA agent ---
 router.post("/qa/run", c.runQa);
 
+// --- Smoke suite (per project) ---
+router.get("/projects/:id/smoke", c.getSmoke);
+router.post("/projects/:id/smoke/generate", c.generateSmoke);
+router.post("/projects/:id/smoke/run", c.runSmoke);
+
 // --- MCP bugs ---
 router.get("/bugs", c.listBugs);
 router.patch("/bugs/:id/status", c.updateBugStatus);

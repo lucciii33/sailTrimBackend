@@ -74,6 +74,13 @@ const mcpSuiteSchema = new mongoose.Schema(
     serverName: { type: String, required: true },
     serverUrl: { type: String },
     transport: { type: String, default: "http" },
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "McpProject", index: true },
+    kind: { type: String, enum: ["manual", "smoke"], default: "manual", index: true },
+    generatedBy: {
+      provider: { type: String, enum: ["openai", "anthropic", "none"], default: "none" },
+      model: String,
+    },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     cases: [
       {
         name: String,
@@ -86,6 +93,8 @@ const mcpSuiteSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+mcpSuiteSchema.index({ projectId: 1, kind: 1, userId: 1 });
 
 const McpTrace = mongoose.model("McpTrace", mcpTraceSchema);
 const McpSuite = mongoose.model("McpSuite", mcpSuiteSchema);

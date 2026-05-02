@@ -3,6 +3,7 @@ const mcpLab = require("../services/mcpLabService.js");
 const mcpDocs = require("../services/mcpDocService.js");
 const mcpQa = require("../services/mcpQaService.js");
 const mcpProjects = require("../services/mcpProjectService.js");
+const mcpSmoke = require("../services/mcpSmokeService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const McpBug = require("../model/McpBugModel.js");
@@ -238,7 +239,7 @@ const deleteDoc = asyncHandler(async (req, res) => {
  * Generates QA cases, executes tools directly, and returns concrete bugs.
  */
 const runQa = asyncHandler(async (req, res) => {
-  const { projectId, sampleArgsByTool, maxCasesPerTool, save = true } = req.body;
+  const { projectId, toolName, sampleArgsByTool, maxCasesPerTool, save = true } = req.body;
   if (!projectId) return res.status(400).json({ message: "projectId required" });
 
   const { config } = await mcpProjects.resolveConfig({
@@ -249,12 +250,60 @@ const runQa = asyncHandler(async (req, res) => {
   const out = await mcpQa.runQa({
     config,
     projectId,
+    toolName,
     sampleArgsByTool: sampleArgsByTool || {},
     maxCasesPerTool: maxCasesPerTool || 5,
     save,
     userId: req.user?._id,
   });
   res.json(out);
+});
+
+/**
+ * POST /api/mcp-lab/projects/:id/smoke/generate
+ * body: { provider?, model? }
+ * Uses tools + docs to generate (or refresh) the project's smoke suite via LLM.
+ */
+const generateSmoke = asyncHandler(async (req, res) => {
+  const { provider, model } = req.body || {};
+  const out = await mcpSmoke.generateSmokeSuite({
+    projectId: req.params.id,
+    userId: req.user?._id,
+    provider: provider || "anthropic",
+    model,
+  });
+  res.json(out);
+});
+
+/**
+ * POST /api/mcp-lab/projects/:id/smoke/run
+ * Runs the project's smoke suite, returns ok/broken per tool.
+ */
+const runSmoke = asyncHandler(async (req, res) => {
+  const filter = { projectId: req.params.id, kind: "smoke" };
+  if (req.user?._id) filter.userId = req.user._id;
+  const suite = await McpSuite.findOne(filter);
+  if (!suite) {
+    return res
+      .status(404)
+      .json({ message: "No smoke suite for this project. Generate one first." });
+  }
+  const out = await mcpSmoke.runSmokeSuite({
+    suiteId: suite._id,
+    userId: req.user?._id,
+  });
+  res.json(out);
+});
+
+/**
+ * GET /api/mcp-lab/projects/:id/smoke
+ * Returns the project's smoke suite (if any) so the UI can show its cases.
+ */
+const getSmoke = asyncHandler(async (req, res) => {
+  const filter = { projectId: req.params.id, kind: "smoke" };
+  if (req.user?._id) filter.userId = req.user._id;
+  const suite = await McpSuite.findOne(filter);
+  res.json({ suite: suite || null });
 });
 
 /**
@@ -443,6 +492,9 @@ module.exports = {
   getDoc,
   deleteDoc,
   runQa,
+  generateSmoke,
+  runSmoke,
+  getSmoke,
   listBugs,
   updateBugStatus,
   compare,
