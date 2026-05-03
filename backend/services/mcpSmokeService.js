@@ -4,6 +4,7 @@ const McpDoc = require("../model/McpDocModel.js");
 const { McpSuite } = require("../model/mcpTraceModel.js");
 const mcpLab = require("./mcpLabService.js");
 const mcpDocs = require("./mcpDocService.js");
+const mcpProjects = require("./mcpProjectService.js");
 const { callJsonLLM } = require("./mcpQaService.js");
 
 const SMOKE_SYSTEM = `You are a smoke test author for MCP servers.
@@ -47,6 +48,7 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
   if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
   if (!project) throw new Error("MCP project not found");
+  const { config } = await mcpProjects.resolveConfig({ projectId, companyId });
 
   const toolsQuery = { projectId };
   if (companyId) toolsQuery.companyId = companyId;
@@ -131,9 +133,9 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
       $set: {
         name: `${project.projectName} smoke`,
         description: "Auto-generated smoke suite — one happy path per tool.",
-        serverName: project.config?.name || project.projectName,
-        serverUrl: project.config?.url,
-        transport: project.config?.transport || "http",
+        serverName: config?.name || project.projectName,
+        serverUrl: config?.url,
+        transport: config?.transport || "http",
         projectId,
         kind: "smoke",
         cases: suiteCases,
@@ -159,7 +161,10 @@ async function runSmokeSuite({ suiteId, userId, companyId }) {
   const project = await McpProject.findOne(projectQuery);
   if (!project) throw new Error("Smoke suite has no project");
 
-  const config = project.config;
+  const { config } = await mcpProjects.resolveConfig({
+    projectId: suite.projectId,
+    companyId,
+  });
   const results = [];
 
   for (const c of suite.cases) {

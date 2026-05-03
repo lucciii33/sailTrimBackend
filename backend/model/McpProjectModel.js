@@ -5,6 +5,7 @@ const mcpProjectSchema = new mongoose.Schema(
     projectName: { type: String, required: true },
     name: { type: String, required: true },
     config: { type: mongoose.Schema.Types.Mixed, required: true },
+    configEncrypted: { type: String },
     resources: [mongoose.Schema.Types.Mixed],
     prompts: [mongoose.Schema.Types.Mixed],
     lastConnectedAt: Date,

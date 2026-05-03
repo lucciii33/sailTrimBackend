@@ -141,6 +141,19 @@ function parseMaybeJson(value) {
   }
 }
 
+function sampleArraysForDocs(value) {
+  if (Array.isArray(value)) {
+    return value.length ? [sampleArraysForDocs(value[0])] : [];
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce((acc, [key, child]) => {
+      acc[key] = sampleArraysForDocs(child);
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
 function extractToolResponseJson(toolResponse) {
   if (!toolResponse) return null;
   if (toolResponse.structuredContent !== undefined) {
@@ -212,7 +225,7 @@ async function verifyToolResponse({ config, tool, sampleArgsOverride, userId, co
     };
   }
 
-  const sampleResponse = extractToolResponseJson(result.toolResponse);
+  const sampleResponse = sampleArraysForDocs(extractToolResponseJson(result.toolResponse));
   const inferredOutputSchema = inferJsonSchema(sampleResponse);
   return {
     responseVerified: true,

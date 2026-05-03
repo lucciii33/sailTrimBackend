@@ -7,6 +7,20 @@ const mcpSmoke = require("../services/mcpSmokeService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const McpBug = require("../model/McpBugModel.js");
+const McpQaRun = require("../model/McpQaRunModel.js");
+const McpProject = require("../model/McpProjectModel.js");
+const McpUsageEvent = require("../model/McpUsageEventModel.js");
+
+const FREE_LIMITS = {
+  projects: 2,
+  docs_generate: 3,
+  qa_run: 5,
+  smoke_generate: 3,
+  smoke_run: 5,
+};
+
+const UPGRADE_MESSAGE =
+  "Free trial limit reached. If you need more QA runs, smoke tests, or MCP docs, please contact the provider to upgrade to the paid version.";
 
 function ctx(req) {
   return {
@@ -21,6 +35,38 @@ function requireCompany(req, res) {
     return false;
   }
   return true;
+}
+
+function monthStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+async function requireMonthlyLimit(req, res, action) {
+  const used = await McpUsageEvent.countDocuments({
+    companyId: req.user.companyId,
+    action,
+    createdAt: { $gte: monthStart() },
+  });
+  if (used >= FREE_LIMITS[action]) {
+    res.status(403).json({
+      message: UPGRADE_MESSAGE,
+      action,
+      limit: FREE_LIMITS[action],
+      used,
+    });
+    return false;
+  }
+  return true;
+}
+
+async function recordUsage(req, action, projectId) {
+  await McpUsageEvent.create({
+    action,
+    projectId,
+    userId: req.user._id,
+    companyId: req.user.companyId,
+  });
 }
 
 /**
@@ -63,6 +109,26 @@ const saveProject = asyncHandler(async (req, res) => {
   const { projectName, config, save = true, tags, sampleArgsByTool } = req.body;
   if (!projectName) return res.status(400).json({ message: "projectName required" });
   if (!config) return res.status(400).json({ message: "config required" });
+
+  const existingProject = await McpProject.findOne({
+    companyId: req.user.companyId,
+    projectName,
+  });
+  if (!existingProject) {
+    const projectCount = await McpProject.countDocuments({
+      companyId: req.user.companyId,
+    });
+    if (projectCount >= FREE_LIMITS.projects) {
+      return res.status(403).json({
+        message: UPGRADE_MESSAGE,
+        action: "projects",
+        limit: FREE_LIMITS.projects,
+        used: projectCount,
+      });
+    }
+  }
+  if (!(await requireMonthlyLimit(req, res, "docs_generate"))) return;
+
   const out = await mcpProjects.saveProject({
     projectName,
     config,
@@ -71,13 +137,14 @@ const saveProject = asyncHandler(async (req, res) => {
   const projectId = out.project._id;
 
   const docsOut = await mcpDocs.generateDocs({
-    config: out.project.config,
+    config: out.config,
     projectId,
     save,
     tags: tags || [],
     sampleArgsByTool: sampleArgsByTool || {},
     ...ctx(req),
   });
+  await recordUsage(req, "docs_generate", projectId);
 
   const overview = await mcpProjects.getProjectOverview({
     projectId,
@@ -184,6 +251,7 @@ const generateDocs = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
   const { projectId, provider, model, save = true, tags, sampleArgsByTool } = req.body;
   if (!projectId) return res.status(400).json({ message: "projectId required" });
+  if (!(await requireMonthlyLimit(req, res, "docs_generate"))) return;
 
   const { config } = await mcpProjects.resolveConfig({
     projectId,
@@ -200,6 +268,7 @@ const generateDocs = asyncHandler(async (req, res) => {
     sampleArgsByTool: sampleArgsByTool || {},
     ...ctx(req),
   });
+  await recordUsage(req, "docs_generate", projectId);
 
   const overview = await mcpProjects.getProjectOverview({
     projectId,
@@ -255,8 +324,9 @@ const deleteDoc = asyncHandler(async (req, res) => {
 /** POST /api/mcp-lab/qa/run */
 const runQa = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
-  const { projectId, toolName, sampleArgsByTool, maxCasesPerTool, save = true } = req.body;
+  const { projectId, toolName, sampleArgsByTool, save = true } = req.body;
   if (!projectId) return res.status(400).json({ message: "projectId required" });
+  if (!(await requireMonthlyLimit(req, res, "qa_run"))) return;
 
   const { config } = await mcpProjects.resolveConfig({
     projectId,
@@ -268,29 +338,75 @@ const runQa = asyncHandler(async (req, res) => {
     projectId,
     toolName,
     sampleArgsByTool: sampleArgsByTool || {},
-    maxCasesPerTool: maxCasesPerTool || 5,
+    maxCasesPerTool: 3,
     save,
     ...ctx(req),
   });
+  await recordUsage(req, "qa_run", projectId);
   res.json(out);
+});
+
+/** GET /api/mcp-lab/qa/runs */
+const listQaRuns = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const q = { companyId: req.user.companyId };
+  if (req.query.projectId) q.projectId = req.query.projectId;
+  if (req.query.serverName) q.serverName = req.query.serverName;
+
+  const runs = await McpQaRun.find(q)
+    .select("projectId serverName serverUrl transport summary generatedBy createdAt updatedAt")
+    .sort({ createdAt: -1 });
+
+  res.json({ runs });
+});
+
+/** GET /api/mcp-lab/qa/runs/:id */
+const getQaRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpQaRun.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ run });
+});
+
+/** DELETE /api/mcp-lab/qa/runs/:id */
+const deleteQaRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpQaRun.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+
+  const bugs = await McpBug.deleteMany({
+    qaRunId: run._id,
+    companyId: req.user.companyId,
+  });
+
+  res.json({ ok: true, deletedBugCount: bugs.deletedCount || 0 });
 });
 
 /** POST /api/mcp-lab/projects/:id/smoke/generate */
 const generateSmoke = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
   const { provider, model } = req.body || {};
+  if (!(await requireMonthlyLimit(req, res, "smoke_generate"))) return;
   const out = await mcpSmoke.generateSmokeSuite({
     projectId: req.params.id,
     provider: provider || "anthropic",
     model,
     ...ctx(req),
   });
+  await recordUsage(req, "smoke_generate", req.params.id);
   res.json(out);
 });
 
 /** POST /api/mcp-lab/projects/:id/smoke/run */
 const runSmoke = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
+  if (!(await requireMonthlyLimit(req, res, "smoke_run"))) return;
   const suite = await McpSuite.findOne({
     projectId: req.params.id,
     kind: "smoke",
@@ -305,6 +421,7 @@ const runSmoke = asyncHandler(async (req, res) => {
     suiteId: suite._id,
     ...ctx(req),
   });
+  await recordUsage(req, "smoke_run", req.params.id);
   res.json(out);
 });
 
@@ -344,6 +461,17 @@ const updateBugStatus = asyncHandler(async (req, res) => {
   );
   if (!bug) return res.status(404).json({ message: "Not found" });
   res.json({ bug });
+});
+
+/** DELETE /api/mcp-lab/bugs/:id */
+const deleteBug = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const bug = await McpBug.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!bug) return res.status(404).json({ message: "Not found" });
+  res.json({ ok: true });
 });
 
 /** POST /api/mcp-lab/compare/:traceId */
@@ -524,11 +652,15 @@ module.exports = {
   getDoc,
   deleteDoc,
   runQa,
+  listQaRuns,
+  getQaRun,
+  deleteQaRun,
   generateSmoke,
   runSmoke,
   getSmoke,
   listBugs,
   updateBugStatus,
+  deleteBug,
   compare,
   listTraces,
   getTrace,

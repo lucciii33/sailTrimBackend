@@ -3,6 +3,62 @@ const McpTool = require("../model/McpToolModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const McpBug = require("../model/McpBugModel.js");
 const mcpLab = require("./mcpLabService.js");
+const { encrypt, decrypt } = require("./secretCrypto");
+
+const SECRET_KEYS = new Set([
+  "authorization",
+  "bearerToken",
+  "apiKey",
+  "api_key",
+  "token",
+  "accessToken",
+  "access_token",
+  "refreshToken",
+  "refresh_token",
+  "clientSecret",
+  "client_secret",
+  "secret",
+  "password",
+]);
+
+function isSecretKey(key = "") {
+  return SECRET_KEYS.has(key) || /token|secret|password|api[-_]?key/i.test(key);
+}
+
+function sanitizeConfig(value) {
+  if (Array.isArray(value)) return value.map(sanitizeConfig);
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce((acc, [key, child]) => {
+      acc[key] = isSecretKey(key) ? "***encrypted***" : sanitizeConfig(child);
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
+function encryptConfig(config) {
+  return encrypt(JSON.stringify(config || {}));
+}
+
+function decryptConfig(project) {
+  if (project?.configEncrypted) {
+    const raw = decrypt(project.configEncrypted);
+    return raw ? JSON.parse(raw) : {};
+  }
+  return project?.config || {};
+}
+
+async function decryptAndMigrateConfig(project) {
+  if (project?.configEncrypted) return decryptConfig(project);
+
+  const legacyConfig = project?.config || {};
+  if (project) {
+    project.config = sanitizeConfig(legacyConfig);
+    project.configEncrypted = encryptConfig(legacyConfig);
+    await project.save();
+  }
+  return legacyConfig;
+}
 
 async function upsertProjectTools({ project, tools, userId, companyId }) {
   if (!tools?.length) {
@@ -53,7 +109,8 @@ async function saveProject({ projectName, config, userId, companyId }) {
       $set: {
         projectName,
         name: projectName,
-        config,
+        config: sanitizeConfig(config),
+        configEncrypted: encryptConfig(config),
         resources,
         prompts,
         lastConnectedAt: new Date(),
@@ -70,7 +127,7 @@ async function saveProject({ projectName, config, userId, companyId }) {
     companyId,
   });
 
-  return { project, tools: projectTools, resources, prompts };
+  return { project, config, tools: projectTools, resources, prompts };
 }
 
 async function getProject({ projectId, companyId }) {
@@ -100,7 +157,7 @@ async function getProjectOverview({ projectId, companyId }) {
 async function resolveConfig({ projectId, config, companyId }) {
   if (!projectId) return { project: null, config };
   const project = await getProject({ projectId, companyId });
-  return { project, config: project.config };
+  return { project, config: await decryptAndMigrateConfig(project) };
 }
 
 async function listProjects({ companyId }) {
@@ -122,4 +179,5 @@ module.exports = {
   resolveConfig,
   listProjects,
   listProjectTools,
+  decryptConfig,
 };
