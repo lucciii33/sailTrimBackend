@@ -42,14 +42,14 @@ function fallbackSmokeCases({ tools, docByName }) {
   });
 }
 
-async function generateSmokeSuite({ projectId, userId, provider = "anthropic", model }) {
+async function generateSmokeSuite({ projectId, userId, companyId, provider = "anthropic", model }) {
   const projectQuery = { _id: projectId };
-  if (userId) projectQuery.userId = userId;
+  if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
   if (!project) throw new Error("MCP project not found");
 
   const toolsQuery = { projectId };
-  if (userId) toolsQuery.userId = userId;
+  if (companyId) toolsQuery.companyId = companyId;
   const [tools, docs] = await Promise.all([
     McpTool.find(toolsQuery).sort({ name: 1 }),
     McpDoc.find(toolsQuery),
@@ -123,7 +123,7 @@ async function generateSmokeSuite({ projectId, userId, provider = "anthropic", m
   }));
 
   const filter = { projectId, kind: "smoke" };
-  if (userId) filter.userId = userId;
+  if (companyId) filter.companyId = companyId;
 
   const suite = await McpSuite.findOneAndUpdate(
     filter,
@@ -139,6 +139,7 @@ async function generateSmokeSuite({ projectId, userId, provider = "anthropic", m
         cases: suiteCases,
         generatedBy: { provider: usedProvider, model: usedModel },
         userId,
+        companyId,
       },
     },
     { new: true, upsert: true }
@@ -147,14 +148,14 @@ async function generateSmokeSuite({ projectId, userId, provider = "anthropic", m
   return { suite, generatedBy: { provider: usedProvider, model: usedModel } };
 }
 
-async function runSmokeSuite({ suiteId, userId }) {
+async function runSmokeSuite({ suiteId, userId, companyId }) {
   const filter = { _id: suiteId };
-  if (userId) filter.userId = userId;
+  if (companyId) filter.companyId = companyId;
   const suite = await McpSuite.findOne(filter);
   if (!suite) throw new Error("Smoke suite not found");
 
   const projectQuery = { _id: suite.projectId };
-  if (userId) projectQuery.userId = userId;
+  if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
   if (!project) throw new Error("Smoke suite has no project");
 
@@ -172,6 +173,7 @@ async function runSmokeSuite({ suiteId, userId }) {
       saveTrace: false,
       tags: [`smoke:${suite._id}`],
       userId,
+      companyId,
     });
     const ok = run.status === "ok" && !run.error;
     const parsedResponse = run.toolResponse

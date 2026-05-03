@@ -3,6 +3,8 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
+const Company = require("../model/companyModel");
+const CompanyInvite = require("../model/companyInviteModel");
 // const Mailjet = require("node-mailjet");
 
 // const mailjet = Mailjet.apiConnect(
@@ -13,20 +15,36 @@ const User = require("../model/userModel");
 // console.log("process.env.MJ_APIKEY_PUBLIC", process.env.MJ_APIKEY_PUBLIC);
 
 // Description: Register a user
-// Route:       POST /api/users/
+// Route:       POST /api/user/register
 // Access:      Public
 const registerUser = asyncHandler(async (req, res) => {
-  const { firstName, lastName, email, password, pais, edad, terms } = req.body;
-  const normalizedEmail = email.toLowerCase();
-  if (
-    !firstName ||
-    !lastName ||
-    !normalizedEmail ||
-    !password ||
-    !pais ||
-    !edad ||
-    !terms
-  ) {
+  const {
+    name,
+    fullName,
+    displayName,
+    firstName: bodyFirstName,
+    lastName: bodyLastName,
+    email,
+    password,
+    pais,
+    country,
+    edad,
+    age,
+    terms,
+    termsAccepted,
+    inviteToken,
+  } = req.body;
+  const normalizedEmail = email ? email.toLowerCase().trim() : "";
+  const fallbackName = name || fullName || displayName || "";
+  const [fallbackFirstName, ...fallbackLastNameParts] = fallbackName.trim().split(/\s+/);
+  const firstName = bodyFirstName || fallbackFirstName;
+  const lastName =
+    bodyLastName || fallbackLastNameParts.join(" ") || firstName || "User";
+  const normalizedPais = pais || country;
+  const normalizedEdad = edad || age;
+  const normalizedTerms = terms ?? termsAccepted ?? false;
+
+  if (!firstName || !lastName || !normalizedEmail || !password) {
     res.status(400);
     throw new Error("Por Favor completa todo los campos.");
   }
@@ -73,16 +91,52 @@ const registerUser = asyncHandler(async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
 
+  let companyId = null;
+  let userRole = "owner";
+
+  if (inviteToken) {
+    const invite = await CompanyInvite.findOne({
+      token: inviteToken,
+      acceptedAt: null,
+      expiresAt: { $gt: new Date() },
+    });
+    if (!invite) {
+      res.status(400);
+      throw new Error("Invitación inválida o expirada");
+    }
+    if (invite.email.toLowerCase() !== normalizedEmail) {
+      res.status(400);
+      throw new Error("La invitación es para otro email");
+    }
+    companyId = invite.companyId;
+    userRole = invite.role || "member";
+  }
+
   const user = await User.create({
     firstName,
     lastName,
     email: normalizedEmail,
     password: hashedPassword,
-    pais,
-    edad,
-    role: "USER",
-    terms,
+    pais: normalizedPais,
+    edad: normalizedEdad,
+    terms: normalizedTerms,
+    companyId,
+    role: userRole,
   });
+
+  if (!companyId) {
+    const company = await Company.create({
+      name: `${firstName}'s Workspace`,
+      ownerUserId: user._id,
+    });
+    user.companyId = company._id;
+    await user.save();
+  } else {
+    await CompanyInvite.updateOne(
+      { token: inviteToken },
+      { $set: { acceptedAt: new Date() } }
+    );
+  }
 
   // const request = mailjet.post("send", { version: "v3.1" }).request({
   //   Messages: [
@@ -129,6 +183,9 @@ const registerUser = asyncHandler(async (req, res) => {
     pais: user.pais,
     edad: user.edad,
     terms: user.terms,
+    companyId: user.companyId,
+    role: user.role,
+    token: generateToken(user._id),
   });
 });
 
@@ -158,6 +215,8 @@ const loginUser = asyncHandler(async (req, res) => {
       customerId: user.customerId,
       secretKeyStripe: user.secretKeyStripe,
       daysStudy: user.daysStudy,
+      companyId: user.companyId,
+      role: user.role,
     });
   } else {
     res.status(400);

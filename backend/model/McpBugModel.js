@@ -36,11 +36,12 @@ const mcpBugSchema = new mongoose.Schema(
       default: "open",
     },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
   },
   { timestamps: true }
 );
 
-mcpBugSchema.index({ projectId: 1, toolId: 1, status: 1, createdAt: -1 });
-mcpBugSchema.index({ projectId: 1, toolName: 1, status: 1, createdAt: -1 });
+mcpBugSchema.index({ companyId: 1, projectId: 1, status: 1, createdAt: -1 });
+mcpBugSchema.index({ companyId: 1, toolName: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("McpBug", mcpBugSchema);

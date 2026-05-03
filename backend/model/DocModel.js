@@ -35,6 +35,9 @@ const docSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
 });
+
+docSchema.index({ companyId: 1, owner: 1, repo: 1 });
 
 module.exports = mongoose.model("Doc", docSchema);

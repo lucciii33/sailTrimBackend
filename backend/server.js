@@ -245,9 +245,8 @@ app.use(cors());
 const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
 app.use("/api/user", require("./routes/userRoutes"));
+app.use("/api/company", require("./routes/companyRoutes"));
 app.use("/api/checkout", require("./routes/checkoutRoutes"));
-app.use("/api/fridge", require("./routes/fridgeRoutes"));
-app.use("/api/recipe", require("./routes/recipeRoutes"));
 app.use("/api/inventory", require("./routes/inventoryRoutes"));
 app.use("/api/order", require("./routes/orderRoutes"));
 app.use("/api/docs", require("./routes/docRoutes"));

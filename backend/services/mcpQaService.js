@@ -305,6 +305,7 @@ async function runQa({
   model,
   save = true,
   userId,
+  companyId,
   sampleArgsByTool = {},
   maxCasesPerTool = 5,
 }) {
@@ -315,7 +316,7 @@ async function runQa({
   if (toolName && !tools.length) {
     throw new Error(`Tool "${toolName}" not found on server`);
   }
-  const projectScopedQuery = userId ? { projectId, userId } : { projectId };
+  const projectScopedQuery = companyId ? { projectId, companyId } : { projectId };
   const [projectTools, projectDocs] = projectId
     ? await Promise.all([
         McpTool.find(projectScopedQuery),
@@ -329,7 +330,7 @@ async function runQa({
     projectId,
     serverName,
     serverUrl: config.url,
-    userId,
+    companyId,
     limit: 500,
   });
   const generated = await generateCases({
@@ -354,6 +355,7 @@ async function runQa({
       saveTrace: false,
       tags: ["mcp-qa"],
       userId,
+      companyId,
     });
     const parsedResponse = mcpDocs.extractToolResponseJson(run.toolResponse);
     const execution = {
@@ -430,6 +432,7 @@ async function runQa({
       bugs,
       generatedBy: payload.generatedBy,
       userId,
+      companyId,
     });
     payload.runId = saved._id;
 
@@ -446,6 +449,7 @@ async function runQa({
           transport: config.transport || "http",
           status: "open",
           userId,
+          companyId,
         }))
       );
     }

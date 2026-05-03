@@ -394,21 +394,21 @@ function truncateForLLM(body) {
 
 // ---------- Orchestrator ----------
 
-async function findBugs({ docId, userId }) {
+async function findBugs({ docId, userId, companyId }) {
   const doc = await Doc.findById(docId);
   if (!doc) {
     const err = new Error("Doc not found");
     err.statusCode = 404;
     throw err;
   }
-  if (String(doc.userId) !== String(userId)) {
+  if (String(doc.companyId) !== String(companyId)) {
     const err = new Error("Not authorized for this doc");
     err.statusCode = 403;
     throw err;
   }
 
   const config = await ApiQaConfig.findOne({
-    userId,
+    companyId,
     owner: doc.owner,
     repo: doc.repo,
   });
@@ -474,6 +474,7 @@ async function findBugs({ docId, userId }) {
         executions[0];
       return {
         userId,
+        companyId,
         docId: doc._id,
         owner: doc.owner,
         repo: doc.repo,
@@ -494,6 +495,7 @@ async function findBugs({ docId, userId }) {
   // 5) persist the full run so the user can re-open it later
   const savedRun = await TestRun.create({
     userId,
+    companyId,
     docId: doc._id,
     owner: doc.owner,
     repo: doc.repo,

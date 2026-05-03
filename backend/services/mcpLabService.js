@@ -157,7 +157,7 @@ async function listPrompts(config) {
 // Direct tool invocation (manual playground)
 // -------------------------------------------------------------
 
-async function invokeTool({ config, toolName, args, saveTrace = true, tags = [], userId }) {
+async function invokeTool({ config, toolName, args, saveTrace = true, tags = [], userId, companyId }) {
   const started = Date.now();
   let toolResponse = null;
   let toolSchema = null;
@@ -194,6 +194,7 @@ async function invokeTool({ config, toolName, args, saveTrace = true, tags = [],
       provider: "none",
       tags,
       userId,
+      companyId,
     });
   }
 
@@ -241,6 +242,7 @@ async function runPromptAgainstMcp({
   saveTrace = true,
   tags = [],
   userId,
+  companyId,
 }) {
   const started = Date.now();
   return withClient(config, async (client) => {
@@ -334,6 +336,7 @@ async function runPromptAgainstMcp({
         model: model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL),
         tags,
         userId,
+        companyId,
       });
     }
 
@@ -396,9 +399,9 @@ function safeParseJson(txt) {
   }
 }
 
-async function judgeTrace({ traceId, provider = "openai", model, userId }) {
+async function judgeTrace({ traceId, provider = "openai", model, companyId }) {
   const filter = { _id: traceId };
-  if (userId) filter.userId = userId;
+  if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
   if (!trace) throw new Error("Trace not found");
 
@@ -526,9 +529,9 @@ Return STRICT JSON:
   "missingInApi": string[]
 }`;
 
-async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, userId }) {
+async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, companyId }) {
   const filter = { _id: traceId };
-  if (userId) filter.userId = userId;
+  if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
   if (!trace) throw new Error("Trace not found");
 

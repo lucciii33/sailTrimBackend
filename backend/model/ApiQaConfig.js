@@ -21,6 +21,11 @@ const apiQaConfigSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Company",
+    index: true,
+  },
   owner: { type: String, required: true },
   repo: { type: String, required: true },
   baseUrl: { type: String, required: true },
@@ -31,7 +36,7 @@ const apiQaConfigSchema = new mongoose.Schema({
 });
 
 apiQaConfigSchema.index(
-  { userId: 1, owner: 1, repo: 1 },
+  { companyId: 1, owner: 1, repo: 1 },
   { unique: true }
 );
 

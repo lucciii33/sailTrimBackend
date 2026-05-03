@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router()
 const {registerUser, loginUser, resetLoginDays, resetPassword, forgotPassword} = require('../controllers/userController') 
 
+router.route('/').post(registerUser)
 router.route('/register').post(registerUser)
 router.route('/login').post(loginUser)
 router.route('/reset-password/:token').put(resetPassword)

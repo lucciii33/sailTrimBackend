@@ -62,17 +62,17 @@ const mcpDocSchema = new mongoose.Schema(
       model: String,
     },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
   },
   { timestamps: true }
 );
 
 mcpDocSchema.index({
-  serverName: 1,
+  companyId: 1,
   projectId: 1,
   serverUrl: 1,
   transport: 1,
   toolName: 1,
-  userId: 1,
 });
 
 module.exports = mongoose.model("McpDoc", mcpDocSchema);

@@ -57,6 +57,16 @@ const userSchema = mongoose.Schema(
       type: String,
       required: false,
     },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      index: true,
+    },
+    role: {
+      type: String,
+      enum: ["owner", "member"],
+      default: "owner",
+    },
   },
   {
     timestamps: true,

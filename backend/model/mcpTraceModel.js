@@ -63,12 +63,13 @@ const mcpTraceSchema = new mongoose.Schema(
 
     // --- Ownership ---
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
   },
   { timestamps: true }
 );
 
-mcpTraceSchema.index({ userId: 1, createdAt: -1 });
-mcpTraceSchema.index({ userId: 1, serverName: 1, createdAt: -1 });
+mcpTraceSchema.index({ companyId: 1, createdAt: -1 });
+mcpTraceSchema.index({ companyId: 1, serverName: 1, createdAt: -1 });
 
 /**
  * A Suite = a collection of test cases you run against an MCP server.
@@ -87,6 +88,7 @@ const mcpSuiteSchema = new mongoose.Schema(
       model: String,
     },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
     cases: [
       {
         name: String,
@@ -100,7 +102,7 @@ const mcpSuiteSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-mcpSuiteSchema.index({ projectId: 1, kind: 1, userId: 1 });
+mcpSuiteSchema.index({ companyId: 1, projectId: 1, kind: 1 });
 
 const McpTrace = mongoose.model("McpTrace", mcpTraceSchema);
 const McpSuite = mongoose.model("McpSuite", mcpSuiteSchema);

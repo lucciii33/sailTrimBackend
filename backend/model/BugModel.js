@@ -27,6 +27,11 @@ const bugSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Company",
+    index: true,
+  },
   docId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Doc",
@@ -55,6 +60,6 @@ const bugSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-bugSchema.index({ userId: 1, docId: 1, createdAt: -1 });
+bugSchema.index({ companyId: 1, docId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Bug", bugSchema);

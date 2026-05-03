@@ -5,6 +5,14 @@ const TestRun = require("../model/TestRunModel");
 const { encrypt, maskSecret, decrypt } = require("../services/secretCrypto");
 const apiQAService = require("../services/apiQAService");
 
+function requireCompany(req, res) {
+  if (!req.user.companyId) {
+    res.status(400).json({ message: "User has no company" });
+    return false;
+  }
+  return true;
+}
+
 function serializeConfig(cfg) {
   if (!cfg) return null;
   const auth = cfg.auth || { type: "none" };
@@ -28,9 +36,10 @@ function serializeConfig(cfg) {
 }
 
 async function getConfig(req, res) {
+  if (!requireCompany(req, res)) return;
   const { owner, repo } = req.params;
   const cfg = await ApiQaConfig.findOne({
-    userId: req.user._id,
+    companyId: req.user.companyId,
     owner,
     repo,
   });
@@ -39,6 +48,7 @@ async function getConfig(req, res) {
 }
 
 async function upsertConfig(req, res) {
+  if (!requireCompany(req, res)) return;
   const { owner, repo } = req.params;
   const { baseUrl, auth = {}, defaultHeaders = {} } = req.body;
 
@@ -48,6 +58,7 @@ async function upsertConfig(req, res) {
 
   const update = {
     userId: req.user._id,
+    companyId: req.user.companyId,
     owner,
     repo,
     baseUrl,
@@ -63,7 +74,7 @@ async function upsertConfig(req, res) {
   };
 
   const cfg = await ApiQaConfig.findOneAndUpdate(
-    { userId: req.user._id, owner, repo },
+    { companyId: req.user.companyId, owner, repo },
     update,
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
@@ -72,11 +83,13 @@ async function upsertConfig(req, res) {
 }
 
 async function findBugs(req, res) {
+  if (!requireCompany(req, res)) return;
   const { docId } = req.params;
   try {
     const result = await apiQAService.findBugs({
       docId,
       userId: req.user._id,
+      companyId: req.user.companyId,
     });
     res.json(result);
   } catch (err) {
@@ -87,24 +100,34 @@ async function findBugs(req, res) {
 }
 
 async function getBugs(req, res) {
+  if (!requireCompany(req, res)) return;
   const { docId } = req.params;
-  const bugs = await Bug.find({ userId: req.user._id, docId }).sort({
-    createdAt: -1,
-  });
+  const bugs = await Bug.find({
+    companyId: req.user.companyId,
+    docId,
+  }).sort({ createdAt: -1 });
   res.json(bugs);
 }
 
 async function deleteBug(req, res) {
-  await Bug.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+  if (!requireCompany(req, res)) return;
+  await Bug.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
   res.json({ message: "Bug deleted" });
 }
 
 async function getCollection(req, res) {
+  if (!requireCompany(req, res)) return;
   const { docId } = req.params;
-  const doc = await Doc.findOne({ _id: docId, userId: req.user._id });
+  const doc = await Doc.findOne({
+    _id: docId,
+    companyId: req.user.companyId,
+  });
   if (!doc) return res.status(404).json({ message: "Doc not found" });
   const config = await ApiQaConfig.findOne({
-    userId: req.user._id,
+    companyId: req.user.companyId,
     owner: doc.owner,
     repo: doc.repo,
   });
@@ -121,18 +144,20 @@ async function getCollection(req, res) {
 }
 
 async function listRuns(req, res) {
+  if (!requireCompany(req, res)) return;
   const { docId } = req.params;
   const runs = await TestRun.find(
-    { userId: req.user._id, docId },
-    { executions: 0 } // omit heavy executions on list view
+    { companyId: req.user.companyId, docId },
+    { executions: 0 }
   ).sort({ createdAt: -1 });
   res.json(runs);
 }
 
 async function getRun(req, res) {
+  if (!requireCompany(req, res)) return;
   const run = await TestRun.findOne({
     _id: req.params.id,
-    userId: req.user._id,
+    companyId: req.user.companyId,
   });
   if (!run) return res.status(404).json({ message: "Run not found" });
   res.json(run);

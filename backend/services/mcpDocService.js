@@ -187,7 +187,7 @@ function inferJsonSchema(value) {
   return {};
 }
 
-async function verifyToolResponse({ config, tool, sampleArgsOverride, userId }) {
+async function verifyToolResponse({ config, tool, sampleArgsOverride, userId, companyId }) {
   const sampleArgs = sampleArgsOverride || sampleArgsFromSchema(tool.inputSchema || {});
   const result = await mcpLab.invokeTool({
     config,
@@ -195,6 +195,7 @@ async function verifyToolResponse({ config, tool, sampleArgsOverride, userId }) 
     args: sampleArgs,
     saveTrace: false,
     userId,
+    companyId,
   });
 
   if (result.status !== "ok" || result.error) {
@@ -385,7 +386,7 @@ async function curateToolDocs({ tools, provider, model }) {
   throw new Error(`Unknown docs provider: ${chosenProvider}`);
 }
 
-async function saveDocs({ docs, config, projectId, userId, tags = [] }) {
+async function saveDocs({ docs, config, projectId, userId, companyId, tags = [] }) {
   if (!docs.length) return 0;
 
   const serverName = config.name || config.url || "unnamed";
@@ -397,7 +398,7 @@ async function saveDocs({ docs, config, projectId, userId, tags = [] }) {
         serverUrl: config.url,
         transport: config.transport || "http",
         toolName: doc.toolName,
-        userId,
+        companyId,
       },
       update: {
         $set: {
@@ -407,6 +408,7 @@ async function saveDocs({ docs, config, projectId, userId, tags = [] }) {
           serverUrl: config.url,
           transport: config.transport || "http",
           userId,
+          companyId,
           tags,
           updatedAt: new Date(),
         },
@@ -426,6 +428,7 @@ async function generateDocs({
   model,
   save = true,
   userId,
+  companyId,
   tags = [],
   sampleArgsByTool = {},
 }) {
@@ -438,6 +441,7 @@ async function generateDocs({
         tool,
         sampleArgsOverride: sampleArgsByTool[tool.name],
         userId,
+        companyId,
       }).catch((err) => ({
         responseVerified: false,
         responseStatus: "unverified",
@@ -489,7 +493,9 @@ async function generateDocs({
       model: generatedBy.model,
     }),
   }).map((doc) => ({ ...doc, projectId }));
-  const savedCount = save ? await saveDocs({ docs, config, projectId, userId, tags }) : 0;
+  const savedCount = save
+    ? await saveDocs({ docs, config, projectId, userId, companyId, tags })
+    : 0;
   const toolResponses = verifications.reduce((acc, verification) => {
     acc[verification.toolName] = {
       responseVerified: verification.responseVerified,
@@ -513,13 +519,13 @@ async function generateDocs({
   };
 }
 
-async function listDocs({ serverName, serverUrl, toolName, projectId, userId, limit = 100 }) {
+async function listDocs({ serverName, serverUrl, toolName, projectId, companyId, limit = 100 }) {
   const q = {};
   if (projectId) q.projectId = projectId;
   if (serverName) q.serverName = serverName;
   if (serverUrl) q.serverUrl = serverUrl;
   if (toolName) q.toolName = toolName;
-  if (userId) q.userId = userId;
+  if (companyId) q.companyId = companyId;
   return McpDoc.find(q).sort({ updatedAt: -1 }).limit(Number(limit));
 }
 

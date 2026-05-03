@@ -9,10 +9,11 @@ const mcpProjectSchema = new mongoose.Schema(
     prompts: [mongoose.Schema.Types.Mixed],
     lastConnectedAt: Date,
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
   },
   { timestamps: true }
 );
 
-mcpProjectSchema.index({ userId: 1, projectName: 1 }, { unique: true });
+mcpProjectSchema.index({ companyId: 1, projectName: 1 }, { unique: true });
 
 module.exports = mongoose.model("McpProject", mcpProjectSchema);

@@ -25,11 +25,12 @@ const mcpQaRunSchema = new mongoose.Schema(
       model: String,
     },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
   },
   { timestamps: true }
 );
 
-mcpQaRunSchema.index({ userId: 1, serverName: 1, createdAt: -1 });
-mcpQaRunSchema.index({ userId: 1, projectId: 1, createdAt: -1 });
+mcpQaRunSchema.index({ companyId: 1, serverName: 1, createdAt: -1 });
+mcpQaRunSchema.index({ companyId: 1, projectId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("McpQaRun", mcpQaRunSchema);
