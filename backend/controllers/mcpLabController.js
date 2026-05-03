@@ -113,7 +113,13 @@ const invokeTool = asyncHandler(async (req, res) => {
   const { config, toolName, args, tags } = req.body;
   if (!config || !toolName)
     return res.status(400).json({ message: "config and toolName required" });
-  const result = await mcpLab.invokeTool({ config, toolName, args, tags });
+  const result = await mcpLab.invokeTool({
+    config,
+    toolName,
+    args,
+    tags,
+    userId: req.user._id,
+  });
   res.json(result);
 });
 
@@ -132,6 +138,7 @@ const runPrompt = asyncHandler(async (req, res) => {
     provider: provider || "openai",
     model,
     tags,
+    userId: req.user._id,
   });
   res.json(result);
 });
@@ -147,6 +154,7 @@ const judge = asyncHandler(async (req, res) => {
     traceId,
     provider: provider || "openai",
     model,
+    userId: req.user._id,
   });
   res.json({ trace });
 });
@@ -222,14 +230,18 @@ const listDocs = asyncHandler(async (req, res) => {
 
 /** GET /api/mcp-lab/docs/:id */
 const getDoc = asyncHandler(async (req, res) => {
-  const doc = await McpDoc.findById(req.params.id);
+  const doc = await McpDoc.findOne({ _id: req.params.id, userId: req.user._id });
   if (!doc) return res.status(404).json({ message: "Not found" });
   res.json({ doc });
 });
 
 /** DELETE /api/mcp-lab/docs/:id */
 const deleteDoc = asyncHandler(async (req, res) => {
-  await McpDoc.findByIdAndDelete(req.params.id);
+  const doc = await McpDoc.findOneAndDelete({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+  if (!doc) return res.status(404).json({ message: "Not found" });
   res.json({ ok: true });
 });
 
@@ -348,6 +360,7 @@ const compare = asyncHandler(async (req, res) => {
     apiResponse,
     provider: provider || "openai",
     model,
+    userId: req.user._id,
   });
   res.json({ trace });
 });
@@ -357,7 +370,7 @@ const compare = asyncHandler(async (req, res) => {
  */
 const listTraces = asyncHandler(async (req, res) => {
   const { serverName, limit = 50 } = req.query;
-  const q = {};
+  const q = { userId: req.user._id };
   if (serverName) q.serverName = serverName;
   const traces = await McpTrace.find(q)
     .sort({ createdAt: -1 })
@@ -367,14 +380,21 @@ const listTraces = asyncHandler(async (req, res) => {
 
 /** GET /api/mcp-lab/traces/:id */
 const getTrace = asyncHandler(async (req, res) => {
-  const trace = await McpTrace.findById(req.params.id);
+  const trace = await McpTrace.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
   if (!trace) return res.status(404).json({ message: "Not found" });
   res.json({ trace });
 });
 
 /** DELETE /api/mcp-lab/traces/:id */
 const deleteTrace = asyncHandler(async (req, res) => {
-  await McpTrace.findByIdAndDelete(req.params.id);
+  const trace = await McpTrace.findOneAndDelete({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+  if (!trace) return res.status(404).json({ message: "Not found" });
   res.json({ ok: true });
 });
 
@@ -382,26 +402,35 @@ const deleteTrace = asyncHandler(async (req, res) => {
 
 /** POST /api/mcp-lab/suites  body: {name, description, serverName, serverUrl, transport, cases} */
 const createSuite = asyncHandler(async (req, res) => {
-  const suite = await McpSuite.create(req.body);
+  const suite = await McpSuite.create({ ...req.body, userId: req.user._id });
   res.status(201).json({ suite });
 });
 
 /** GET /api/mcp-lab/suites */
-const listSuites = asyncHandler(async (_req, res) => {
-  const suites = await McpSuite.find().sort({ createdAt: -1 });
+const listSuites = asyncHandler(async (req, res) => {
+  const suites = await McpSuite.find({ userId: req.user._id }).sort({
+    createdAt: -1,
+  });
   res.json({ suites });
 });
 
 /** GET /api/mcp-lab/suites/:id */
 const getSuite = asyncHandler(async (req, res) => {
-  const suite = await McpSuite.findById(req.params.id);
+  const suite = await McpSuite.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
   if (!suite) return res.status(404).json({ message: "Not found" });
   res.json({ suite });
 });
 
 /** DELETE /api/mcp-lab/suites/:id */
 const deleteSuite = asyncHandler(async (req, res) => {
-  await McpSuite.findByIdAndDelete(req.params.id);
+  const suite = await McpSuite.findOneAndDelete({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
+  if (!suite) return res.status(404).json({ message: "Not found" });
   res.json({ ok: true });
 });
 
@@ -411,7 +440,10 @@ const deleteSuite = asyncHandler(async (req, res) => {
  * Runs every case in the suite, auto-judges each, returns aggregate.
  */
 const runSuite = asyncHandler(async (req, res) => {
-  const suite = await McpSuite.findById(req.params.id);
+  const suite = await McpSuite.findOne({
+    _id: req.params.id,
+    userId: req.user._id,
+  });
   if (!suite) return res.status(404).json({ message: "Suite not found" });
 
   const {
@@ -436,12 +468,14 @@ const runSuite = asyncHandler(async (req, res) => {
         provider,
         model,
         tags: [`suite:${suite._id}`, `case:${testCase.name}`],
+        userId: req.user._id,
       });
       const judged = run.trace
         ? await mcpLab.judgeTrace({
             traceId: run.trace._id,
             provider: judgeProvider,
             model: judgeModel,
+            userId: req.user._id,
           })
         : null;
 

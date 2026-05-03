@@ -13,6 +13,6 @@ const mcpProjectSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-mcpProjectSchema.index({ userId: 1, projectName: 1 });
+mcpProjectSchema.index({ userId: 1, projectName: 1 }, { unique: true });
 
 module.exports = mongoose.model("McpProject", mcpProjectSchema);

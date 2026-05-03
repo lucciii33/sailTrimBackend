@@ -60,9 +60,15 @@ const mcpTraceSchema = new mongoose.Schema(
     // --- Tags for filtering ---
     suiteId: { type: mongoose.Schema.Types.ObjectId, ref: "McpSuite" },
     tags: [{ type: String }],
+
+    // --- Ownership ---
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
   },
   { timestamps: true }
 );
+
+mcpTraceSchema.index({ userId: 1, createdAt: -1 });
+mcpTraceSchema.index({ userId: 1, serverName: 1, createdAt: -1 });
 
 /**
  * A Suite = a collection of test cases you run against an MCP server.

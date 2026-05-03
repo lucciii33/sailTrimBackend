@@ -315,10 +315,11 @@ async function runQa({
   if (toolName && !tools.length) {
     throw new Error(`Tool "${toolName}" not found on server`);
   }
+  const projectScopedQuery = userId ? { projectId, userId } : { projectId };
   const [projectTools, projectDocs] = projectId
     ? await Promise.all([
-        McpTool.find({ projectId }),
-        McpDoc.find({ projectId }),
+        McpTool.find(projectScopedQuery),
+        McpDoc.find(projectScopedQuery),
       ])
     : [[], []];
   const toolByName = new Map(projectTools.map((tool) => [tool.name, tool]));
@@ -352,6 +353,7 @@ async function runQa({
       args: testCase.args || {},
       saveTrace: false,
       tags: ["mcp-qa"],
+      userId,
     });
     const parsedResponse = mcpDocs.extractToolResponseJson(run.toolResponse);
     const execution = {

@@ -1,56 +1,57 @@
 const express = require("express");
 const router = express.Router();
+const { protect } = require("../middleware/authMiddleware");
 const c = require("../controllers/mcpLabController.js");
 
 // --- Connection / introspection ---
-router.post("/connect", c.connectServer);
-router.post("/tools", c.getTools);
+router.post("/connect", protect, c.connectServer);
+router.post("/tools", protect, c.getTools);
 
 // --- MCP projects ---
-router.post("/projects", c.saveProject);
-router.get("/projects", c.listProjects);
-router.get("/projects/:id", c.getProject);
-router.get("/projects/:id/tools", c.listProjectTools);
+router.post("/projects", protect, c.saveProject);
+router.get("/projects", protect, c.listProjects);
+router.get("/projects/:id", protect, c.getProject);
+router.get("/projects/:id/tools", protect, c.listProjectTools);
 
 // --- Playground / runs ---
-router.post("/invoke", c.invokeTool);
-router.post("/run", c.runPrompt);
+router.post("/invoke", protect, c.invokeTool);
+router.post("/run", protect, c.runPrompt);
 
 // --- LLM-as-Judge ---
-router.post("/judge/:traceId", c.judge);
-router.post("/compare/:traceId", c.compare);
+router.post("/judge/:traceId", protect, c.judge);
+router.post("/compare/:traceId", protect, c.compare);
 
 // --- Test case generator ---
-router.post("/generate-cases", c.generateCases);
+router.post("/generate-cases", protect, c.generateCases);
 
 // --- Generated MCP docs ---
-router.post("/docs/generate", c.generateDocs);
-router.get("/docs", c.listDocs);
-router.get("/docs/:id", c.getDoc);
-router.delete("/docs/:id", c.deleteDoc);
+router.post("/docs/generate", protect, c.generateDocs);
+router.get("/docs", protect, c.listDocs);
+router.get("/docs/:id", protect, c.getDoc);
+router.delete("/docs/:id", protect, c.deleteDoc);
 
 // --- MCP QA agent ---
-router.post("/qa/run", c.runQa);
+router.post("/qa/run", protect, c.runQa);
 
 // --- Smoke suite (per project) ---
-router.get("/projects/:id/smoke", c.getSmoke);
-router.post("/projects/:id/smoke/generate", c.generateSmoke);
-router.post("/projects/:id/smoke/run", c.runSmoke);
+router.get("/projects/:id/smoke", protect, c.getSmoke);
+router.post("/projects/:id/smoke/generate", protect, c.generateSmoke);
+router.post("/projects/:id/smoke/run", protect, c.runSmoke);
 
 // --- MCP bugs ---
-router.get("/bugs", c.listBugs);
-router.patch("/bugs/:id/status", c.updateBugStatus);
+router.get("/bugs", protect, c.listBugs);
+router.patch("/bugs/:id/status", protect, c.updateBugStatus);
 
 // --- Traces ---
-router.get("/traces", c.listTraces);
-router.get("/traces/:id", c.getTrace);
-router.delete("/traces/:id", c.deleteTrace);
+router.get("/traces", protect, c.listTraces);
+router.get("/traces/:id", protect, c.getTrace);
+router.delete("/traces/:id", protect, c.deleteTrace);
 
 // --- Suites ---
-router.post("/suites", c.createSuite);
-router.get("/suites", c.listSuites);
-router.get("/suites/:id", c.getSuite);
-router.delete("/suites/:id", c.deleteSuite);
-router.post("/suites/:id/run", c.runSuite);
+router.post("/suites", protect, c.createSuite);
+router.get("/suites", protect, c.listSuites);
+router.get("/suites/:id", protect, c.getSuite);
+router.delete("/suites/:id", protect, c.deleteSuite);
+router.post("/suites/:id/run", protect, c.runSuite);
 
 module.exports = router;

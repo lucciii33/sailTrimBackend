@@ -29,6 +29,7 @@ const mcpQaRunSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-mcpQaRunSchema.index({ serverName: 1, serverUrl: 1, createdAt: -1 });
+mcpQaRunSchema.index({ userId: 1, serverName: 1, createdAt: -1 });
+mcpQaRunSchema.index({ userId: 1, projectId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("McpQaRun", mcpQaRunSchema);

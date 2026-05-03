@@ -171,6 +171,7 @@ async function runSmokeSuite({ suiteId, userId }) {
       args,
       saveTrace: false,
       tags: [`smoke:${suite._id}`],
+      userId,
     });
     const ok = run.status === "ok" && !run.error;
     const parsedResponse = run.toolResponse

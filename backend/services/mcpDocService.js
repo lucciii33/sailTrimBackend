@@ -187,13 +187,14 @@ function inferJsonSchema(value) {
   return {};
 }
 
-async function verifyToolResponse({ config, tool, sampleArgsOverride }) {
+async function verifyToolResponse({ config, tool, sampleArgsOverride, userId }) {
   const sampleArgs = sampleArgsOverride || sampleArgsFromSchema(tool.inputSchema || {});
   const result = await mcpLab.invokeTool({
     config,
     toolName: tool.name,
     args: sampleArgs,
     saveTrace: false,
+    userId,
   });
 
   if (result.status !== "ok" || result.error) {
@@ -436,6 +437,7 @@ async function generateDocs({
         config,
         tool,
         sampleArgsOverride: sampleArgsByTool[tool.name],
+        userId,
       }).catch((err) => ({
         responseVerified: false,
         responseStatus: "unverified",

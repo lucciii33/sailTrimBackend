@@ -157,7 +157,7 @@ async function listPrompts(config) {
 // Direct tool invocation (manual playground)
 // -------------------------------------------------------------
 
-async function invokeTool({ config, toolName, args, saveTrace = true, tags = [] }) {
+async function invokeTool({ config, toolName, args, saveTrace = true, tags = [], userId }) {
   const started = Date.now();
   let toolResponse = null;
   let toolSchema = null;
@@ -193,6 +193,7 @@ async function invokeTool({ config, toolName, args, saveTrace = true, tags = [] 
       error: errorMsg,
       provider: "none",
       tags,
+      userId,
     });
   }
 
@@ -239,6 +240,7 @@ async function runPromptAgainstMcp({
   model,
   saveTrace = true,
   tags = [],
+  userId,
 }) {
   const started = Date.now();
   return withClient(config, async (client) => {
@@ -331,6 +333,7 @@ async function runPromptAgainstMcp({
         provider,
         model: model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL),
         tags,
+        userId,
       });
     }
 
@@ -393,8 +396,10 @@ function safeParseJson(txt) {
   }
 }
 
-async function judgeTrace({ traceId, provider = "openai", model }) {
-  const trace = await McpTrace.findById(traceId);
+async function judgeTrace({ traceId, provider = "openai", model, userId }) {
+  const filter = { _id: traceId };
+  if (userId) filter.userId = userId;
+  const trace = await McpTrace.findOne(filter);
   if (!trace) throw new Error("Trace not found");
 
   const userMsg = buildJudgeUserMessage({
@@ -521,8 +526,10 @@ Return STRICT JSON:
   "missingInApi": string[]
 }`;
 
-async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model }) {
-  const trace = await McpTrace.findById(traceId);
+async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, userId }) {
+  const filter = { _id: traceId };
+  if (userId) filter.userId = userId;
+  const trace = await McpTrace.findOne(filter);
   if (!trace) throw new Error("Trace not found");
 
   const userMsg = `MCP RESPONSE:
