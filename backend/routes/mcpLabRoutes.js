@@ -26,6 +26,7 @@ router.post("/generate-cases", protect, c.generateCases);
 
 // --- Generated MCP docs ---
 router.post("/docs/generate", protect, c.generateDocs);
+router.post("/projects/:id/tools/:toolName/docs", protect, c.generateDocsForTool);
 router.get("/docs", protect, c.listDocs);
 router.get("/docs/:id", protect, c.getDoc);
 router.delete("/docs/:id", protect, c.deleteDoc);

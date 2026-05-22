@@ -3,6 +3,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 
 const McpDoc = require("../model/McpDocModel.js");
 const mcpLab = require("./mcpLabService.js");
+const { publicServerUrl } = require("./mcpProjectService.js");
 
 let _openai = null;
 let _anthropic = null;
@@ -27,43 +28,40 @@ const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MCP_DOCS_MODEL || "gpt-4o";
 const DEFAULT_CLAUDE_MODEL = process.env.CLAUDE_MCP_DOCS_MODEL || "claude-sonnet-4-6";
 
 const MCP_DOC_SYSTEM = `You are an MCP documentation generator.
-You receive MCP tool definitions, sample arguments, execution status, and response schema inferred from actual MCP tool calls. Return STRICT JSON:
+You receive ONE MCP tool definition, sample arguments, execution status, and response schema inferred from an actual MCP tool call. Return STRICT JSON for that single tool:
 {
-  "docs": [
-    {
-      "toolName": string,
-      "title": string,
-      "summary": string,
-      "description": string,
-      "arguments": [
-        {
-          "name": string,
-          "type": string,
-          "required": boolean,
-          "description": string,
-          "default": any,
-          "enum": any[]
-        }
-      ],
-      "responseNotes": string,
-      "examples": [
-        {
-          "title": string,
-          "prompt": string,
-          "args": object,
-          "expectedResult": string
-        }
-      ],
-      "risks": string[]
-    }
-  ]
+  "doc": {
+    "toolName": string,
+    "title": string,
+    "summary": string,
+    "description": string,
+    "arguments": [
+      {
+        "name": string,
+        "type": string,
+        "required": boolean,
+        "description": string,
+        "default": any,
+        "enum": any[]
+      }
+    ],
+    "responseNotes": string,
+    "examples": [
+      {
+        "title": string,
+        "prompt": string,
+        "args": object,
+        "expectedResult": string
+      }
+    ],
+    "risks": string[]
+  }
 }
 
 Rules:
-- Produce one doc per tool.
 - Use only facts available in the tool name, description, and input schema.
 - If a field has no description, infer a short practical description from its name and schema.
-- Include at least one realistic example per tool.
+- Include at least one realistic example for the tool.
 - Mark required arguments from the JSON schema's required array.
 - Response docs must be based on outputSchema or inferredOutputSchema from an actual tool execution.
 - If responseVerified is false, responseNotes MUST be exactly:
@@ -71,6 +69,20 @@ Rules:
 - If responseVerified is false, do not claim exact response shape, fields, item counts, or primitive type.
 - Never write unsupported response claims like "returns a string", "returns all fields", or "returns every item" unless outputSchema or inferredOutputSchema proves it.
 - Keep language product-ready and concise.`;
+
+const SAMPLE_ARGS_SYSTEM = `You generate realistic sample arguments for a single MCP tool call.
+You receive ONE MCP tool's name, description, and inputSchema. Return STRICT JSON:
+{
+  "args": object
+}
+
+Rules:
+- The args object MUST satisfy the inputSchema (correct types, all required fields present).
+- Use realistic values that would actually exercise the tool successfully — avoid placeholders like "string", "example", or 1 unless the schema constrains the value.
+- Prefer concrete realistic values inferred from the field name, description, and tool description.
+- For arrays, include at least one realistic item.
+- For enums, pick the most representative value.
+- Omit non-required fields when they would force you to guess unsafely.`;
 
 function safeParseJson(txt) {
   if (!txt) return null;
@@ -352,11 +364,11 @@ function enforceResponseVerificationRule({ docs }) {
   });
 }
 
-async function curateToolDocs({ tools, provider, model }) {
+async function curateToolDoc({ tool, provider, model, anthropicClient }) {
   const chosenProvider = provider || "openai";
   const chosenModel =
     model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
-  const userMsg = `MCP TOOLS AND VERIFIED RESPONSES:\n${JSON.stringify(tools, null, 2)}`;
+  const userMsg = `MCP TOOL:\n${JSON.stringify(tool, null, 2)}`;
 
   if (chosenProvider === "openai") {
     const completion = await getOpenAI().chat.completions.create({
@@ -379,9 +391,10 @@ async function curateToolDocs({ tools, provider, model }) {
   }
 
   if (chosenProvider === "anthropic") {
-    const msg = await getAnthropic().messages.create({
+    const client = anthropicClient || getAnthropic();
+    const msg = await client.messages.create({
       model: chosenModel,
-      max_tokens: 4096,
+      max_tokens: 2048,
       system: MCP_DOC_SYSTEM,
       messages: [{ role: "user", content: userMsg }],
     });
@@ -399,16 +412,69 @@ async function curateToolDocs({ tools, provider, model }) {
   throw new Error(`Unknown docs provider: ${chosenProvider}`);
 }
 
+async function suggestSampleArgs({ tool, provider, model, anthropicClient }) {
+  const chosenProvider = provider || "anthropic";
+  const chosenModel =
+    model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
+  const userMsg = `Tool: ${tool.name}
+Description: ${tool.description || "(none)"}
+inputSchema:
+${JSON.stringify(tool.inputSchema || {}, null, 2)}`;
+
+  let parsed = null;
+  let usage = { inputTokens: 0, outputTokens: 0, model: chosenModel };
+
+  try {
+    if (chosenProvider === "openai") {
+      const completion = await getOpenAI().chat.completions.create({
+        model: chosenModel,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SAMPLE_ARGS_SYSTEM },
+          { role: "user", content: userMsg },
+        ],
+      });
+      parsed = safeParseJson(completion.choices?.[0]?.message?.content);
+      usage = {
+        inputTokens: completion.usage?.prompt_tokens || 0,
+        outputTokens: completion.usage?.completion_tokens || 0,
+        model: chosenModel,
+      };
+    } else if (chosenProvider === "anthropic") {
+      const client = anthropicClient || getAnthropic();
+      const msg = await client.messages.create({
+        model: chosenModel,
+        max_tokens: 512,
+        system: SAMPLE_ARGS_SYSTEM,
+        messages: [{ role: "user", content: userMsg }],
+      });
+      parsed = safeParseJson((msg.content || []).map((c) => c.text || "").join("\n"));
+      usage = {
+        inputTokens: msg.usage?.input_tokens || 0,
+        outputTokens: msg.usage?.output_tokens || 0,
+        model: chosenModel,
+      };
+    }
+  } catch (_) {
+    parsed = null;
+  }
+
+  const fallback = sampleArgsFromSchema(tool.inputSchema || {});
+  const args = parsed && parsed.args && typeof parsed.args === "object" ? parsed.args : fallback;
+  return { args, usage };
+}
+
 async function saveDocs({ docs, config, projectId, userId, companyId, tags = [] }) {
   if (!docs.length) return 0;
 
   const serverName = config.name || config.url || "unnamed";
+  const safeServerUrl = publicServerUrl(config.url);
   const ops = docs.map((doc) => ({
     updateOne: {
       filter: {
         serverName,
         projectId,
-        serverUrl: config.url,
+        serverUrl: safeServerUrl,
         transport: config.transport || "http",
         toolName: doc.toolName,
         companyId,
@@ -418,7 +484,7 @@ async function saveDocs({ docs, config, projectId, userId, companyId, tags = [] 
           ...doc,
           serverName,
           projectId,
-          serverUrl: config.url,
+          serverUrl: safeServerUrl,
           transport: config.transport || "http",
           userId,
           companyId,
@@ -444,21 +510,37 @@ async function generateDocs({
   companyId,
   tags = [],
   sampleArgsByTool = {},
+  anthropicClient = null,
 }) {
   const tools = await mcpLab.listTools(config);
+
+  const argSuggestions = await Promise.all(
+    (tools || []).map(async (tool) => {
+      if (sampleArgsByTool[tool.name]) {
+        return { toolName: tool.name, args: sampleArgsByTool[tool.name], usage: null };
+      }
+      const out = await suggestSampleArgs({ tool, provider, model, anthropicClient });
+      return { toolName: tool.name, args: out.args, usage: out.usage };
+    })
+  );
+  const argsByTool = argSuggestions.reduce((acc, item) => {
+    acc[item.toolName] = item.args;
+    return acc;
+  }, {});
+
   const verifications = await Promise.all(
     (tools || []).map(async (tool) => ({
       toolName: tool.name,
       ...(await verifyToolResponse({
         config,
         tool,
-        sampleArgsOverride: sampleArgsByTool[tool.name],
+        sampleArgsOverride: argsByTool[tool.name],
         userId,
         companyId,
       }).catch((err) => ({
         responseVerified: false,
         responseStatus: "unverified",
-        sampleArgs: sampleArgsByTool[tool.name] || sampleArgsFromSchema(tool.inputSchema || {}),
+        sampleArgs: argsByTool[tool.name] || sampleArgsFromSchema(tool.inputSchema || {}),
         sampleResponse: null,
         rawToolResponse: null,
         responseExample: null,
@@ -468,6 +550,7 @@ async function generateDocs({
       }))),
     }))
   );
+
   const toolsWithResponses = tools.map((tool) => {
     const verification = verifications.find((item) => item.toolName === tool.name);
     return {
@@ -483,25 +566,55 @@ async function generateDocs({
       responseError: verification?.responseError || null,
     };
   });
-  let parsed = null;
+
   let usage = { inputTokens: 0, outputTokens: 0, model: null };
   let generationError = null;
   let generatedBy = { provider: "none", model: null };
 
-  try {
-    const curated = await curateToolDocs({ tools: toolsWithResponses, provider, model });
-    parsed = curated.parsed;
-    usage = curated.usage;
+  for (const suggestion of argSuggestions) {
+    if (suggestion.usage) {
+      usage.inputTokens += suggestion.usage.inputTokens || 0;
+      usage.outputTokens += suggestion.usage.outputTokens || 0;
+      usage.model = suggestion.usage.model || usage.model;
+    }
+  }
+
+  const perToolResults = await Promise.all(
+    toolsWithResponses.map(async (tool) => {
+      try {
+        const curated = await curateToolDoc({ tool, provider, model, anthropicClient });
+        return { toolName: tool.name, parsed: curated.parsed, usage: curated.usage, error: null };
+      } catch (err) {
+        return {
+          toolName: tool.name,
+          parsed: null,
+          usage: { inputTokens: 0, outputTokens: 0, model: null },
+          error: err.message || String(err),
+        };
+      }
+    })
+  );
+
+  const generatedDocs = [];
+  for (const result of perToolResults) {
+    if (result.usage) {
+      usage.inputTokens += result.usage.inputTokens || 0;
+      usage.outputTokens += result.usage.outputTokens || 0;
+      usage.model = result.usage.model || usage.model;
+    }
+    const doc = result.parsed?.doc;
+    if (doc) generatedDocs.push({ ...doc, toolName: result.toolName });
+    if (result.error && !generationError) generationError = result.error;
+  }
+  if (generatedDocs.length) {
     generatedBy = { provider, model: usage.model };
-  } catch (err) {
-    generationError = err.message || String(err);
   }
 
   const docs = enforceResponseVerificationRule({
     docs: normalizeDocs({
       tools,
       verifications,
-      generatedDocs: parsed?.docs || [],
+      generatedDocs,
       provider: generatedBy.provider,
       model: generatedBy.model,
     }),
@@ -527,8 +640,94 @@ async function generateDocs({
     toolResponses,
     savedCount,
     usage,
-    curated: !generationError && !!parsed,
+    curated: generatedDocs.length > 0,
     generationError,
+  };
+}
+
+async function generateDocForTool({
+  config,
+  projectId,
+  tool,
+  sampleArgs,
+  provider = "anthropic",
+  model,
+  save = true,
+  userId,
+  companyId,
+  tags = [],
+  anthropicClient = null,
+}) {
+  if (!tool) throw new Error("tool is required");
+
+  const verification = await verifyToolResponse({
+    config,
+    tool,
+    sampleArgsOverride: sampleArgs,
+    userId,
+    companyId,
+  }).catch((err) => ({
+    responseVerified: false,
+    responseStatus: "unverified",
+    sampleArgs: sampleArgs || sampleArgsFromSchema(tool.inputSchema || {}),
+    sampleResponse: null,
+    rawToolResponse: null,
+    responseExample: null,
+    responseSchema: null,
+    inferredOutputSchema: null,
+    responseError: err.message || String(err),
+  }));
+
+  const toolWithResponse = {
+    ...tool,
+    responseVerified: verification.responseVerified,
+    responseStatus: verification.responseStatus,
+    sampleArgs: verification.sampleArgs || {},
+    sampleResponse: verification.sampleResponse || null,
+    rawToolResponse: verification.rawToolResponse || null,
+    responseExample: verification.responseExample || verification.sampleResponse || null,
+    responseSchema: tool.outputSchema || verification.inferredOutputSchema || null,
+    inferredOutputSchema: verification.inferredOutputSchema || null,
+    responseError: verification.responseError || null,
+  };
+
+  let usage = { inputTokens: 0, outputTokens: 0, model: null };
+  let generationError = null;
+  let generatedDoc = null;
+  let generatedBy = { provider: "none", model: null };
+
+  try {
+    const curated = await curateToolDoc({ tool: toolWithResponse, provider, model, anthropicClient });
+    usage = curated.usage;
+    if (curated.parsed?.doc) {
+      generatedDoc = { ...curated.parsed.doc, toolName: tool.name };
+      generatedBy = { provider, model: usage.model };
+    }
+  } catch (err) {
+    generationError = err.message || String(err);
+  }
+
+  const docs = enforceResponseVerificationRule({
+    docs: normalizeDocs({
+      tools: [tool],
+      verifications: [{ toolName: tool.name, ...verification }],
+      generatedDocs: generatedDoc ? [generatedDoc] : [],
+      provider: generatedBy.provider,
+      model: generatedBy.model,
+    }),
+  }).map((doc) => ({ ...doc, projectId }));
+
+  const savedCount = save
+    ? await saveDocs({ docs, config, projectId, userId, companyId, tags })
+    : 0;
+
+  return {
+    doc: docs[0],
+    savedCount,
+    usage,
+    verification,
+    generationError,
+    curated: !!generatedDoc,
   };
 }
 
@@ -544,8 +743,15 @@ async function listDocs({ serverName, serverUrl, toolName, projectId, companyId,
 
 module.exports = {
   generateDocs,
+  generateDocForTool,
   listDocs,
   extractToolResponseJson,
   inferJsonSchema,
   sampleArgsFromSchema,
+  suggestSampleArgs,
+  curateToolDoc,
+  verifyToolResponse,
+  normalizeDocs,
+  enforceResponseVerificationRule,
+  saveDocs,
 };

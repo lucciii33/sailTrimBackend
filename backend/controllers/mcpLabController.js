@@ -1,4 +1,5 @@
 const asyncHandler = require("express-async-handler");
+const Anthropic = require("@anthropic-ai/sdk");
 const mcpLab = require("../services/mcpLabService.js");
 const mcpDocs = require("../services/mcpDocService.js");
 const mcpQa = require("../services/mcpQaService.js");
@@ -10,6 +11,17 @@ const McpBug = require("../model/McpBugModel.js");
 const McpQaRun = require("../model/McpQaRunModel.js");
 const McpProject = require("../model/McpProjectModel.js");
 const McpUsageEvent = require("../model/McpUsageEventModel.js");
+const User = require("../model/userModel.js");
+const { decrypt } = require("../services/secretCrypto.js");
+
+async function getUserAnthropicClient(userId) {
+  if (!userId) return null;
+  const user = await User.findById(userId).select("anthropicKeyEncrypted");
+  if (!user?.anthropicKeyEncrypted) return null;
+  const apiKey = decrypt(user.anthropicKeyEncrypted);
+  if (!apiKey) return null;
+  return new Anthropic({ apiKey });
+}
 
 const FREE_LIMITS = {
   projects: 2,
@@ -106,7 +118,7 @@ const getTools = asyncHandler(async (req, res) => {
  */
 const saveProject = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
-  const { projectName, config, save = true, tags, sampleArgsByTool } = req.body;
+  const { projectName, config, provider, model } = req.body;
   if (!projectName) return res.status(400).json({ message: "projectName required" });
   if (!config) return res.status(400).json({ message: "config required" });
 
@@ -127,24 +139,17 @@ const saveProject = asyncHandler(async (req, res) => {
       });
     }
   }
-  if (!(await requireMonthlyLimit(req, res, "docs_generate"))) return;
 
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const out = await mcpProjects.saveProject({
     projectName,
     config,
+    provider: provider || "anthropic",
+    model,
+    anthropicClient,
     ...ctx(req),
   });
   const projectId = out.project._id;
-
-  const docsOut = await mcpDocs.generateDocs({
-    config: out.config,
-    projectId,
-    save,
-    tags: tags || [],
-    sampleArgsByTool: sampleArgsByTool || {},
-    ...ctx(req),
-  });
-  await recordUsage(req, "docs_generate", projectId);
 
   const overview = await mcpProjects.getProjectOverview({
     projectId,
@@ -154,7 +159,7 @@ const saveProject = asyncHandler(async (req, res) => {
   res.status(201).json({
     projectId,
     ...overview,
-    docsResult: docsOut,
+    argsUsage: out.argsUsage || null,
   });
 });
 
@@ -246,6 +251,52 @@ const generateCases = asyncHandler(async (req, res) => {
   res.json(out);
 });
 
+/** POST /api/mcp-lab/projects/:id/tools/:toolName/docs */
+const generateDocsForTool = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const { id: projectId, toolName } = req.params;
+  const { provider, model, save = true, tags, sampleArgs } = req.body || {};
+  if (!projectId || !toolName) {
+    return res.status(400).json({ message: "projectId and toolName required" });
+  }
+  if (!(await requireMonthlyLimit(req, res, "docs_generate"))) return;
+
+  const McpTool = require("../model/McpToolModel.js");
+  const toolRecord = await McpTool.findOne({
+    projectId,
+    name: toolName,
+    companyId: req.user.companyId,
+  });
+  if (!toolRecord) return res.status(404).json({ message: "Tool not found" });
+
+  const { config } = await mcpProjects.resolveConfig({
+    projectId,
+    companyId: req.user.companyId,
+  });
+
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const out = await mcpDocs.generateDocForTool({
+    config,
+    projectId,
+    tool: toolRecord.rawTool || {
+      name: toolRecord.name,
+      description: toolRecord.description,
+      inputSchema: toolRecord.inputSchema,
+      outputSchema: toolRecord.outputSchema,
+    },
+    sampleArgs: sampleArgs || toolRecord.suggestedArgs || undefined,
+    provider: provider || "anthropic",
+    model,
+    save,
+    tags: tags || [],
+    anthropicClient,
+    ...ctx(req),
+  });
+  await recordUsage(req, "docs_generate", projectId);
+
+  res.json({ projectId, toolName, ...out });
+});
+
 /** POST /api/mcp-lab/docs/generate */
 const generateDocs = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
@@ -258,6 +309,7 @@ const generateDocs = asyncHandler(async (req, res) => {
     companyId: req.user.companyId,
   });
 
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const out = await mcpDocs.generateDocs({
     config,
     projectId,
@@ -266,6 +318,7 @@ const generateDocs = asyncHandler(async (req, res) => {
     save,
     tags: tags || [],
     sampleArgsByTool: sampleArgsByTool || {},
+    anthropicClient,
     ...ctx(req),
   });
   await recordUsage(req, "docs_generate", projectId);
@@ -648,6 +701,7 @@ module.exports = {
   judge,
   generateCases,
   generateDocs,
+  generateDocsForTool,
   listDocs,
   getDoc,
   deleteDoc,

@@ -67,6 +67,14 @@ const userSchema = mongoose.Schema(
       enum: ["owner", "member"],
       default: "owner",
     },
+    anthropicKeyEncrypted: {
+      type: String,
+      required: false,
+    },
+    anthropicKeyMask: {
+      type: String,
+      required: false,
+    },
   },
   {
     timestamps: true,

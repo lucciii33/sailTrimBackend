@@ -26,6 +26,18 @@ const Anthropic = require("@anthropic-ai/sdk");
 
 const { McpTrace } = require("../model/mcpTraceModel.js");
 
+function publicServerUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch (_) {
+    return rawUrl;
+  }
+}
+
 // -------------------------------------------------------------
 // LLM clients (lazy-initialized so missing keys don't crash import)
 // Both providers wired, as requested.
@@ -63,7 +75,10 @@ function buildTransport(config = {}) {
   if (t === "http" || t === "sse") {
     if (!config.url) throw new Error("MCP http transport requires `url`");
     const headers = buildHttpHeaders(config);
-    return new StreamableHTTPClientTransport(new URL(config.url), {
+    const parsedUrl = new URL(config.url);
+    console.log("[MCP DEBUG] Connecting to:", parsedUrl.toString());
+    console.log("[MCP DEBUG] Headers being sent:", Object.keys(headers).length ? headers : "(none)");
+    return new StreamableHTTPClientTransport(parsedUrl, {
       requestInit: { headers },
     });
   }
@@ -182,7 +197,7 @@ async function invokeTool({ config, toolName, args, saveTrace = true, tags = [],
   if (saveTrace) {
     trace = await McpTrace.create({
       serverName: config.name || "unknown",
-      serverUrl: config.url,
+      serverUrl: publicServerUrl(config.url),
       transport: config.transport || "http",
       toolName,
       toolArgs: args,
@@ -321,7 +336,7 @@ async function runPromptAgainstMcp({
     if (saveTrace) {
       trace = await McpTrace.create({
         serverName: config.name || "unknown",
-        serverUrl: config.url,
+        serverUrl: publicServerUrl(config.url),
         transport: config.transport || "http",
         userPrompt,
         toolName: chosen?.name || "none",

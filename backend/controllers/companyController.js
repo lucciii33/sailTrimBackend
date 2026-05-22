@@ -5,6 +5,7 @@ const Mailjet = require("node-mailjet");
 const Company = require("../model/companyModel");
 const CompanyInvite = require("../model/companyInviteModel");
 const User = require("../model/userModel");
+const { encrypt, maskSecret } = require("../services/secretCrypto");
 
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const FROM_EMAIL = process.env.MAIL_FROM_EMAIL;
@@ -243,6 +244,72 @@ const cancelInvite = asyncHandler(async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * GET /api/company/slack
+ * Returns Slack channel id and a masked view of the bot token.
+ */
+const getSlackConfig = asyncHandler(async (req, res) => {
+  if (!req.user.companyId) return res.status(400).json({ message: "No company" });
+  const company = await Company.findById(req.user.companyId).select(
+    "slackChannelId slackBotTokenMask"
+  );
+  if (!company) return res.status(404).json({ message: "Company not found" });
+  res.json({
+    slackChannelId: company.slackChannelId || null,
+    slackBotTokenMask: company.slackBotTokenMask || null,
+    hasSlackBotToken: Boolean(company.slackBotTokenMask),
+  });
+});
+
+/**
+ * PUT /api/company/slack
+ * body: { channelId, botToken }
+ * Only owners can change.
+ */
+const saveSlackConfig = asyncHandler(async (req, res) => {
+  if (req.user.role !== "owner") {
+    return res.status(403).json({ message: "Only owners can change Slack settings" });
+  }
+  if (!req.user.companyId) return res.status(400).json({ message: "No company" });
+
+  const channelId = (req.body?.channelId || "").trim();
+  const botToken = (req.body?.botToken || "").trim();
+  if (!channelId) return res.status(400).json({ message: "channelId is required" });
+  if (!botToken) return res.status(400).json({ message: "botToken is required" });
+
+  const company = await Company.findById(req.user.companyId);
+  if (!company) return res.status(404).json({ message: "Company not found" });
+
+  company.slackChannelId = channelId;
+  company.slackBotTokenEncrypted = encrypt(botToken);
+  company.slackBotTokenMask = maskSecret(botToken);
+  await company.save();
+
+  res.json({
+    slackChannelId: company.slackChannelId,
+    slackBotTokenMask: company.slackBotTokenMask,
+    hasSlackBotToken: true,
+  });
+});
+
+/**
+ * DELETE /api/company/slack
+ * Removes the Slack config. Owners only.
+ */
+const deleteSlackConfig = asyncHandler(async (req, res) => {
+  if (req.user.role !== "owner") {
+    return res.status(403).json({ message: "Only owners can change Slack settings" });
+  }
+  if (!req.user.companyId) return res.status(400).json({ message: "No company" });
+  const company = await Company.findById(req.user.companyId);
+  if (!company) return res.status(404).json({ message: "Company not found" });
+  company.slackChannelId = undefined;
+  company.slackBotTokenEncrypted = undefined;
+  company.slackBotTokenMask = undefined;
+  await company.save();
+  res.json({ slackChannelId: null, slackBotTokenMask: null, hasSlackBotToken: false });
+});
+
 module.exports = {
   getMyCompany,
   listMembers,
@@ -251,4 +318,7 @@ module.exports = {
   acceptInvite,
   removeMember,
   cancelInvite,
+  getSlackConfig,
+  saveSlackConfig,
+  deleteSlackConfig,
 };

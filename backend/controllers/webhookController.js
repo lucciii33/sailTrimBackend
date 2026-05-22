@@ -11,9 +11,15 @@ const {
   MAX_FILE_BYTES,
   SOURCE_EXTENSIONS,
 } = require("../services/githubService");
-const { generateTestCases } = require("../services/aiService");
+const { generateTestCases, summarizePR } = require("../services/aiService");
+const { postMessage: postSlackMessage } = require("../services/slackService");
 const { generateDocsFromFile } = require("../services/docService");
 const Doc = require("../model/DocModel");
+const User = require("../model/userModel");
+const Company = require("../model/companyModel");
+const { decrypt } = require("../services/secretCrypto");
+
+const SLACK_NOTIFY_BRANCHES = new Set(["main", "dev"]);
 
 async function handleWebhook(req, res) {
   try {
@@ -34,6 +40,12 @@ async function handleWebhook(req, res) {
       (payload.action === "opened" || payload.action === "synchronize")
     ) {
       await handlePullRequest(payload);
+    } else if (
+      event === "pull_request" &&
+      payload.action === "closed" &&
+      payload.pull_request?.merged === true
+    ) {
+      await handlePullRequestMerged(payload);
     }
 
     res.status(200).json({ received: true });
@@ -326,6 +338,62 @@ async function handlePullRequest(payload) {
     }
   } catch (err) {
     console.error("Error handling pull_request event:", err);
+  }
+}
+
+async function handlePullRequestMerged(payload) {
+  try {
+    const { installation, pull_request, repository } = payload;
+    const baseBranch = pull_request?.base?.ref;
+    if (!baseBranch || !SLACK_NOTIFY_BRANCHES.has(baseBranch)) return;
+
+    const installationRecord = await Installation.findOne({
+      installationId: installation.id,
+    });
+    if (!installationRecord?.userId) return;
+
+    const user = await User.findById(installationRecord.userId).select("companyId");
+    if (!user?.companyId) return;
+
+    const company = await Company.findById(user.companyId).select(
+      "slackChannelId slackBotTokenEncrypted"
+    );
+    if (!company?.slackChannelId || !company?.slackBotTokenEncrypted) return;
+
+    const botToken = decrypt(company.slackBotTokenEncrypted);
+    if (!botToken) return;
+
+    const owner = repository.owner.login;
+    const repo = repository.name;
+    const prNumber = pull_request.number;
+    const octokit = await getOctokit(installation.id);
+    const diff = await getPRDiff(octokit, owner, repo, prNumber).catch((err) => {
+      console.error("Failed to fetch diff for merged PR:", err);
+      return "";
+    });
+
+    const summary = await summarizePR({
+      diff: diff || "",
+      title: pull_request.title,
+      author: pull_request.user?.login,
+      prNumber,
+      baseBranch,
+      prUrl: pull_request.html_url,
+    }).catch((err) => {
+      console.error("summarizePR failed:", err);
+      return null;
+    });
+
+    const headerLine = `*${repository.full_name}* — PR <${pull_request.html_url}|#${prNumber} ${pull_request.title}> merged into \`${baseBranch}\` by ${pull_request.user?.login || "unknown"}`;
+    const text = summary ? `${headerLine}\n\n${summary}` : headerLine;
+
+    await postSlackMessage({
+      botToken,
+      channelId: company.slackChannelId,
+      text,
+    });
+  } catch (err) {
+    console.error("Error handling merged pull_request event:", err);
   }
 }
 

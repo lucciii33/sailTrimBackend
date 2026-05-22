@@ -9,6 +9,9 @@ const companySchema = new mongoose.Schema(
       required: true,
     },
     plan: { type: String, enum: ["free", "pro"], default: "free" },
+    slackChannelId: { type: String },
+    slackBotTokenEncrypted: { type: String },
+    slackBotTokenMask: { type: String },
   },
   { timestamps: true }
 );

@@ -5,6 +5,7 @@ const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
 const Company = require("../model/companyModel");
 const CompanyInvite = require("../model/companyInviteModel");
+const { encrypt, maskSecret } = require("../services/secretCrypto");
 // const Mailjet = require("node-mailjet");
 
 // const mailjet = Mailjet.apiConnect(
@@ -367,9 +368,62 @@ const generateToken = (id) => {
   return t;
 };
 
+// Description: Save the user's own Anthropic API key (encrypted at rest)
+// Route:       PUT /api/user/me/anthropic-key
+// Access:      Private
+const saveAnthropicKey = asyncHandler(async (req, res) => {
+  const apiKey = (req.body?.apiKey || "").trim();
+  if (!apiKey) {
+    res.status(400);
+    throw new Error("apiKey is required");
+  }
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+  user.anthropicKeyEncrypted = encrypt(apiKey);
+  user.anthropicKeyMask = maskSecret(apiKey);
+  await user.save();
+  res.json({ anthropicKeyMask: user.anthropicKeyMask, hasAnthropicKey: true });
+});
+
+// Description: Remove the user's stored Anthropic API key
+// Route:       DELETE /api/user/me/anthropic-key
+// Access:      Private
+const deleteAnthropicKey = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+  user.anthropicKeyEncrypted = undefined;
+  user.anthropicKeyMask = undefined;
+  await user.save();
+  res.json({ anthropicKeyMask: null, hasAnthropicKey: false });
+});
+
+// Description: Read the current user's settings (mask only)
+// Route:       GET /api/user/me/settings
+// Access:      Private
+const getMySettings = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select("anthropicKeyMask");
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+  res.json({
+    anthropicKeyMask: user.anthropicKeyMask || null,
+    hasAnthropicKey: !!user.anthropicKeyMask,
+  });
+});
+
 module.exports = {
   registerUser,
   loginUser,
   forgotPassword,
   resetPassword,
+  saveAnthropicKey,
+  deleteAnthropicKey,
+  getMySettings,
 };
