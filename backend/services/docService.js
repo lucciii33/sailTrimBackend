@@ -109,10 +109,11 @@ function safeParseJson(txt) {
 
 // ---------- Core Claude call ----------
 
-async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, diff }) {
+async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, diff, anthropicClient = null }) {
   const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, diff });
 
-  const response = await getAnthropic().messages.create({
+  const client = anthropicClient || getAnthropic();
+  const response = await client.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 4096,
     system: DOC_SYSTEM_PROMPT,
@@ -138,8 +139,8 @@ async function callClaudeForDocs({ filePath, content, mountContext, schemaContex
  * PR-mode: called from webhook when a PR is opened/updated.
  * mountContext is optional — webhook flow currently doesn't scan the repo.
  */
-async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountContext = []) {
-  const { endpoints, usage } = await callClaudeForDocs({ diff, mountContext });
+async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountContext = [], { anthropicClient = null } = {}) {
+  const { endpoints, usage } = await callClaudeForDocs({ diff, mountContext, anthropicClient });
   if (endpoints.length === 0) return { endpoints: [], usage };
 
   const ops = endpoints.map((ep) => ({
@@ -168,8 +169,8 @@ async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountCon
  * Backfill-mode: called per source file.
  * Returns { endpoints, usage } so the caller can aggregate token counts.
  */
-async function generateDocsFromFile({ filePath, content, mountContext, schemaContext }) {
-  return callClaudeForDocs({ filePath, content, mountContext, schemaContext });
+async function generateDocsFromFile({ filePath, content, mountContext, schemaContext, anthropicClient = null }) {
+  return callClaudeForDocs({ filePath, content, mountContext, schemaContext, anthropicClient });
 }
 
 async function saveBackfillDocs({

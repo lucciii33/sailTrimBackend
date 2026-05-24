@@ -12,6 +12,7 @@ const installationSchema = new mongoose.Schema({
   ],
   installedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
 });
 
 module.exports = mongoose.model("Installation", installationSchema);

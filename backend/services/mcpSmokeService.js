@@ -43,7 +43,7 @@ function fallbackSmokeCases({ tools, docByName }) {
   });
 }
 
-async function generateSmokeSuite({ projectId, userId, companyId, provider = "anthropic", model }) {
+async function generateSmokeSuite({ projectId, userId, companyId, provider = "anthropic", model, anthropicClient = null }) {
   const projectQuery = { _id: projectId };
   if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
@@ -83,6 +83,7 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
       system: SMOKE_SYSTEM,
       user: JSON.stringify({ tools: llmInput }, null, 2),
       maxTokens: 4096,
+      anthropicClient,
     });
     const toolNames = new Set(tools.map((tool) => tool.name));
     const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
@@ -134,7 +135,7 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
         name: `${project.projectName} smoke`,
         description: "Auto-generated smoke suite — one happy path per tool.",
         serverName: config?.name || project.projectName,
-        serverUrl: config?.url,
+        serverUrl: mcpProjects.publicServerUrl(config?.url),
         transport: config?.transport || "http",
         projectId,
         kind: "smoke",

@@ -1,6 +1,7 @@
 const Installation = require("../model/Installation");
 const BackfillJob = require("../model/BackfillJob");
 const Doc = require("../model/DocModel");
+const User = require("../model/userModel");
 const {
   getApp,
   getOctokit,
@@ -18,6 +19,7 @@ const {
   cleanupZombieDocs,
   CLAUDE_MODEL,
 } = require("../services/docService");
+const { getUserAnthropicClient } = require("../services/userKeyService");
 
 const CONCURRENCY = 5;
 
@@ -124,7 +126,11 @@ async function githubCallback(req, res) {
       accountType,
       repos,
     };
-    if (state) update.userId = state;
+    if (state) {
+      update.userId = state;
+      const user = await User.findById(state).select("companyId");
+      if (user?.companyId) update.companyId = user.companyId;
+    }
 
     await Installation.findOneAndUpdate(
       { installationId },
@@ -159,6 +165,7 @@ async function runBackfill(jobId) {
     job.model = CLAUDE_MODEL;
     await job.save();
 
+    const anthropicClient = await getUserAnthropicClient(job.userId);
     const octokit = await getOctokit(job.installationId);
 
     // 1) Full tree once — used both for mount context and candidate selection.
@@ -273,6 +280,7 @@ async function runBackfill(jobId) {
               content: file.content,
               mountContext,
               schemaContext: relevantSchemas,
+              anthropicClient,
             });
             const saved = await saveBackfillDocs({
               endpoints,

@@ -1,5 +1,4 @@
 const asyncHandler = require("express-async-handler");
-const Anthropic = require("@anthropic-ai/sdk");
 const mcpLab = require("../services/mcpLabService.js");
 const mcpDocs = require("../services/mcpDocService.js");
 const mcpQa = require("../services/mcpQaService.js");
@@ -11,17 +10,7 @@ const McpBug = require("../model/McpBugModel.js");
 const McpQaRun = require("../model/McpQaRunModel.js");
 const McpProject = require("../model/McpProjectModel.js");
 const McpUsageEvent = require("../model/McpUsageEventModel.js");
-const User = require("../model/userModel.js");
-const { decrypt } = require("../services/secretCrypto.js");
-
-async function getUserAnthropicClient(userId) {
-  if (!userId) return null;
-  const user = await User.findById(userId).select("anthropicKeyEncrypted");
-  if (!user?.anthropicKeyEncrypted) return null;
-  const apiKey = decrypt(user.anthropicKeyEncrypted);
-  if (!apiKey) return null;
-  return new Anthropic({ apiKey });
-}
+const { getUserAnthropicClient } = require("../services/userKeyService.js");
 
 const FREE_LIMITS = {
   projects: 2,
@@ -214,12 +203,14 @@ const runPrompt = asyncHandler(async (req, res) => {
   const { config, userPrompt, provider, model, tags } = req.body;
   if (!config || !userPrompt)
     return res.status(400).json({ message: "config and userPrompt required" });
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const result = await mcpLab.runPromptAgainstMcp({
     config,
     userPrompt,
     provider: provider || "openai",
     model,
     tags,
+    anthropicClient,
     ...ctx(req),
   });
   res.json(result);
@@ -230,11 +221,13 @@ const judge = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
   const { traceId } = req.params;
   const { provider, model } = req.body || {};
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const trace = await mcpLab.judgeTrace({
     traceId,
     provider: provider || "openai",
     model,
     companyId: req.user.companyId,
+    anthropicClient,
   });
   res.json({ trace });
 });
@@ -242,11 +235,13 @@ const judge = asyncHandler(async (req, res) => {
 /** POST /api/mcp-lab/generate-cases */
 const generateCases = asyncHandler(async (req, res) => {
   const { config, provider, model, count } = req.body;
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const out = await mcpLab.generateTestCases({
     config,
     provider: provider || "openai",
     model,
     count: count || 10,
+    anthropicClient,
   });
   res.json(out);
 });
@@ -386,6 +381,7 @@ const runQa = asyncHandler(async (req, res) => {
     companyId: req.user.companyId,
   });
 
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const out = await mcpQa.runQa({
     config,
     projectId,
@@ -393,6 +389,7 @@ const runQa = asyncHandler(async (req, res) => {
     sampleArgsByTool: sampleArgsByTool || {},
     maxCasesPerTool: 3,
     save,
+    anthropicClient,
     ...ctx(req),
   });
   await recordUsage(req, "qa_run", projectId);
@@ -446,10 +443,12 @@ const generateSmoke = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
   const { provider, model } = req.body || {};
   if (!(await requireMonthlyLimit(req, res, "smoke_generate"))) return;
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const out = await mcpSmoke.generateSmokeSuite({
     projectId: req.params.id,
     provider: provider || "anthropic",
     model,
+    anthropicClient,
     ...ctx(req),
   });
   await recordUsage(req, "smoke_generate", req.params.id);
@@ -532,6 +531,7 @@ const compare = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
   const { traceId } = req.params;
   const { apiUrl, apiResponse, provider, model } = req.body;
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const trace = await mcpLab.compareWithApi({
     traceId,
     apiUrl,
@@ -539,6 +539,7 @@ const compare = asyncHandler(async (req, res) => {
     provider: provider || "openai",
     model,
     companyId: req.user.companyId,
+    anthropicClient,
   });
   res.json({ trace });
 });
@@ -638,6 +639,7 @@ const runSuite = asyncHandler(async (req, res) => {
     transport: suite.transport,
   };
 
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
   const results = [];
   for (const testCase of suite.cases) {
     try {
@@ -647,6 +649,7 @@ const runSuite = asyncHandler(async (req, res) => {
         provider,
         model,
         tags: [`suite:${suite._id}`, `case:${testCase.name}`],
+        anthropicClient,
         ...ctx(req),
       });
       const judged = run.trace
@@ -655,6 +658,7 @@ const runSuite = asyncHandler(async (req, res) => {
             provider: judgeProvider,
             model: judgeModel,
             companyId: req.user.companyId,
+            anthropicClient,
           })
         : null;
 

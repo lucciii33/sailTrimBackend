@@ -30,9 +30,12 @@ function publicServerUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
   try {
     const parsed = new URL(rawUrl);
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString().replace(/\/$/, "");
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/api[-_]?key|access[-_]?token|token|secret|password|bearer|auth/i.test(key)) {
+        parsed.searchParams.set(key, "***encrypted***");
+      }
+    }
+    return parsed.toString();
   } catch (_) {
     return rawUrl;
   }
@@ -258,6 +261,7 @@ async function runPromptAgainstMcp({
   tags = [],
   userId,
   companyId,
+  anthropicClient = null,
 }) {
   const started = Date.now();
   return withClient(config, async (client) => {
@@ -291,7 +295,8 @@ async function runPromptAgainstMcp({
       }
     } else if (provider === "anthropic") {
       const chosenModel = model || DEFAULT_CLAUDE_MODEL;
-      const msg = await getAnthropic().messages.create({
+      const client = anthropicClient || getAnthropic();
+      const msg = await client.messages.create({
         model: chosenModel,
         max_tokens: 1024,
         system:
@@ -414,7 +419,7 @@ function safeParseJson(txt) {
   }
 }
 
-async function judgeTrace({ traceId, provider = "openai", model, companyId }) {
+async function judgeTrace({ traceId, provider = "openai", model, companyId, anthropicClient = null }) {
   const filter = { _id: traceId };
   if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
@@ -444,7 +449,8 @@ async function judgeTrace({ traceId, provider = "openai", model, companyId }) {
     rawText = completion.choices?.[0]?.message?.content;
     verdict = safeParseJson(rawText);
   } else if (provider === "anthropic") {
-    const msg = await getAnthropic().messages.create({
+    const client = anthropicClient || getAnthropic();
+    const msg = await client.messages.create({
       model: chosenModel,
       max_tokens: 1024,
       system: JUDGE_SYSTEM,
@@ -500,7 +506,7 @@ Return STRICT JSON with shape:
 Cover happy paths, ambiguous prompts (confusion between similar tools),
 invalid/missing arguments, and adversarial inputs.`;
 
-async function generateTestCases({ config, provider = "openai", model, count = 10 }) {
+async function generateTestCases({ config, provider = "openai", model, count = 10, anthropicClient = null }) {
   const tools = await listTools(config);
   const userMsg = `Tools:\n${JSON.stringify(tools, null, 2)}\n\nGenerate ${count} test cases.`;
 
@@ -519,7 +525,8 @@ async function generateTestCases({ config, provider = "openai", model, count = 1
     return safeParseJson(completion.choices?.[0]?.message?.content) || { cases: [] };
   }
   if (provider === "anthropic") {
-    const msg = await getAnthropic().messages.create({
+    const client = anthropicClient || getAnthropic();
+    const msg = await client.messages.create({
       model: chosenModel,
       max_tokens: 2048,
       system: GENERATOR_SYSTEM,
@@ -544,7 +551,7 @@ Return STRICT JSON:
   "missingInApi": string[]
 }`;
 
-async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, companyId }) {
+async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, companyId, anthropicClient = null }) {
   const filter = { _id: traceId };
   if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
@@ -571,7 +578,8 @@ ${JSON.stringify(apiResponse, null, 2)}`;
     });
     parsed = safeParseJson(completion.choices?.[0]?.message?.content);
   } else if (provider === "anthropic") {
-    const msg = await getAnthropic().messages.create({
+    const client = anthropicClient || getAnthropic();
+    const msg = await client.messages.create({
       model: chosenModel,
       max_tokens: 1024,
       system: COMPARE_SYSTEM,

@@ -45,7 +45,7 @@ Output rules:
 - Skip noise: lockfile churn, formatting-only edits, generated files.
 - Keep the whole message under ~1500 characters so it fits comfortably in Slack.`;
 
-async function summarizePR({ diff, title, author, prNumber, baseBranch, prUrl }) {
+async function summarizePR({ diff, title, author, prNumber, baseBranch, prUrl, anthropicClient = null }) {
   const header = [
     title ? `Title: ${title}` : null,
     prNumber ? `PR #${prNumber}` : null,
@@ -58,7 +58,8 @@ async function summarizePR({ diff, title, author, prNumber, baseBranch, prUrl })
 
   const userContent = `${header}\n\nDIFF:\n${diff || "(empty diff)"}`;
 
-  const msg = await getAnthropic().messages.create({
+  const client = anthropicClient || getAnthropic();
+  const msg = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 1024,
     system: PR_SUMMARY_SYSTEM,

@@ -7,6 +7,7 @@ const McpTool = require("../model/McpToolModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const mcpLab = require("./mcpLabService.js");
 const mcpDocs = require("./mcpDocService.js");
+const { publicServerUrl } = require("./mcpProjectService.js");
 
 let _openai = null;
 let _anthropic = null;
@@ -206,7 +207,7 @@ function fallbackCases({ tools, sampleArgsByTool = {}, maxCasesPerTool = 5 }) {
   );
 }
 
-async function callJsonLLM({ provider, model, system, user, maxTokens = 4096 }) {
+async function callJsonLLM({ provider, model, system, user, maxTokens = 4096, anthropicClient = null }) {
   const chosenProvider = provider || "anthropic";
   const chosenModel =
     model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
@@ -227,7 +228,8 @@ async function callJsonLLM({ provider, model, system, user, maxTokens = 4096 }) 
   }
 
   if (chosenProvider === "anthropic") {
-    const msg = await getAnthropic().messages.create({
+    const client = anthropicClient || getAnthropic();
+    const msg = await client.messages.create({
       model: chosenModel,
       max_tokens: maxTokens,
       system,
@@ -240,7 +242,7 @@ async function callJsonLLM({ provider, model, system, user, maxTokens = 4096 }) 
   throw new Error(`Unknown provider: ${chosenProvider}`);
 }
 
-async function generateCases({ tools, docs, sampleArgsByTool, provider, model, maxCasesPerTool }) {
+async function generateCases({ tools, docs, sampleArgsByTool, provider, model, maxCasesPerTool, anthropicClient = null }) {
   const fallback = fallbackCases({ tools, sampleArgsByTool, maxCasesPerTool });
   try {
     const { parsed, model: chosenModel } = await callJsonLLM({
@@ -248,6 +250,7 @@ async function generateCases({ tools, docs, sampleArgsByTool, provider, model, m
       model,
       system: QA_CASE_SYSTEM,
       user: JSON.stringify({ tools, docs, sampleArgsByTool, maxCasesPerTool }, null, 2),
+      anthropicClient,
     });
     const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
     const toolNames = new Set((tools || []).map((tool) => tool.name));
@@ -281,7 +284,7 @@ function fallbackJudge(testCase, execution) {
   };
 }
 
-async function judgeCase({ testCase, tool, execution, provider, model }) {
+async function judgeCase({ testCase, tool, execution, provider, model, anthropicClient = null }) {
   try {
     const { parsed } = await callJsonLLM({
       provider,
@@ -289,6 +292,7 @@ async function judgeCase({ testCase, tool, execution, provider, model }) {
       system: QA_JUDGE_SYSTEM,
       user: JSON.stringify({ testCase, tool, execution }, null, 2),
       maxTokens: 2048,
+      anthropicClient,
     });
     if (parsed?.verdict) return parsed;
     return fallbackJudge(testCase, execution);
@@ -308,6 +312,7 @@ async function runQa({
   companyId,
   sampleArgsByTool = {},
   maxCasesPerTool = 5,
+  anthropicClient = null,
 }) {
   const allTools = await mcpLab.listTools(config);
   const tools = toolName
@@ -329,7 +334,7 @@ async function runQa({
   const docs = await mcpDocs.listDocs({
     projectId,
     serverName,
-    serverUrl: config.url,
+    serverUrl: publicServerUrl(config.url),
     companyId,
     limit: 500,
   });
@@ -340,6 +345,7 @@ async function runQa({
     provider,
     model,
     maxCasesPerTool,
+    anthropicClient,
   });
 
   const results = [];
@@ -367,7 +373,7 @@ async function runQa({
       rawToolResponse: run.toolResponse,
       responseSchema: run.status === "ok" && !run.error ? mcpDocs.inferJsonSchema(parsedResponse) : null,
     };
-    const judged = await judgeCase({ testCase, tool, execution, provider, model });
+    const judged = await judgeCase({ testCase, tool, execution, provider, model, anthropicClient });
     const result = {
       ...testCase,
       execution,
@@ -424,7 +430,7 @@ async function runQa({
     const saved = await McpQaRun.create({
       projectId,
       serverName,
-      serverUrl: config.url,
+      serverUrl: publicServerUrl(config.url),
       transport: config.transport || "http",
       summary,
       cases: generated.cases,
@@ -445,7 +451,7 @@ async function runQa({
           docId: bug.docId,
           qaRunId: saved._id,
           serverName,
-          serverUrl: config.url,
+          serverUrl: publicServerUrl(config.url),
           transport: config.transport || "http",
           status: "open",
           userId,

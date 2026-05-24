@@ -40,6 +40,15 @@ async function handleWebhook(req, res) {
       (payload.action === "opened" || payload.action === "synchronize")
     ) {
       await handlePullRequest(payload);
+      // TESTING: also fire the Slack notification on PR open so we can
+      // exercise the flow without merging. Production behavior (notify on
+      // merge to main/dev) still happens via the `closed && merged` branch
+      // below. Remove this once testing is done.
+      if (payload.action === "opened") {
+        await sendPRSlackNotification(payload, "opened").catch((err) =>
+          console.error("Test PR-open Slack notification failed:", err)
+        );
+      }
     } else if (
       event === "pull_request" &&
       payload.action === "closed" &&
@@ -341,57 +350,72 @@ async function handlePullRequest(payload) {
   }
 }
 
-async function handlePullRequestMerged(payload) {
-  try {
-    const { installation, pull_request, repository } = payload;
-    const baseBranch = pull_request?.base?.ref;
-    if (!baseBranch || !SLACK_NOTIFY_BRANCHES.has(baseBranch)) return;
+async function sendPRSlackNotification(payload, eventType) {
+  const { installation, pull_request, repository } = payload;
+  const baseBranch = pull_request?.base?.ref;
+  if (!baseBranch || !SLACK_NOTIFY_BRANCHES.has(baseBranch)) return;
 
-    const installationRecord = await Installation.findOne({
-      installationId: installation.id,
-    });
-    if (!installationRecord?.userId) return;
+  const installationRecord = await Installation.findOne({
+    installationId: installation.id,
+  });
+  if (!installationRecord) return;
 
+  // Prefer the denormalized companyId on Installation; fall back to the
+  // User lookup for old installs created before that field existed.
+  let companyId = installationRecord.companyId;
+  if (!companyId) {
+    if (!installationRecord.userId) return;
     const user = await User.findById(installationRecord.userId).select("companyId");
     if (!user?.companyId) return;
+    companyId = user.companyId;
+  }
 
-    const company = await Company.findById(user.companyId).select(
-      "slackChannelId slackBotTokenEncrypted"
-    );
-    if (!company?.slackChannelId || !company?.slackBotTokenEncrypted) return;
+  const company = await Company.findById(companyId).select(
+    "slackChannelId slackBotTokenEncrypted"
+  );
+  if (!company?.slackChannelId || !company?.slackBotTokenEncrypted) return;
 
-    const botToken = decrypt(company.slackBotTokenEncrypted);
-    if (!botToken) return;
+  const botToken = decrypt(company.slackBotTokenEncrypted);
+  if (!botToken) return;
 
-    const owner = repository.owner.login;
-    const repo = repository.name;
-    const prNumber = pull_request.number;
-    const octokit = await getOctokit(installation.id);
-    const diff = await getPRDiff(octokit, owner, repo, prNumber).catch((err) => {
-      console.error("Failed to fetch diff for merged PR:", err);
-      return "";
-    });
+  const owner = repository.owner.login;
+  const repo = repository.name;
+  const prNumber = pull_request.number;
+  const octokit = await getOctokit(installation.id);
+  const diff = await getPRDiff(octokit, owner, repo, prNumber).catch((err) => {
+    console.error(`Failed to fetch diff for ${eventType} PR:`, err);
+    return "";
+  });
 
-    const summary = await summarizePR({
-      diff: diff || "",
-      title: pull_request.title,
-      author: pull_request.user?.login,
-      prNumber,
-      baseBranch,
-      prUrl: pull_request.html_url,
-    }).catch((err) => {
-      console.error("summarizePR failed:", err);
-      return null;
-    });
+  const summary = await summarizePR({
+    diff: diff || "",
+    title: pull_request.title,
+    author: pull_request.user?.login,
+    prNumber,
+    baseBranch,
+    prUrl: pull_request.html_url,
+  }).catch((err) => {
+    console.error("summarizePR failed:", err);
+    return null;
+  });
 
-    const headerLine = `*${repository.full_name}* — PR <${pull_request.html_url}|#${prNumber} ${pull_request.title}> merged into \`${baseBranch}\` by ${pull_request.user?.login || "unknown"}`;
-    const text = summary ? `${headerLine}\n\n${summary}` : headerLine;
+  const actionLine =
+    eventType === "merged"
+      ? `merged into \`${baseBranch}\` by`
+      : `opened against \`${baseBranch}\` by`;
+  const headerLine = `*${repository.full_name}* — PR <${pull_request.html_url}|#${prNumber} ${pull_request.title}> ${actionLine} ${pull_request.user?.login || "unknown"}`;
+  const text = summary ? `${headerLine}\n\n${summary}` : headerLine;
 
-    await postSlackMessage({
-      botToken,
-      channelId: company.slackChannelId,
-      text,
-    });
+  await postSlackMessage({
+    botToken,
+    channelId: company.slackChannelId,
+    text,
+  });
+}
+
+async function handlePullRequestMerged(payload) {
+  try {
+    await sendPRSlackNotification(payload, "merged");
   } catch (err) {
     console.error("Error handling merged pull_request event:", err);
   }

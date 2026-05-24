@@ -21,7 +21,7 @@ const CLAUDE_MODEL = process.env.CLAUDE_QA_MODEL || "claude-opus-4-7";
 const MAX_CASES = parseInt(process.env.QA_MAX_CASES || "15", 10);
 const REQUEST_TIMEOUT_MS = parseInt(
   process.env.QA_REQUEST_TIMEOUT_MS || "15000",
-  10
+  10,
 );
 
 // ---------- JSON helpers ----------
@@ -65,7 +65,7 @@ function buildAuthHeaders(authConfig) {
       const password = decrypt(authConfig.passwordEncrypted);
       if (authConfig.username) {
         const encoded = Buffer.from(
-          `${authConfig.username}:${password}`
+          `${authConfig.username}:${password}`,
         ).toString("base64");
         headers["Authorization"] = `Basic ${encoded}`;
       }
@@ -87,7 +87,9 @@ function buildPostmanCollection({ doc, config, testCases }) {
   const items = testCases.map((tc) => {
     const url = joinUrl(config.baseUrl, tc.path || doc.path);
     const headerObj = {
-      ...(config.defaultHeaders ? Object.fromEntries(config.defaultHeaders) : {}),
+      ...(config.defaultHeaders
+        ? Object.fromEntries(config.defaultHeaders)
+        : {}),
       ...(tc.headers || {}),
     };
     return {
@@ -189,7 +191,7 @@ Rules:
 - Body must be a valid JSON object EXCEPT for malformed_json case (use a string).
 - Return ONLY the JSON, no prose.`;
 
-async function generateTestCases(doc) {
+async function generateTestCases(doc, { anthropicClient = null } = {}) {
   const spec = {
     method: doc.method,
     path: doc.path,
@@ -199,7 +201,8 @@ async function generateTestCases(doc) {
     responses: doc.responses,
   };
 
-  const response = await getAnthropic().messages.create({
+  const client = anthropicClient || getAnthropic();
+  const response = await client.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 6000,
     system: TESTGEN_SYSTEM_PROMPT,
@@ -328,7 +331,7 @@ Rules:
 - Severity guide: critical = auth bypass / data leak; high = 500 on validation, secrets in body; medium = wrong status code; low = inconsistent shape.
 - Return {"bugs": []} if no bugs found.`;
 
-async function analyzeForBugs({ doc, executions }) {
+async function analyzeForBugs({ doc, executions, anthropicClient = null }) {
   const slim = executions.map((ex) => ({
     name: ex.testCase.name,
     category: ex.testCase.category,
@@ -338,7 +341,7 @@ async function analyzeForBugs({ doc, executions }) {
       method: ex.result.request.method,
       url: ex.result.request.url,
       hasAuthHeader: Boolean(
-        ex.result.request.headers && ex.result.request.headers.Authorization
+        ex.result.request.headers && ex.result.request.headers.Authorization,
       ),
       body: ex.result.request.body,
     },
@@ -361,13 +364,14 @@ ${JSON.stringify(
     responses: doc.responses,
   },
   null,
-  2
+  2,
 )}
 
 EXECUTED CASES:
 ${JSON.stringify(slim, null, 2)}`;
 
-  const response = await getAnthropic().messages.create({
+  const client = anthropicClient || getAnthropic();
+  const response = await client.messages.create({
     model: CLAUDE_MODEL,
     max_tokens: 6000,
     system: ANALYZE_SYSTEM_PROMPT,
@@ -394,7 +398,7 @@ function truncateForLLM(body) {
 
 // ---------- Orchestrator ----------
 
-async function findBugs({ docId, userId, companyId }) {
+async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   const doc = await Doc.findById(docId);
   if (!doc) {
     const err = new Error("Doc not found");
@@ -414,7 +418,7 @@ async function findBugs({ docId, userId, companyId }) {
   });
   if (!config) {
     const err = new Error(
-      `No QA config found for ${doc.owner}/${doc.repo}. Set baseUrl + auth first.`
+      `No QA config found for ${doc.owner}/${doc.repo}. Set baseUrl + auth first.`,
     );
     err.statusCode = 400;
     throw err;
@@ -423,7 +427,9 @@ async function findBugs({ docId, userId, companyId }) {
   const runId = crypto.randomUUID();
 
   // 1) generate test cases
-  const { cases, usage: genUsage } = await generateTestCases(doc);
+  const { cases, usage: genUsage } = await generateTestCases(doc, {
+    anthropicClient,
+  });
   if (cases.length === 0) {
     return { runId, executions: [], bugs: [], usage: { genUsage } };
   }
@@ -439,6 +445,7 @@ async function findBugs({ docId, userId, companyId }) {
   const { bugs, usage: analyzeUsage } = await analyzeForBugs({
     doc,
     executions,
+    anthropicClient,
   });
 
   // Map bugs back onto their executions so the UI can render every test

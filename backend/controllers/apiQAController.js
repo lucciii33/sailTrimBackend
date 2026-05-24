@@ -4,6 +4,7 @@ const Doc = require("../model/DocModel");
 const TestRun = require("../model/TestRunModel");
 const { encrypt, maskSecret, decrypt } = require("../services/secretCrypto");
 const apiQAService = require("../services/apiQAService");
+const { getUserAnthropicClient } = require("../services/userKeyService");
 
 function requireCompany(req, res) {
   if (!req.user.companyId) {
@@ -86,10 +87,12 @@ async function findBugs(req, res) {
   if (!requireCompany(req, res)) return;
   const { docId } = req.params;
   try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
     const result = await apiQAService.findBugs({
       docId,
       userId: req.user._id,
       companyId: req.user.companyId,
+      anthropicClient,
     });
     res.json(result);
   } catch (err) {
@@ -134,7 +137,8 @@ async function getCollection(req, res) {
   if (!config)
     return res.status(400).json({ message: "No QA config for this repo" });
 
-  const { cases } = await apiQAService.generateTestCases(doc);
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const { cases } = await apiQAService.generateTestCases(doc, { anthropicClient });
   const collection = apiQAService.buildPostmanCollection({
     doc,
     config,
