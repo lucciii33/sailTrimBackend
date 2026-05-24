@@ -289,62 +289,65 @@ async function handlePullRequest(payload) {
     const octokit = await getOctokit(installation.id);
 
     // 1) Test cases (old flow) — still off the diff, posted as a PR comment.
-    const diffPromise = getPRDiff(octokit, owner, repo, prNumber)
-      .then((diff) => (diff ? generateTestCases(diff) : null))
-      .catch((err) => {
-        console.error("Test case generation failed:", err);
-        return null;
-      });
+    // DISABLED FOR TESTING to save OpenAI tokens — uncomment to re-enable.
+    // const diffPromise = getPRDiff(octokit, owner, repo, prNumber)
+    //   .then((diff) => (diff ? generateTestCases(diff) : null))
+    //   .catch((err) => {
+    //     console.error("Test case generation failed:", err);
+    //     return null;
+    //   });
 
     // 2) Docs sync per file — each file is added/modified/removed/renamed
     //    explicitly so we can add, update or delete docs accordingly.
-    const [prFiles, mountContext] = await Promise.all([
-      getPRFiles(octokit, owner, repo, prNumber),
-      fetchMountContextAtRef(octokit, owner, repo, headSha),
-    ]);
-
-    const results = [];
-    for (const file of prFiles) {
-      // Renames & removals can affect docs even if the new name isn't an
-      // API candidate, so we enter syncFileDocs for every file.
-      try {
-        const r = await syncFileDocs({
-          octokit,
-          owner,
-          repo,
-          headSha,
-          file,
-          mountContext,
-          prNumber,
-          userId,
-        });
-        results.push(r);
-      } catch (err) {
-        console.error(`PR sync failed for ${file.filename}:`, err.message);
-      }
-    }
-
-    const totals = results.reduce(
-      (acc, r) => ({
-        added: acc.added + r.added,
-        updated: acc.updated + r.updated,
-        removed: acc.removed + r.removed,
-        tokensInput: acc.tokensInput + r.tokensInput,
-        tokensOutput: acc.tokensOutput + r.tokensOutput,
-      }),
-      { added: 0, updated: 0, removed: 0, tokensInput: 0, tokensOutput: 0 }
-    );
-
-    console.log(
-      `PR #${prNumber} docs sync:`,
-      JSON.stringify({ ...totals, files: results.length })
-    );
+    // DISABLED FOR TESTING to save Opus 4.7 tokens — uncomment to re-enable.
+    // const [prFiles, mountContext] = await Promise.all([
+    //   getPRFiles(octokit, owner, repo, prNumber),
+    //   fetchMountContextAtRef(octokit, owner, repo, headSha),
+    // ]);
+    //
+    // const results = [];
+    // for (const file of prFiles) {
+    //   // Renames & removals can affect docs even if the new name isn't an
+    //   // API candidate, so we enter syncFileDocs for every file.
+    //   try {
+    //     const r = await syncFileDocs({
+    //       octokit,
+    //       owner,
+    //       repo,
+    //       headSha,
+    //       file,
+    //       mountContext,
+    //       prNumber,
+    //       userId,
+    //     });
+    //     results.push(r);
+    //   } catch (err) {
+    //     console.error(`PR sync failed for ${file.filename}:`, err.message);
+    //   }
+    // }
+    //
+    // const totals = results.reduce(
+    //   (acc, r) => ({
+    //     added: acc.added + r.added,
+    //     updated: acc.updated + r.updated,
+    //     removed: acc.removed + r.removed,
+    //     tokensInput: acc.tokensInput + r.tokensInput,
+    //     tokensOutput: acc.tokensOutput + r.tokensOutput,
+    //   }),
+    //   { added: 0, updated: 0, removed: 0, tokensInput: 0, tokensOutput: 0 }
+    // );
+    //
+    // console.log(
+    //   `PR #${prNumber} docs sync:`,
+    //   JSON.stringify({ ...totals, files: results.length })
+    // );
 
     // 3) Post test cases as a comment once they're ready.
-    const testCases = await diffPromise;
-    if (testCases) {
-      await commentOnPR(octokit, owner, repo, prNumber, testCases);
-    }
+    // DISABLED FOR TESTING (see step 1 above) — uncomment to re-enable.
+    // const testCases = await diffPromise;
+    // if (testCases) {
+    //   await commentOnPR(octokit, owner, repo, prNumber, testCases);
+    // }
   } catch (err) {
     console.error("Error handling pull_request event:", err);
   }
@@ -360,8 +363,6 @@ async function sendPRSlackNotification(payload, eventType) {
   });
   if (!installationRecord) return;
 
-  // Prefer the denormalized companyId on Installation; fall back to the
-  // User lookup for old installs created before that field existed.
   let companyId = installationRecord.companyId;
   if (!companyId) {
     if (!installationRecord.userId) return;
@@ -387,24 +388,41 @@ async function sendPRSlackNotification(payload, eventType) {
     return "";
   });
 
-  const summary = await summarizePR({
-    diff: diff || "",
-    title: pull_request.title,
-    author: pull_request.user?.login,
-    prNumber,
-    baseBranch,
-    prUrl: pull_request.html_url,
-  }).catch((err) => {
+  let summary = null;
+  let summaryError = null;
+  try {
+    summary = await summarizePR({
+      diff: diff || "",
+      title: pull_request.title,
+      author: pull_request.user?.login,
+      prNumber,
+      baseBranch,
+      prUrl: pull_request.html_url,
+    });
+  } catch (err) {
+    summaryError = err?.message || String(err);
     console.error("summarizePR failed:", err);
-    return null;
-  });
+  }
 
   const actionLine =
     eventType === "merged"
       ? `merged into \`${baseBranch}\` by`
       : `opened against \`${baseBranch}\` by`;
   const headerLine = `*${repository.full_name}* — PR <${pull_request.html_url}|#${prNumber} ${pull_request.title}> ${actionLine} ${pull_request.user?.login || "unknown"}`;
-  const text = summary ? `${headerLine}\n\n${summary}` : headerLine;
+
+  // TESTING: surface why the AI summary is missing directly in Slack so we
+  // can debug without scraping server logs. Remove this once it works.
+  let body;
+  if (summary && summary.trim()) {
+    body = summary.trim();
+  } else if (summaryError) {
+    body = `_(no AI summary — error: ${summaryError})_`;
+  } else if (!diff || !diff.trim()) {
+    body = `_(no AI summary — PR diff was empty)_`;
+  } else {
+    body = `_(no AI summary — Claude returned empty text; diff was ${diff.length} chars)_`;
+  }
+  const text = `${headerLine}\n\n${body}`;
 
   await postSlackMessage({
     botToken,
