@@ -35,6 +35,8 @@
     "node-cron": "^3.0.3",
     "node-mailjet": "^6.0.6",
     "openai": "^4.52.2",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0",
     "stripe": "^16.2.0"
   },
   "devDependencies": {

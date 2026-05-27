@@ -109,11 +109,42 @@ function safeParseJson(txt) {
 
 // ---------- Core Claude call ----------
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529]);
+const MAX_RETRIES = 5;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callClaudeWithRetry(client, params) {
+  let attempt = 0;
+  let lastErr;
+  while (attempt <= MAX_RETRIES) {
+    try {
+      return await client.messages.create(params);
+    } catch (err) {
+      lastErr = err;
+      const status = err?.status || err?.response?.status;
+      const isRetryable = RETRYABLE_STATUS.has(status);
+      if (!isRetryable || attempt === MAX_RETRIES) throw err;
+      const retryAfterHeader = err?.headers?.["retry-after"];
+      const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : null;
+      const backoff = retryAfterMs && !Number.isNaN(retryAfterMs)
+        ? retryAfterMs
+        : Math.min(30_000, 1_000 * 2 ** attempt) + Math.floor(Math.random() * 500);
+      console.warn(`Claude retry ${attempt + 1}/${MAX_RETRIES} after ${backoff}ms (status=${status})`);
+      await sleep(backoff);
+      attempt += 1;
+    }
+  }
+  throw lastErr;
+}
+
 async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, diff, anthropicClient = null }) {
   const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, diff });
 
   const client = anthropicClient || getAnthropic();
-  const response = await client.messages.create({
+  const response = await callClaudeWithRetry(client, {
     model: CLAUDE_MODEL,
     max_tokens: 4096,
     system: DOC_SYSTEM_PROMPT,
@@ -178,6 +209,7 @@ async function saveBackfillDocs({
   repo,
   owner,
   userId,
+  companyId,
   sourceFile,
   sourceSha,
 }) {
@@ -192,6 +224,7 @@ async function saveBackfillDocs({
           repo,
           owner,
           userId,
+          companyId,
           source: "backfill",
           sourceFile,
           sourceSha,

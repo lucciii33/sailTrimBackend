@@ -4,10 +4,14 @@ const mcpDocs = require("../services/mcpDocService.js");
 const mcpQa = require("../services/mcpQaService.js");
 const mcpProjects = require("../services/mcpProjectService.js");
 const mcpSmoke = require("../services/mcpSmokeService.js");
+const mcpProfiler = require("../services/mcpProfilerService.js");
+const mcpSecurity = require("../services/mcpSecurityService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const McpBug = require("../model/McpBugModel.js");
 const McpQaRun = require("../model/McpQaRunModel.js");
+const McpProfileRun = require("../model/McpProfileRunModel.js");
+const McpSecurityRun = require("../model/McpSecurityRunModel.js");
 const McpProject = require("../model/McpProjectModel.js");
 const McpUsageEvent = require("../model/McpUsageEventModel.js");
 const { getUserAnthropicClient } = require("../services/userKeyService.js");
@@ -18,6 +22,8 @@ const FREE_LIMITS = {
   qa_run: 5,
   smoke_generate: 3,
   smoke_run: 5,
+  profile_run: 3,
+  security_scan: 3,
 };
 
 const UPGRADE_MESSAGE =
@@ -693,6 +699,111 @@ const runSuite = asyncHandler(async (req, res) => {
   });
 });
 
+// ----- Token cost profiler -----
+
+/** POST /api/mcp-lab/projects/:id/profile/run */
+const runProfile = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  if (!(await requireMonthlyLimit(req, res, "profile_run"))) return;
+  const { iterationsPerTool, contextWindow } = req.body || {};
+  const out = await mcpProfiler.profileProject({
+    projectId: req.params.id,
+    iterationsPerTool: Number(iterationsPerTool) || undefined,
+    contextWindow: Number(contextWindow) || undefined,
+    ...ctx(req),
+  });
+  await recordUsage(req, "profile_run", req.params.id);
+  res.json(out);
+});
+
+/** GET /api/mcp-lab/profile/runs */
+const listProfileRuns = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const q = { companyId: req.user.companyId };
+  if (req.query.projectId) q.projectId = req.query.projectId;
+  const runs = await McpProfileRun.find(q)
+    .select(
+      "projectId serverName serverUrl transport contextWindow iterationsPerTool summary createdAt updatedAt"
+    )
+    .sort({ createdAt: -1 });
+  res.json({ runs });
+});
+
+/** GET /api/mcp-lab/profile/runs/:id */
+const getProfileRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpProfileRun.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ run });
+});
+
+/** DELETE /api/mcp-lab/profile/runs/:id */
+const deleteProfileRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpProfileRun.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ ok: true });
+});
+
+// ----- Security scanner -----
+
+/** POST /api/mcp-lab/projects/:id/security/scan */
+const runSecurityScan = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  if (!(await requireMonthlyLimit(req, res, "security_scan"))) return;
+  const { toolName } = req.body || {};
+  const out = await mcpSecurity.scanProject({
+    projectId: req.params.id,
+    toolNameFilter: toolName || null,
+    ...ctx(req),
+  });
+  await recordUsage(req, "security_scan", req.params.id);
+  res.json(out);
+});
+
+/** GET /api/mcp-lab/security/runs */
+const listSecurityRuns = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const q = { companyId: req.user.companyId };
+  if (req.query.projectId) q.projectId = req.query.projectId;
+  const runs = await McpSecurityRun.find(q)
+    .select("projectId serverName serverUrl transport summary createdAt updatedAt")
+    .sort({ createdAt: -1 });
+  res.json({ runs });
+});
+
+/** GET /api/mcp-lab/security/runs/:id */
+const getSecurityRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpSecurityRun.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ run });
+});
+
+/** DELETE /api/mcp-lab/security/runs/:id */
+const deleteSecurityRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpSecurityRun.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  const bugs = await McpBug.deleteMany({
+    _id: { $in: run.bugIds || [] },
+    companyId: req.user.companyId,
+  });
+  res.json({ ok: true, deletedBugCount: bugs.deletedCount || 0 });
+});
+
 module.exports = {
   connectServer,
   getTools,
@@ -728,4 +839,12 @@ module.exports = {
   getSuite,
   deleteSuite,
   runSuite,
+  runProfile,
+  listProfileRuns,
+  getProfileRun,
+  deleteProfileRun,
+  runSecurityScan,
+  listSecurityRuns,
+  getSecurityRun,
+  deleteSecurityRun,
 };

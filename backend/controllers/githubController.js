@@ -21,7 +21,7 @@ const {
 } = require("../services/docService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
 
-const CONCURRENCY = 5;
+const CONCURRENCY = 2;
 
 const EXCLUDED_DIRS = [
   "node_modules",
@@ -168,6 +168,17 @@ async function runBackfill(jobId) {
     const anthropicClient = await getUserAnthropicClient(job.userId);
     const octokit = await getOctokit(job.installationId);
 
+    // Resolve companyId for the docs we'll save. Prefer the denormalized
+    // value on Installation; fall back to the User lookup for old installs.
+    const installation = await Installation.findOne({
+      installationId: job.installationId,
+    });
+    let companyId = installation?.companyId || null;
+    if (!companyId && job.userId) {
+      const owner = await User.findById(job.userId).select("companyId");
+      companyId = owner?.companyId || null;
+    }
+
     // 1) Full tree once — used both for mount context and candidate selection.
     const tree = await scanRepoTree(octokit, job.owner, job.repo);
     console.log(`[backfill ${job._id}] tree size:`, tree.length);
@@ -287,6 +298,7 @@ async function runBackfill(jobId) {
               repo: job.repo,
               owner: job.owner,
               userId: job.userId,
+              companyId,
               sourceFile: file.path,
               sourceSha: file.sha,
             });

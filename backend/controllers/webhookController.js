@@ -169,6 +169,7 @@ async function syncFileDocs({
   mountContext,
   prNumber,
   userId,
+  companyId,
 }) {
   const result = {
     file: file.filename,
@@ -242,6 +243,7 @@ async function syncFileDocs({
             repo,
             owner,
             userId,
+            companyId,
             source: "pr",
             sourceFile: file.filename,
             sourceSha: file.sha,
@@ -285,6 +287,11 @@ async function handlePullRequest(payload) {
       installationId: installation.id,
     });
     const userId = installationRecord?.userId || null;
+    let companyId = installationRecord?.companyId || null;
+    if (!companyId && userId) {
+      const user = await User.findById(userId).select("companyId");
+      companyId = user?.companyId || null;
+    }
 
     const octokit = await getOctokit(installation.id);
 
@@ -319,6 +326,7 @@ async function handlePullRequest(payload) {
     //       mountContext,
     //       prNumber,
     //       userId,
+    //       companyId,
     //     });
     //     results.push(r);
     //   } catch (err) {

@@ -6,6 +6,15 @@ const User = require("../model/userModel");
 const Company = require("../model/companyModel");
 const CompanyInvite = require("../model/companyInviteModel");
 const { encrypt, maskSecret } = require("../services/secretCrypto");
+const {
+  validatePasswordStrength,
+  hashPassword,
+  isReusedPassword,
+  pushPasswordHistory,
+} = require("../services/passwordPolicy");
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_DURATION_MS = 15 * 60 * 1000;
 // const Mailjet = require("node-mailjet");
 
 // const mailjet = Mailjet.apiConnect(
@@ -61,25 +70,10 @@ const registerUser = asyncHandler(async (req, res) => {
     );
   }
 
-  if (password.length < 9) {
+  const passwordError = validatePasswordStrength(password);
+  if (passwordError) {
     res.status(400);
-    throw new Error("La contraseña debe tener 9 caracteres o más.");
-  }
-  if (!/[A-Z]/.test(password)) {
-    res.status(400);
-    throw new Error(
-      "La contraseña debe contener al menos una letra mayúscula."
-    );
-  }
-  if (!/\d/.test(password)) {
-    res.status(400);
-    throw new Error("La contraseña debe contener al menos un número.");
-  }
-  if (!/[!@#$%^&*]/.test(password)) {
-    res.status(400);
-    throw new Error(
-      "La contraseña debe contener al menos un símbolo (!@#$%^&*)."
-    );
+    throw new Error(passwordError);
   }
 
   const userExists = await User.findOne({ email: normalizedEmail });
@@ -89,8 +83,7 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new Error("User already exists");
   }
 
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(password, salt);
+  const hashedPassword = await hashPassword(password);
 
   let companyId = null;
   let userRole = "owner";
@@ -123,6 +116,8 @@ const registerUser = asyncHandler(async (req, res) => {
     terms: normalizedTerms,
     companyId,
     role: userRole,
+    passwordHistory: [{ hash: hashedPassword, changedAt: new Date() }],
+    passwordChangedAt: new Date(),
   });
 
   if (!companyId) {
@@ -195,34 +190,62 @@ const loginUser = asyncHandler(async (req, res) => {
   const normalizedEmail = email.toLowerCase();
   const user = await User.findOne({ email: normalizedEmail });
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
+  if (!user) {
     res.status(400);
     throw new Error("Correo electrónico o contraseña incorrectos.");
   }
 
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (user && isMatch) {
-    await user.save();
-
-    res.json({
-      _id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      pais: user.pais,
-      edad: user.edad,
-      token: generateToken(user._id),
-      loginDays: user.loginDays,
-      customerId: user.customerId,
-      secretKeyStripe: user.secretKeyStripe,
-      daysStudy: user.daysStudy,
-      companyId: user.companyId,
-      role: user.role,
-    });
-  } else {
-    res.status(400);
-    throw new Error("Invalid credentials");
+  if (user.lockUntil && user.lockUntil > new Date()) {
+    const minutesLeft = Math.ceil((user.lockUntil - new Date()) / 60000);
+    res.status(423);
+    throw new Error(
+      `Cuenta bloqueada temporalmente. Intenta de nuevo en ${minutesLeft} minutos.`
+    );
   }
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+    if (user.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
+      user.lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+      user.failedLoginAttempts = 0;
+    }
+    await user.save();
+    res.status(400);
+    throw new Error("Correo electrónico o contraseña incorrectos.");
+  }
+
+  user.failedLoginAttempts = 0;
+  user.lockUntil = undefined;
+  await user.save();
+
+  if (user.twoFactorEnabled) {
+    const twoFactorToken = jwt.sign(
+      { id: user._id, twoFactorPending: true },
+      process.env.JWT_SECRET_NODE,
+      { expiresIn: "5m" }
+    );
+    return res.json({
+      requires2FA: true,
+      twoFactorToken,
+    });
+  }
+
+  res.json({
+    _id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    pais: user.pais,
+    edad: user.edad,
+    token: generateToken(user._id),
+    loginDays: user.loginDays,
+    customerId: user.customerId,
+    secretKeyStripe: user.secretKeyStripe,
+    daysStudy: user.daysStudy,
+    companyId: user.companyId,
+    role: user.role,
+  });
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {
@@ -301,7 +324,12 @@ const forgotPassword = asyncHandler(async (req, res) => {
 const resetPassword = asyncHandler(async (req, res) => {
   const { password } = req.body;
 
-  // Encriptar el token de la URL
+  const passwordError = validatePasswordStrength(password);
+  if (passwordError) {
+    res.status(400);
+    throw new Error(passwordError);
+  }
+
   const resetPasswordToken = crypto
     .createHash("sha256")
     .update(req.params.token)
@@ -309,21 +337,34 @@ const resetPassword = asyncHandler(async (req, res) => {
 
   const user = await User.findOne({
     resetPasswordToken,
-    resetPasswordExpire: { $gt: Date.now() }, // Verifica que el token no haya expirado
-  });
+    resetPasswordExpire: { $gt: Date.now() },
+  }).select("+passwordHistory");
 
   if (!user) {
     res.status(400);
     throw new Error("Invalid token or token has expired");
   }
 
-  // Establecer la nueva contraseña
-  const salt = await bcrypt.genSalt(10);
-  user.password = await bcrypt.hash(password, salt);
+  if (await bcrypt.compare(password, user.password)) {
+    res.status(400);
+    throw new Error("La nueva contraseña no puede ser igual a la actual.");
+  }
 
-  // Limpiar los campos de reset token y expiración
+  if (await isReusedPassword(password, user.passwordHistory)) {
+    res.status(400);
+    throw new Error(
+      "No puedes reutilizar una de tus últimas contraseñas. Elige una diferente."
+    );
+  }
+
+  const newHash = await hashPassword(password);
+  user.password = newHash;
+  user.passwordHistory = pushPasswordHistory(user.passwordHistory, newHash);
+  user.passwordChangedAt = new Date();
   user.resetPasswordToken = undefined;
   user.resetPasswordExpire = undefined;
+  user.failedLoginAttempts = 0;
+  user.lockUntil = undefined;
 
   await user.save();
 
@@ -407,7 +448,9 @@ const deleteAnthropicKey = asyncHandler(async (req, res) => {
 // Route:       GET /api/user/me/settings
 // Access:      Private
 const getMySettings = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user._id).select("anthropicKeyMask");
+  const user = await User.findById(req.user._id).select(
+    "anthropicKeyMask twoFactorEnabled"
+  );
   if (!user) {
     res.status(404);
     throw new Error("User not found");
@@ -415,6 +458,7 @@ const getMySettings = asyncHandler(async (req, res) => {
   res.json({
     anthropicKeyMask: user.anthropicKeyMask || null,
     hasAnthropicKey: !!user.anthropicKeyMask,
+    twoFactorEnabled: !!user.twoFactorEnabled,
   });
 });
 

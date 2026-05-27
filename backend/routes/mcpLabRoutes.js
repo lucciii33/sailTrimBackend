@@ -52,6 +52,18 @@ router.get("/traces", protect, c.listTraces);
 router.get("/traces/:id", protect, c.getTrace);
 router.delete("/traces/:id", protect, c.deleteTrace);
 
+// --- Token cost profiler ---
+router.post("/projects/:id/profile/run", protect, c.runProfile);
+router.get("/profile/runs", protect, c.listProfileRuns);
+router.get("/profile/runs/:id", protect, c.getProfileRun);
+router.delete("/profile/runs/:id", protect, c.deleteProfileRun);
+
+// --- Security scanner ---
+router.post("/projects/:id/security/scan", protect, c.runSecurityScan);
+router.get("/security/runs", protect, c.listSecurityRuns);
+router.get("/security/runs/:id", protect, c.getSecurityRun);
+router.delete("/security/runs/:id", protect, c.deleteSecurityRun);
+
 // --- Suites ---
 router.post("/suites", protect, c.createSuite);
 router.get("/suites", protect, c.listSuites);
