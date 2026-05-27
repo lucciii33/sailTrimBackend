@@ -82,7 +82,7 @@ const mcpSuiteSchema = new mongoose.Schema(
     serverUrl: { type: String },
     transport: { type: String, default: "http" },
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: "McpProject", index: true },
-    kind: { type: String, enum: ["manual", "smoke"], default: "manual", index: true },
+    kind: { type: String, enum: ["manual", "smoke", "regression"], default: "manual", index: true },
     generatedBy: {
       provider: { type: String, enum: ["openai", "anthropic", "none"], default: "none" },
       model: String,
@@ -95,6 +95,7 @@ const mcpSuiteSchema = new mongoose.Schema(
         userPrompt: String,
         expectedTool: String,
         expectedArgs: mongoose.Schema.Types.Mixed,
+        expectedResponse: mongoose.Schema.Types.Mixed, // baseline response for regression checks
         assertions: [String], // plain english, judge evaluates
       },
     ],
