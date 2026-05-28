@@ -12,6 +12,7 @@ const {
   isReusedPassword,
   pushPasswordHistory,
 } = require("../services/passwordPolicy");
+const { logEvent } = require("../services/auditLogger");
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -64,7 +65,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
   if (!firstName || !lastName || !normalizedEmail || !password) {
     res.status(400);
-    throw new Error("Por Favor completa todo los campos.");
+    throw new Error("Please complete all fields.");
   }
 
   if (
@@ -73,9 +74,7 @@ const registerUser = asyncHandler(async (req, res) => {
     !normalizedEmail.includes(".")
   ) {
     res.status(400);
-    throw new Error(
-      "Por favor, completa el campo de correo electrónico correctamente."
-    );
+    throw new Error("Please enter a valid email address.");
   }
 
   const passwordError = validatePasswordStrength(password);
@@ -104,11 +103,11 @@ const registerUser = asyncHandler(async (req, res) => {
     });
     if (!invite) {
       res.status(400);
-      throw new Error("Invitación inválida o expirada");
+      throw new Error("Invalid or expired invitation.");
     }
     if (invite.email.toLowerCase() !== normalizedEmail) {
       res.status(400);
-      throw new Error("La invitación es para otro email");
+      throw new Error("This invitation is for a different email.");
     }
     companyId = invite.companyId;
     userRole = invite.role || "member";
@@ -179,6 +178,13 @@ const registerUser = asyncHandler(async (req, res) => {
   //     console.error("Error sending email:", err.statusCode);
   //   });
 
+  await logEvent({
+    event: "user_register",
+    req,
+    user,
+    metadata: { inviteToken: !!inviteToken },
+  });
+
   res.status(201).json({
     _id: user.id,
     firstName: user.firstName,
@@ -200,14 +206,20 @@ const loginUser = asyncHandler(async (req, res) => {
 
   if (!user) {
     res.status(400);
-    throw new Error("Correo electrónico o contraseña incorrectos.");
+    throw new Error("Invalid email or password.");
   }
 
   if (user.lockUntil && user.lockUntil > new Date()) {
+    await logEvent({
+      event: "user_login_locked",
+      req,
+      user,
+      success: false,
+    });
     const minutesLeft = Math.ceil((user.lockUntil - new Date()) / 60000);
     res.status(423);
     throw new Error(
-      `Cuenta bloqueada temporalmente. Intenta de nuevo en ${minutesLeft} minutos.`
+      `Account temporarily locked. Try again in ${minutesLeft} minutes.`
     );
   }
 
@@ -219,13 +231,27 @@ const loginUser = asyncHandler(async (req, res) => {
       user.failedLoginAttempts = 0;
     }
     await user.save();
+    await logEvent({
+      event: "user_login_failed",
+      req,
+      user,
+      success: false,
+      metadata: { failedAttempts: user.failedLoginAttempts },
+    });
     res.status(400);
-    throw new Error("Correo electrónico o contraseña incorrectos.");
+    throw new Error("Invalid email or password.");
   }
 
   user.failedLoginAttempts = 0;
   user.lockUntil = undefined;
   await user.save();
+
+  await logEvent({
+    event: "user_login_success",
+    req,
+    user,
+    metadata: { requires2FA: !!user.twoFactorEnabled },
+  });
 
   if (user.twoFactorEnabled) {
     const twoFactorToken = jwt.sign(
@@ -277,6 +303,12 @@ const forgotPassword = asyncHandler(async (req, res) => {
   user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
 
   await user.save();
+
+  await logEvent({
+    event: "password_reset_requested",
+    req,
+    user,
+  });
 
   const resetUrl = `${FRONTEND_URL}/reset-password/${resetToken}`;
   if (process.env.NODE_ENV !== "production") {
@@ -355,13 +387,13 @@ const resetPassword = asyncHandler(async (req, res) => {
 
   if (await bcrypt.compare(password, user.password)) {
     res.status(400);
-    throw new Error("La nueva contraseña no puede ser igual a la actual.");
+    throw new Error("New password cannot be the same as your current one.");
   }
 
   if (await isReusedPassword(password, user.passwordHistory)) {
     res.status(400);
     throw new Error(
-      "No puedes reutilizar una de tus últimas contraseñas. Elige una diferente."
+      "You can't reuse one of your last 5 passwords. Please choose a different one."
     );
   }
 
@@ -369,6 +401,12 @@ const resetPassword = asyncHandler(async (req, res) => {
   user.password = newHash;
   user.passwordHistory = pushPasswordHistory(user.passwordHistory, newHash);
   user.passwordChangedAt = new Date();
+
+  await logEvent({
+    event: "password_reset_completed",
+    req,
+    user,
+  });
   user.resetPasswordToken = undefined;
   user.resetPasswordExpire = undefined;
   user.failedLoginAttempts = 0;
@@ -412,7 +450,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 // };
 
 const generateToken = (id) => {
-  const t = jwt.sign({ id }, process.env.JWT_SECRET_NODE, { expiresIn: "8h" });
+  const t = jwt.sign({ id }, process.env.JWT_SECRET_NODE, { expiresIn: "1h" });
   console.log("🔥 TOKEN GENERADO BACKEND:", t);
   return t;
 };
@@ -434,6 +472,7 @@ const saveAnthropicKey = asyncHandler(async (req, res) => {
   user.anthropicKeyEncrypted = encrypt(apiKey);
   user.anthropicKeyMask = maskSecret(apiKey);
   await user.save();
+  await logEvent({ event: "anthropic_key_saved", req, user });
   res.json({ anthropicKeyMask: user.anthropicKeyMask, hasAnthropicKey: true });
 });
 
@@ -449,6 +488,7 @@ const deleteAnthropicKey = asyncHandler(async (req, res) => {
   user.anthropicKeyEncrypted = undefined;
   user.anthropicKeyMask = undefined;
   await user.save();
+  await logEvent({ event: "anthropic_key_removed", req, user });
   res.json({ anthropicKeyMask: null, hasAnthropicKey: false });
 });
 

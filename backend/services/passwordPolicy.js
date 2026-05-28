@@ -48,28 +48,28 @@ const COMMON_PASSWORDS = new Set([
 
 function validatePasswordStrength(password) {
   if (!password || typeof password !== "string") {
-    return "La contraseña es obligatoria.";
+    return "Password is required.";
   }
   if (password.length < MIN_LENGTH) {
-    return `La contraseña debe tener ${MIN_LENGTH} caracteres o más.`;
+    return `Password must be at least ${MIN_LENGTH} characters long.`;
   }
   if (password.length > 128) {
-    return "La contraseña no puede tener más de 128 caracteres.";
+    return "Password must be 128 characters or fewer.";
   }
   if (!/[A-Z]/.test(password)) {
-    return "La contraseña debe contener al menos una letra mayúscula.";
+    return "Password must contain at least one uppercase letter.";
   }
   if (!/[a-z]/.test(password)) {
-    return "La contraseña debe contener al menos una letra minúscula.";
+    return "Password must contain at least one lowercase letter.";
   }
   if (!/\d/.test(password)) {
-    return "La contraseña debe contener al menos un número.";
+    return "Password must contain at least one number.";
   }
   if (!/[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]~`';]/.test(password)) {
-    return "La contraseña debe contener al menos un símbolo.";
+    return "Password must contain at least one symbol.";
   }
   if (COMMON_PASSWORDS.has(password.toLowerCase())) {
-    return "Esta contraseña es demasiado común. Elige una diferente.";
+    return "This password is too common. Please choose a different one.";
   }
   return null;
 }

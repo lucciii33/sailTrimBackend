@@ -8,6 +8,7 @@ const connectDB = require("./config/db");
 
 // const sessionDeleteCronJob = require("./jobs/deleteSession.js");
 const cors = require("cors");
+const helmet = require("helmet");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 // const Mailjet = require("node-mailjet"); // Para enviar correos
 const User = require("./model/userModel.js");
@@ -238,8 +239,9 @@ app.use(
   require("./routes/webhook"),
 );
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(helmet());
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(cors());
 
 const endpointSecret = process.env.WEB_HOOK_STRIPE;

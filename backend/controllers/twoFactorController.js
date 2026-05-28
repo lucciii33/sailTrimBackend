@@ -6,6 +6,7 @@ const QRCode = require("qrcode");
 const asyncHandler = require("express-async-handler");
 const User = require("../model/userModel");
 const { encrypt, decrypt } = require("../services/secretCrypto");
+const { logEvent } = require("../services/auditLogger");
 
 const ISSUER = process.env.TWO_FACTOR_ISSUER || "OliviaTools";
 const BACKUP_CODE_COUNT = 8;
@@ -32,7 +33,7 @@ const setupTwoFactor = asyncHandler(async (req, res) => {
   }
   if (user.twoFactorEnabled) {
     res.status(400);
-    throw new Error("2FA ya está activado. Desactívalo antes de reconfigurar.");
+    throw new Error("2FA is already enabled. Disable it before reconfiguring.");
   }
 
   const secret = speakeasy.generateSecret({
@@ -43,6 +44,8 @@ const setupTwoFactor = asyncHandler(async (req, res) => {
 
   user.twoFactorSecret = encrypt(secret.base32);
   await user.save();
+
+  await logEvent({ event: "two_factor_setup_started", req, user });
 
   const qrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
 
@@ -58,7 +61,7 @@ const verifyTwoFactorSetup = asyncHandler(async (req, res) => {
   const { code } = req.body;
   if (!code) {
     res.status(400);
-    throw new Error("Código requerido.");
+    throw new Error("Code is required.");
   }
 
   const user = await User.findById(req.user._id).select(
@@ -66,7 +69,7 @@ const verifyTwoFactorSetup = asyncHandler(async (req, res) => {
   );
   if (!user || !user.twoFactorSecret) {
     res.status(400);
-    throw new Error("Primero genera el secret con /2fa/setup.");
+    throw new Error("Generate a secret first via /2fa/setup.");
   }
 
   const decodedSecret = decrypt(user.twoFactorSecret);
@@ -79,13 +82,15 @@ const verifyTwoFactorSetup = asyncHandler(async (req, res) => {
 
   if (!verified) {
     res.status(400);
-    throw new Error("Código inválido.");
+    throw new Error("Invalid code.");
   }
 
   const backupCodes = generateBackupCodes();
   user.twoFactorBackupCodes = await hashBackupCodes(backupCodes);
   user.twoFactorEnabled = true;
   await user.save();
+
+  await logEvent({ event: "two_factor_enabled", req, user });
 
   res.json({
     twoFactorEnabled: true,
@@ -98,7 +103,7 @@ const disableTwoFactor = asyncHandler(async (req, res) => {
   const { password } = req.body;
   if (!password) {
     res.status(400);
-    throw new Error("Contraseña requerida para desactivar 2FA.");
+    throw new Error("Password is required to disable 2FA.");
   }
 
   const user = await User.findById(req.user._id);
@@ -110,13 +115,15 @@ const disableTwoFactor = asyncHandler(async (req, res) => {
   const ok = await bcrypt.compare(password, user.password);
   if (!ok) {
     res.status(400);
-    throw new Error("Contraseña incorrecta.");
+    throw new Error("Incorrect password.");
   }
 
   user.twoFactorEnabled = false;
   user.twoFactorSecret = undefined;
   user.twoFactorBackupCodes = [];
   await user.save();
+
+  await logEvent({ event: "two_factor_disabled", req, user });
 
   res.json({ twoFactorEnabled: false });
 });
@@ -126,7 +133,7 @@ const loginVerifyTwoFactor = asyncHandler(async (req, res) => {
   const { twoFactorToken, code } = req.body;
   if (!twoFactorToken || !code) {
     res.status(400);
-    throw new Error("Token y código requeridos.");
+    throw new Error("Token and code are required.");
   }
 
   let payload;
@@ -134,11 +141,11 @@ const loginVerifyTwoFactor = asyncHandler(async (req, res) => {
     payload = jwt.verify(twoFactorToken, process.env.JWT_SECRET_NODE);
   } catch (e) {
     res.status(401);
-    throw new Error("Token inválido o expirado.");
+    throw new Error("Invalid or expired token.");
   }
   if (!payload.twoFactorPending) {
     res.status(401);
-    throw new Error("Token inválido.");
+    throw new Error("Invalid token.");
   }
 
   const user = await User.findById(payload.id).select(
@@ -146,7 +153,7 @@ const loginVerifyTwoFactor = asyncHandler(async (req, res) => {
   );
   if (!user || !user.twoFactorEnabled) {
     res.status(400);
-    throw new Error("2FA no está activado para este usuario.");
+    throw new Error("2FA is not enabled for this user.");
   }
 
   const cleanCode = String(code).replace(/\s/g, "");
@@ -173,12 +180,20 @@ const loginVerifyTwoFactor = asyncHandler(async (req, res) => {
   }
 
   if (!verified) {
+    await logEvent({
+      event: "two_factor_verify_failed",
+      req,
+      user,
+      success: false,
+    });
     res.status(400);
-    throw new Error("Código 2FA inválido.");
+    throw new Error("Invalid 2FA code.");
   }
 
+  await logEvent({ event: "two_factor_verify_success", req, user });
+
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET_NODE, {
-    expiresIn: "8h",
+    expiresIn: "1h",
   });
 
   res.json({
