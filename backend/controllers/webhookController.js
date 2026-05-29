@@ -19,7 +19,7 @@ const User = require("../model/userModel");
 const Company = require("../model/companyModel");
 const { decrypt } = require("../services/secretCrypto");
 
-const SLACK_NOTIFY_BRANCHES = new Set(["main", "dev"]);
+const SLACK_NOTIFY_BRANCHES = new Set(["main", "master", "dev"]);
 
 async function handleWebhook(req, res) {
   try {
