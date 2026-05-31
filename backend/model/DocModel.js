@@ -22,13 +22,22 @@ const responseSchema = new mongoose.Schema(
 const docSchema = new mongoose.Schema({
   method: { type: String, required: true },
   path: { type: String, required: true },
+  section: { type: String, default: "default" },
   description: { type: String, required: true },
   requestBody: [paramSchema],
   queryParams: [paramSchema],
   responses: [responseSchema],
   prNumber: { type: Number },
-  repo: { type: String, required: true },
-  owner: { type: String, required: true },
+  // Spec-import endpoints belong to an ApiProject instead of a GitHub repo.
+  projectId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "ApiProject",
+    index: true,
+  },
+  // owner/repo are only required for the GitHub-docs flow; spec imports leave
+  // them empty and key off projectId.
+  repo: { type: String },
+  owner: { type: String },
   source: { type: String, enum: ["pr", "backfill"], default: "pr" },
   sourceFile: { type: String },
   sourceSha: { type: String },

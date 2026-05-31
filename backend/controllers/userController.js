@@ -13,6 +13,17 @@ const {
   pushPasswordHistory,
 } = require("../services/passwordPolicy");
 const { logEvent } = require("../services/auditLogger");
+const { OAuth2Client } = require("google-auth-library");
+
+// Lazy Google OIDC client — verifies the ID token the browser gets from
+// "Sign in with Google". Only the client_id is needed to check the audience.
+let _googleClient = null;
+function getGoogleClient() {
+  if (!_googleClient) {
+    _googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  }
+  return _googleClient;
+}
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
@@ -510,9 +521,107 @@ const getMySettings = asyncHandler(async (req, res) => {
   });
 });
 
+// ===================== Google SSO / OIDC login =====================
+// The browser obtains a signed ID token from Google ("Sign in with Google").
+// We verify it, enforce the company domain, then find/link/create the Mongo
+// user and issue our own JWT — same session as a normal login from there on.
+const googleLogin = asyncHandler(async (req, res) => {
+  const token = req.body.credential || req.body.idToken;
+  if (!token) {
+    res.status(400);
+    throw new Error("Missing Google credential");
+  }
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    res.status(500);
+    throw new Error("Google SSO not configured (GOOGLE_CLIENT_ID missing)");
+  }
+
+  let payload;
+  try {
+    const ticket = await getGoogleClient().verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    payload = ticket.getPayload();
+  } catch (err) {
+    res.status(401);
+    throw new Error("Invalid Google token");
+  }
+
+  const email = (payload.email || "").toLowerCase().trim();
+  if (!email || !payload.email_verified) {
+    res.status(401);
+    throw new Error("Google account email not verified");
+  }
+
+  // Enterprise lock: only allow the company's Workspace domain. Comma-separated
+  // list in GOOGLE_ALLOWED_HD (e.g. "company.com"). If unset, any Google login
+  // is allowed (dev only — set this in production).
+  const allowed = (process.env.GOOGLE_ALLOWED_HD || "")
+    .split(",")
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowed.length) {
+    const emailDomain = email.split("@")[1];
+    const hd = (payload.hd || "").toLowerCase();
+    if (!allowed.includes(hd) && !allowed.includes(emailDomain)) {
+      res.status(403);
+      throw new Error("This Google account is not from an allowed domain");
+    }
+  }
+
+  // 1) match by googleId, 2) link an existing local account by email,
+  // 3) create a new SSO user (just-in-time provisioning).
+  let user = await User.findOne({ googleId: payload.sub });
+  if (!user) {
+    user = await User.findOne({ email });
+    if (user) {
+      user.googleId = payload.sub;
+      if (!user.password) user.authProvider = "google";
+      await user.save();
+    }
+  }
+
+  if (!user) {
+    user = await User.create({
+      firstName: payload.given_name || email.split("@")[0],
+      lastName: payload.family_name || "",
+      email,
+      googleId: payload.sub,
+      authProvider: "google",
+      terms: true,
+    });
+    // New SSO user gets their own workspace, same as registerUser.
+    const company = await Company.create({
+      name: `${user.firstName}'s Workspace`,
+      ownerUserId: user._id,
+    });
+    user.companyId = company._id;
+    await user.save();
+  }
+
+  await logEvent({
+    event: "user_login_success",
+    req,
+    user,
+    metadata: { provider: "google" },
+  });
+
+  res.json({
+    _id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    companyId: user.companyId,
+    role: user.role,
+    token: generateToken(user._id),
+  });
+});
+
 module.exports = {
   registerUser,
   loginUser,
+  googleLogin,
   forgotPassword,
   resetPassword,
   saveAnthropicKey,

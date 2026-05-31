@@ -3,6 +3,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const Doc = require("../model/DocModel");
 const ApiQaConfig = require("../model/ApiQaConfig");
+const ApiProject = require("../model/ApiProject");
 const Bug = require("../model/BugModel");
 const TestRun = require("../model/TestRunModel");
 const { decrypt } = require("./secretCrypto");
@@ -411,17 +412,39 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     throw err;
   }
 
-  const config = await ApiQaConfig.findOne({
-    companyId,
-    owner: doc.owner,
-    repo: doc.repo,
-  });
-  if (!config) {
-    const err = new Error(
-      `No QA config found for ${doc.owner}/${doc.repo}. Set baseUrl + auth first.`,
-    );
-    err.statusCode = 400;
-    throw err;
+  // Spec-import docs carry their baseUrl + auth on their ApiProject; classic
+  // GitHub docs use the per-repo ApiQaConfig. Both expose { baseUrl, auth }.
+  let config;
+  if (doc.projectId) {
+    const project = await ApiProject.findOne({
+      _id: doc.projectId,
+      companyId,
+    });
+    if (!project || !project.baseUrl) {
+      const err = new Error(
+        "No base URL set for this API project. Set baseUrl + auth first.",
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    config = {
+      baseUrl: project.baseUrl,
+      auth: project.auth,
+      defaultHeaders: null,
+    };
+  } else {
+    config = await ApiQaConfig.findOne({
+      companyId,
+      owner: doc.owner,
+      repo: doc.repo,
+    });
+    if (!config) {
+      const err = new Error(
+        `No QA config found for ${doc.owner}/${doc.repo}. Set baseUrl + auth first.`,
+      );
+      err.statusCode = 400;
+      throw err;
+    }
   }
 
   const runId = crypto.randomUUID();

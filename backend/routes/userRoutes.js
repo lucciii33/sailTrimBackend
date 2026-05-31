@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router()
-const {registerUser, loginUser, resetLoginDays, resetPassword, forgotPassword, saveAnthropicKey, deleteAnthropicKey, getMySettings} = require('../controllers/userController')
+const {registerUser, loginUser, googleLogin, resetLoginDays, resetPassword, forgotPassword, saveAnthropicKey, deleteAnthropicKey, getMySettings} = require('../controllers/userController')
 const {
   setupTwoFactor,
   verifyTwoFactorSetup,
@@ -17,6 +17,7 @@ const {
 router.route('/').post(authLimiter, registerUser)
 router.route('/register').post(authLimiter, registerUser)
 router.route('/login').post(authLimiter, loginUser)
+router.route('/auth/google').post(authLimiter, googleLogin)
 router.route('/login/2fa').post(twoFactorLimiter, loginVerifyTwoFactor)
 router.route('/reset-password/:token').put(passwordResetLimiter, resetPassword)
 router.route('/forgot-password').post(passwordResetLimiter, forgotPassword)

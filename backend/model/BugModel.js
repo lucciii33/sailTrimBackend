@@ -37,8 +37,8 @@ const bugSchema = new mongoose.Schema({
     ref: "Doc",
     required: true,
   },
-  owner: { type: String, required: true },
-  repo: { type: String, required: true },
+  owner: { type: String },
+  repo: { type: String },
   runId: { type: String, required: true, index: true },
   severity: {
     type: String,

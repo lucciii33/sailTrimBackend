@@ -1,9 +1,11 @@
 const ApiQaConfig = require("../model/ApiQaConfig");
+const ApiProject = require("../model/ApiProject");
 const Bug = require("../model/BugModel");
 const Doc = require("../model/DocModel");
 const TestRun = require("../model/TestRunModel");
 const { encrypt, maskSecret, decrypt } = require("../services/secretCrypto");
 const apiQAService = require("../services/apiQAService");
+const openApiService = require("../services/openApiService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
 
 function requireCompany(req, res) {
@@ -167,9 +169,138 @@ async function getRun(req, res) {
   res.json(run);
 }
 
+// ======================= Spec-import (API Project) flow =======================
+
+function serializeProject(p) {
+  if (!p) return null;
+  const auth = p.auth || { type: "none" };
+  return {
+    _id: p._id,
+    name: p.name,
+    title: p.title,
+    version: p.version,
+    source: p.source,
+    baseUrl: p.baseUrl || "",
+    auth: {
+      type: auth.type || "none",
+      headerName: auth.headerName || "",
+      username: auth.username || "",
+      valueMasked: maskSecret(decrypt(auth.valueEncrypted)),
+      passwordMasked: maskSecret(decrypt(auth.passwordEncrypted)),
+    },
+    github: p.github || {},
+    updatedAt: p.updatedAt,
+  };
+}
+
+// Paste a Swagger/OpenAPI spec → creates/updates an ApiProject + its endpoints.
+async function importProjectSpec(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { specText, projectId } = req.body;
+  if (!specText) {
+    return res.status(400).json({ message: "specText is required" });
+  }
+  try {
+    const result = await openApiService.importSpec({
+      specText,
+      projectId, // optional — re-import into an existing project
+      userId: req.user._id,
+      companyId: req.user.companyId,
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("importProjectSpec error:", err);
+    res.status(status).json({ message: err.message || "Import failed" });
+  }
+}
+
+async function listProjects(req, res) {
+  if (!requireCompany(req, res)) return;
+  const projects = await ApiProject.find({
+    companyId: req.user.companyId,
+  }).sort({ updatedAt: -1 });
+  res.json(projects.map(serializeProject));
+}
+
+async function getProjectDocs(req, res) {
+  if (!requireCompany(req, res)) return;
+  const project = await ApiProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+  const docs = await Doc.find({
+    companyId: req.user.companyId,
+    projectId: project._id,
+  }).sort({ section: 1, path: 1 });
+  res.json({ project: serializeProject(project), docs });
+}
+
+// Set baseUrl + auth on a project. The secret is encrypted at rest.
+async function setProjectAuth(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { baseUrl, auth = {} } = req.body;
+  const project = await ApiProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  if (baseUrl != null) project.baseUrl = baseUrl;
+  project.auth = {
+    type: auth.type || "none",
+    headerName: auth.headerName || "",
+    username: auth.username || "",
+    // Only overwrite the secret when a new value is supplied.
+    valueEncrypted: auth.value
+      ? encrypt(auth.value)
+      : project.auth?.valueEncrypted || "",
+    passwordEncrypted: auth.password
+      ? encrypt(auth.password)
+      : project.auth?.passwordEncrypted || "",
+  };
+  project.updatedAt = new Date();
+  await project.save();
+  res.json(serializeProject(project));
+}
+
+// One Postman collection for a whole section, ready for Newman.
+async function getProjectSectionCollection(req, res) {
+  if (!requireCompany(req, res)) return;
+  const section = req.query.section;
+  if (!section) {
+    return res.status(400).json({ message: "section query param required" });
+  }
+  const project = await ApiProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+  const docs = await Doc.find({
+    companyId: req.user.companyId,
+    projectId: project._id,
+    section,
+  });
+  if (docs.length === 0) {
+    return res.status(404).json({ message: "No endpoints in this section" });
+  }
+  const collection = openApiService.buildSectionCollection({
+    section,
+    docs,
+    baseUrl: project.baseUrl,
+  });
+  res.json(collection);
+}
+
 module.exports = {
   getConfig,
   upsertConfig,
+  importProjectSpec,
+  listProjects,
+  getProjectDocs,
+  setProjectAuth,
+  getProjectSectionCollection,
   findBugs,
   getBugs,
   deleteBug,

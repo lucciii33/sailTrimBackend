@@ -15,8 +15,20 @@ const userSchema = mongoose.Schema(
       required: true,
     },
     password: {
+      // Not required: SSO (Google) users authenticate via their IdP and have
+      // no local password. Email/password users still always set this.
       type: String,
-      required: true,
+      required: false,
+    },
+    googleId: {
+      type: String,
+      required: false,
+      index: true,
+    },
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
     },
     edad: {
       type: Number,
