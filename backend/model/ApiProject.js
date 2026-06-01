@@ -16,6 +16,18 @@ const authSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Environment variable: used to fill {{key}} / path params ({key}) in requests
+// at run time — e.g. baseUrl overrides, a real userId, a test providerId.
+// Secret values are encrypted at rest (like a token); plain ones are visible.
+const variableSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true },
+    value: { type: String, default: "" }, // encrypted when secret=true
+    secret: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
 // Optional link to a GitHub repo, so a manually-pasted spec can later be
 // "connected" and re-synced from source without re-keying everything.
 const githubSchema = new mongoose.Schema(
@@ -42,6 +54,7 @@ const apiProjectSchema = new mongoose.Schema({
   source: { type: String, enum: ["manual", "github"], default: "manual" },
   baseUrl: { type: String, default: "" },
   auth: { type: authSchema, default: () => ({ type: "none" }) },
+  variables: { type: [variableSchema], default: [] },
   github: { type: githubSchema, default: () => ({}) },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

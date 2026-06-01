@@ -600,6 +600,24 @@ const googleLogin = asyncHandler(async (req, res) => {
     await user.save();
   }
 
+  // If the account has app-level 2FA enabled, don't issue the session token
+  // yet — return the same 2FA challenge the password login uses, so Google
+  // sign-in also enforces the second factor.
+  if (user.twoFactorEnabled) {
+    await logEvent({
+      event: "user_login_success",
+      req,
+      user,
+      metadata: { provider: "google", requires2FA: true },
+    });
+    const twoFactorToken = jwt.sign(
+      { id: user._id, twoFactorPending: true },
+      process.env.JWT_SECRET_NODE,
+      { expiresIn: "5m" }
+    );
+    return res.json({ requires2FA: true, twoFactorToken });
+  }
+
   await logEvent({
     event: "user_login_success",
     req,

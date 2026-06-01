@@ -44,6 +44,62 @@ function safeParseJson(txt) {
   }
 }
 
+// Salvage complete case objects from a (possibly truncated) cases array — so a
+// response cut off by max_tokens still yields every case that finished writing.
+function salvageCases(raw) {
+  if (!raw) return [];
+  const start = raw.indexOf('"cases"');
+  const arrStart = start === -1 ? -1 : raw.indexOf("[", start);
+  if (arrStart === -1) return [];
+  const cases = [];
+  let depth = 0;
+  let objStart = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = arrStart + 1; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) objStart = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && objStart >= 0) {
+        try {
+          cases.push(JSON.parse(raw.slice(objStart, i + 1)));
+        } catch (_) {
+          /* skip incomplete */
+        }
+        objStart = -1;
+      }
+    }
+  }
+  return cases;
+}
+
+// Expand the compact markers the model emits into the real heavy payloads, so
+// we test oversized/max-length without bloating the model's JSON output.
+function expandMarkers(value) {
+  if (typeof value === "string") {
+    if (value === "__QA_LONG_STRING__") return "A".repeat(10000);
+    if (value === "__QA_OVERSIZED__") return new Array(10000).fill({ x: 1 });
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(expandMarkers);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = expandMarkers(v);
+    return out;
+  }
+  return value;
+}
+
 // ---------- Auth resolution ----------
 
 function buildAuthHeaders(authConfig) {
@@ -82,6 +138,35 @@ function joinUrl(baseUrl, path) {
   const b = String(baseUrl || "").replace(/\/+$/, "");
   const p = String(path || "").replace(/^\/+/, "");
   return `${b}/${p}`;
+}
+
+// ---------- Environment variable substitution ----------
+
+// Resolve a project's variables into a plain { key: value } map, decrypting
+// any marked secret. Used to fill requests at run time.
+function buildVarMap(variables) {
+  const map = {};
+  for (const v of variables || []) {
+    if (!v || !v.key) continue;
+    map[v.key] = v.secret ? decrypt(v.value) : v.value;
+  }
+  return map;
+}
+
+// Replace {{key}} tokens anywhere in a string.
+function fillTemplate(str, vars) {
+  return String(str).replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (m, k) =>
+    Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m,
+  );
+}
+
+// Fill a URL path: {{key}} tokens, plus {param} and :param path segments that
+// match a known variable (e.g. /users/{userId} → /users/123).
+function fillPath(path, vars) {
+  let p = fillTemplate(path, vars);
+  p = p.replace(/\{([\w.-]+)\}/g, (m, k) => (k in vars ? vars[k] : m));
+  p = p.replace(/:([\w]+)/g, (m, k) => (k in vars ? vars[k] : m));
+  return p;
 }
 
 function buildPostmanCollection({ doc, config, testCases }) {
@@ -161,7 +246,7 @@ You MUST generate exactly ${MAX_CASES} cases distributed across these 4 GROUPS:
 
 3. BOUNDARY (3-4 cases) — edges of valid input space
    - empty_string: "" for string fields
-   - max_length: very long strings (e.g. 10000 chars) for text fields
+   - max_length: for the long string, put the LITERAL marker "__QA_LONG_STRING__" (the runner expands it to 10000 chars). NEVER write the long string out.
    - zero / negative: 0, -1, -99999 for numeric fields
    - unicode: emoji, RTL text, null bytes (\\u0000) in strings
    - null_value: explicit null for fields
@@ -173,7 +258,7 @@ You MUST generate exactly ${MAX_CASES} cases distributed across these 4 GROUPS:
    - injection_xss: "<script>alert(1)</script>" in string fields
    - injection_command: "; ls -la", "$(whoami)" in fields that might hit a shell
    - path_traversal: "../../etc/passwd" in any path-like field
-   - oversized_payload: massive body (e.g. array of 10k items)
+   - oversized_payload: set body to the LITERAL marker string "__QA_OVERSIZED__" (the runner expands it to a massive array). NEVER write the huge array out.
    - unauthorized: clear auth → set headers to { "Authorization": "" }
    - invalid_auth: send a clearly bogus token → headers: { "Authorization": "Bearer invalid-token-xyz" }
 
@@ -190,9 +275,10 @@ Rules:
   - Injection attempts: SHOULD be [400, 422] (input rejected) OR [200, 201] (sanitized & treated as plain text). NEVER 500.
 - Do not include the auth header for normal cases — the runner adds it. Only set headers explicitly for security cases that need to clear or override auth.
 - Body must be a valid JSON object EXCEPT for malformed_json case (use a string).
+- COMPACTNESS (critical): keep every value SHORT. Never write a string longer than ~60 chars or an array longer than 3 items. For oversized/max_length use the markers above — the output must stay small or it gets truncated.
 - Return ONLY the JSON, no prose.`;
 
-async function generateTestCases(doc, { anthropicClient = null } = {}) {
+async function generateTestCases(doc, { anthropicClient = null, variables = {} } = {}) {
   const spec = {
     method: doc.method,
     path: doc.path,
@@ -202,22 +288,46 @@ async function generateTestCases(doc, { anthropicClient = null } = {}) {
     responses: doc.responses,
   };
 
+  // Tell the model which environment variables exist so it uses {{key}}
+  // placeholders (the runner injects the real values) instead of inventing IDs.
+  const varKeys = Object.keys(variables || {});
+  const envNote = varKeys.length
+    ? `\n\nAVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}
+Use a "{{key}}" placeholder wherever a path param or field matches one of these (e.g. /users/{{userId}}) so the runner injects the real value. For not_found / invalid cases, use an obviously-bogus literal instead of the placeholder.`
+    : "";
+
   const client = anthropicClient || getAnthropic();
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 6000,
+    // 16k so 15 detailed cases never get truncated mid-JSON (the old 6k cap
+    // silently cut the output → unparseable → zero cases).
+    max_tokens: 16000,
     system: TESTGEN_SYSTEM_PROMPT,
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}`,
       },
     ],
   });
 
   const raw = (response.content || []).map((c) => c.text || "").join("");
   const parsed = safeParseJson(raw);
-  const cases = parsed?.cases || [];
+  // If the JSON parsed cleanly use it; otherwise salvage whatever cases did
+  // finish writing (handles truncation gracefully instead of returning zero).
+  let cases = parsed?.cases || [];
+  if (cases.length === 0) {
+    cases = salvageCases(raw);
+    if (cases.length === 0) {
+      console.warn(
+        `generateTestCases: 0 cases (stop=${response.stop_reason}, outTokens=${response.usage?.output_tokens}). Raw head: ${raw.slice(0, 200)}`,
+      );
+    } else {
+      console.warn(
+        `generateTestCases: salvaged ${cases.length} cases from truncated output (stop=${response.stop_reason}).`,
+      );
+    }
+  }
 
   return {
     cases: cases.slice(0, MAX_CASES),
@@ -230,11 +340,17 @@ async function generateTestCases(doc, { anthropicClient = null } = {}) {
 
 // ---------- Test executor ----------
 
-async function executeTestCase({ testCase, doc, config }) {
+async function executeTestCase({ testCase, doc, config, variables = {} }) {
   const method = (testCase.method || doc.method).toUpperCase();
-  const baseUrl = config.baseUrl;
-  const path = testCase.path || doc.path;
+  const baseUrl = fillTemplate(config.baseUrl, variables);
+  // Inject env vars + resolve {param}/:param path segments into the URL path.
+  const path = fillPath(testCase.path || doc.path, variables);
   const url = joinUrl(baseUrl, path);
+
+  // DEBUG: confirms the env vars/ids you passed actually land in the request.
+  console.log(
+    `[QA] ${method} ${url}  (vars: ${Object.keys(variables).join(", ") || "none"})`,
+  );
 
   const defaultHeaders = config.defaultHeaders
     ? Object.fromEntries(config.defaultHeaders)
@@ -248,13 +364,25 @@ async function executeTestCase({ testCase, doc, config }) {
   // If the case explicitly set Authorization to "", drop it entirely.
   Object.keys(headers).forEach((k) => {
     if (headers[k] === "" || headers[k] == null) delete headers[k];
+    else headers[k] = fillTemplate(headers[k], variables);
   });
+
+  // Fill {{key}} tokens inside the body. Keep `body` COMPACT (markers intact)
+  // for the saved record, and build `sendBody` with markers expanded for the
+  // real request — so we never store a 10k-item array in the DB.
+  let body = testCase.body || null;
+  if (body != null && body !== "__QA_OVERSIZED__") {
+    const raw = typeof body === "string" ? body : JSON.stringify(body);
+    const filled = fillTemplate(raw, variables);
+    body = typeof body === "string" ? filled : safeParseJson(filled) ?? body;
+  }
+  const sendBody = body != null ? expandMarkers(body) : null;
 
   const requestRecord = {
     method,
     url,
     headers,
-    body: testCase.body || null,
+    body,
   };
 
   const start = Date.now();
@@ -264,7 +392,7 @@ async function executeTestCase({ testCase, doc, config }) {
       url,
       headers,
       params: testCase.query || undefined,
-      data: testCase.body || undefined,
+      data: sendBody || undefined,
       timeout: REQUEST_TIMEOUT_MS,
       validateStatus: () => true, // we want every status to come through, not throw
       maxRedirects: 0,
@@ -374,7 +502,7 @@ ${JSON.stringify(slim, null, 2)}`;
   const client = anthropicClient || getAnthropic();
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 6000,
+    max_tokens: 12000,
     system: ANALYZE_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMsg }],
   });
@@ -415,6 +543,7 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   // Spec-import docs carry their baseUrl + auth on their ApiProject; classic
   // GitHub docs use the per-repo ApiQaConfig. Both expose { baseUrl, auth }.
   let config;
+  let variables = {};
   if (doc.projectId) {
     const project = await ApiProject.findOne({
       _id: doc.projectId,
@@ -432,6 +561,7 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
       auth: project.auth,
       defaultHeaders: null,
     };
+    variables = buildVarMap(project.variables);
   } else {
     config = await ApiQaConfig.findOne({
       companyId,
@@ -452,6 +582,7 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   // 1) generate test cases
   const { cases, usage: genUsage } = await generateTestCases(doc, {
     anthropicClient,
+    variables,
   });
   if (cases.length === 0) {
     return { runId, executions: [], bugs: [], usage: { genUsage } };
@@ -460,7 +591,7 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   // 2) execute each case
   const executions = [];
   for (const testCase of cases) {
-    const result = await executeTestCase({ testCase, doc, config });
+    const result = await executeTestCase({ testCase, doc, config, variables });
     executions.push({ testCase, result });
   }
 

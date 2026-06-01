@@ -12,6 +12,7 @@ const {
   findBugs,
   getBugs,
   deleteBug,
+  updateBugStatus,
   getCollection,
   listRuns,
   getRun,
@@ -29,6 +30,7 @@ router.get("/projects/:id/section-collection", protect, getProjectSectionCollect
 
 router.post("/find-bugs/:docId", protect, findBugs);
 router.get("/bugs/:docId", protect, getBugs);
+router.patch("/bugs/:id", protect, updateBugStatus);
 router.delete("/bugs/:id", protect, deleteBug);
 
 router.get("/collection/:docId", protect, getCollection);

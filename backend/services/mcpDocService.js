@@ -10,7 +10,9 @@ let _anthropic = null;
 
 function getOpenAI() {
   if (!_openai) {
-    _openai = new OpenAI({ apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY });
+    _openai = new OpenAI({
+      apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY,
+    });
   }
   return _openai;
 }
@@ -25,7 +27,8 @@ function getAnthropic() {
 }
 
 const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MCP_DOCS_MODEL || "gpt-4o";
-const DEFAULT_CLAUDE_MODEL = process.env.CLAUDE_MCP_DOCS_MODEL || "claude-sonnet-4-6";
+const DEFAULT_CLAUDE_MODEL =
+  process.env.CLAUDE_MCP_DOCS_MODEL || "claude-sonnet-4-6";
 
 const MCP_DOC_SYSTEM = `You are an MCP documentation generator.
 You receive ONE MCP tool definition, sample arguments, execution status, and response schema inferred from an actual MCP tool call. Return STRICT JSON for that single tool:
@@ -125,10 +128,13 @@ function exampleValue(schema = {}) {
   if (type === "boolean") return true;
   if (type === "array") return [exampleValue(schema.items || {})];
   if (type === "object" || schema.properties) {
-    return Object.entries(schema.properties || {}).reduce((acc, [key, childSchema]) => {
-      acc[key] = exampleValue(childSchema);
-      return acc;
-    }, {});
+    return Object.entries(schema.properties || {}).reduce(
+      (acc, [key, childSchema]) => {
+        acc[key] = exampleValue(childSchema);
+        return acc;
+      },
+      {},
+    );
   }
   return "example";
 }
@@ -137,7 +143,11 @@ function sampleArgsFromSchema(inputSchema = {}) {
   const properties = inputSchema.properties || {};
   const required = new Set(inputSchema.required || []);
   return Object.entries(properties).reduce((acc, [name, schema]) => {
-    if (required.has(name) || schema.default !== undefined || schema.enum?.length) {
+    if (
+      required.has(name) ||
+      schema.default !== undefined ||
+      schema.enum?.length
+    ) {
       acc[name] = exampleValue(schema);
     }
     return acc;
@@ -212,8 +222,15 @@ function inferJsonSchema(value) {
   return {};
 }
 
-async function verifyToolResponse({ config, tool, sampleArgsOverride, userId, companyId }) {
-  const sampleArgs = sampleArgsOverride || sampleArgsFromSchema(tool.inputSchema || {});
+async function verifyToolResponse({
+  config,
+  tool,
+  sampleArgsOverride,
+  userId,
+  companyId,
+}) {
+  const sampleArgs =
+    sampleArgsOverride || sampleArgsFromSchema(tool.inputSchema || {});
   const result = await mcpLab.invokeTool({
     config,
     toolName: tool.name,
@@ -229,7 +246,10 @@ async function verifyToolResponse({ config, tool, sampleArgsOverride, userId, co
       responseStatus: "unverified",
       sampleArgs,
       sampleResponse: null,
-      rawToolResponse: result.toolResponse || null,
+      // Even on error, trim to a single-object sample — never persist bulk data.
+      rawToolResponse:
+        sampleArraysForDocs(extractToolResponseJson(result.toolResponse)) ||
+        null,
       responseExample: null,
       responseSchema: null,
       inferredOutputSchema: null,
@@ -237,14 +257,18 @@ async function verifyToolResponse({ config, tool, sampleArgsOverride, userId, co
     };
   }
 
-  const sampleResponse = sampleArraysForDocs(extractToolResponseJson(result.toolResponse));
+  const sampleResponse = sampleArraysForDocs(
+    extractToolResponseJson(result.toolResponse),
+  );
   const inferredOutputSchema = inferJsonSchema(sampleResponse);
   return {
     responseVerified: true,
     responseStatus: "final",
     sampleArgs,
     sampleResponse,
-    rawToolResponse: result.toolResponse,
+    // Store only the trimmed single-object sample (arrays cut to 1 element),
+    // never the full raw payload — so we never persist a customer's bulk data.
+    rawToolResponse: sampleResponse,
     responseExample: sampleResponse,
     responseSchema: tool.outputSchema || inferredOutputSchema,
     inferredOutputSchema,
@@ -271,7 +295,10 @@ function fallbackDocForTool(tool, verification) {
   const inferredOutputSchema = verification?.inferredOutputSchema || null;
   const responseVerified = !!verification?.responseVerified;
   const exampleArgs = args.reduce((acc, arg) => {
-    if (arg.required) acc[arg.name] = exampleValue((tool.inputSchema?.properties || {})[arg.name]);
+    if (arg.required)
+      acc[arg.name] = exampleValue(
+        (tool.inputSchema?.properties || {})[arg.name],
+      );
     return acc;
   }, {});
 
@@ -279,7 +306,9 @@ function fallbackDocForTool(tool, verification) {
     toolName: tool.name,
     title: humanizeName(tool.name),
     summary: tool.description || `Calls the ${tool.name} MCP tool.`,
-    description: tool.description || `Use this tool when the client needs ${humanizeName(tool.name).toLowerCase()}.`,
+    description:
+      tool.description ||
+      `Use this tool when the client needs ${humanizeName(tool.name).toLowerCase()}.`,
     inputSchema: tool.inputSchema || { type: "object", properties: {} },
     outputSchema: declaredOutputSchema,
     inferredOutputSchema,
@@ -288,25 +317,28 @@ function fallbackDocForTool(tool, verification) {
     sampleArgs: verification?.sampleArgs || exampleArgs,
     sampleResponse: verification?.sampleResponse || null,
     rawToolResponse: verification?.rawToolResponse || null,
-    responseExample: verification?.responseExample || verification?.sampleResponse || null,
+    responseExample:
+      verification?.responseExample || verification?.sampleResponse || null,
     responseSchema: declaredOutputSchema || inferredOutputSchema,
     responseError: verification?.responseError || null,
     arguments: args,
-    responseNotes: responseVerified && declaredOutputSchema
-      ? `Response shape is declared by the MCP server as ${schemaType(declaredOutputSchema)}.`
-      : responseVerified && inferredOutputSchema
-      ? `Response schema inferred from a successful MCP tool execution as ${schemaType(inferredOutputSchema)}.`
-      : "Response could not be verified from a successful MCP tool execution.",
+    responseNotes:
+      responseVerified && declaredOutputSchema
+        ? `Response shape is declared by the MCP server as ${schemaType(declaredOutputSchema)}.`
+        : responseVerified && inferredOutputSchema
+          ? `Response schema inferred from a successful MCP tool execution as ${schemaType(inferredOutputSchema)}.`
+          : "Response could not be verified from a successful MCP tool execution.",
     examples: [
       {
         title: `Use ${humanizeName(tool.name)}`,
         prompt: tool.description || `Run ${tool.name}.`,
         args: verification?.sampleArgs || exampleArgs,
-        expectedResult: responseVerified && declaredOutputSchema
-          ? "The server returns a response matching its declared output schema."
-          : responseVerified && inferredOutputSchema
-          ? "The server returns a response matching the schema inferred from the sample execution."
-          : "Response could not be verified from a successful MCP tool execution.",
+        expectedResult:
+          responseVerified && declaredOutputSchema
+            ? "The server returns a response matching its declared output schema."
+            : responseVerified && inferredOutputSchema
+              ? "The server returns a response matching the schema inferred from the sample execution."
+              : "Response could not be verified from a successful MCP tool execution.",
       },
     ],
     risks: [],
@@ -314,9 +346,19 @@ function fallbackDocForTool(tool, verification) {
   };
 }
 
-function normalizeDocs({ tools, verifications, generatedDocs, provider, model }) {
-  const byName = new Map((generatedDocs || []).map((doc) => [doc.toolName, doc]));
-  const verificationByName = new Map((verifications || []).map((item) => [item.toolName, item]));
+function normalizeDocs({
+  tools,
+  verifications,
+  generatedDocs,
+  provider,
+  model,
+}) {
+  const byName = new Map(
+    (generatedDocs || []).map((doc) => [doc.toolName, doc]),
+  );
+  const verificationByName = new Map(
+    (verifications || []).map((item) => [item.toolName, item]),
+  );
   return (tools || []).map((tool) => {
     const verification = verificationByName.get(tool.name);
     const fallback = fallbackDocForTool(tool, verification);
@@ -333,11 +375,17 @@ function normalizeDocs({ tools, verifications, generatedDocs, provider, model })
       sampleArgs: verification?.sampleArgs || fallback.sampleArgs,
       sampleResponse: verification?.sampleResponse || null,
       rawToolResponse: verification?.rawToolResponse || null,
-      responseExample: verification?.responseExample || verification?.sampleResponse || null,
-      responseSchema: tool.outputSchema || verification?.inferredOutputSchema || null,
+      responseExample:
+        verification?.responseExample || verification?.sampleResponse || null,
+      responseSchema:
+        tool.outputSchema || verification?.inferredOutputSchema || null,
       responseError: verification?.responseError || null,
-      arguments: generated.arguments?.length ? generated.arguments : fallback.arguments,
-      examples: generated.examples?.length ? generated.examples : fallback.examples,
+      arguments: generated.arguments?.length
+        ? generated.arguments
+        : fallback.arguments,
+      examples: generated.examples?.length
+        ? generated.examples
+        : fallback.examples,
       risks: generated.risks || fallback.risks,
       rawTool: tool,
       generatedBy: { provider, model },
@@ -358,7 +406,8 @@ function enforceResponseVerificationRule({ docs }) {
       responseNotes: "Response shape not declared by the MCP server.",
       examples: (doc.examples || []).map((example) => ({
         ...example,
-        expectedResult: "Response could not be verified from a successful MCP tool execution.",
+        expectedResult:
+          "Response could not be verified from a successful MCP tool execution.",
       })),
     };
   });
@@ -367,7 +416,10 @@ function enforceResponseVerificationRule({ docs }) {
 async function curateToolDoc({ tool, provider, model, anthropicClient }) {
   const chosenProvider = provider || "openai";
   const chosenModel =
-    model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
+    model ||
+    (chosenProvider === "anthropic"
+      ? DEFAULT_CLAUDE_MODEL
+      : DEFAULT_OPENAI_MODEL);
   const userMsg = `MCP TOOL:\n${JSON.stringify(tool, null, 2)}`;
 
   if (chosenProvider === "openai") {
@@ -415,7 +467,10 @@ async function curateToolDoc({ tool, provider, model, anthropicClient }) {
 async function suggestSampleArgs({ tool, provider, model, anthropicClient }) {
   const chosenProvider = provider || "anthropic";
   const chosenModel =
-    model || (chosenProvider === "anthropic" ? DEFAULT_CLAUDE_MODEL : DEFAULT_OPENAI_MODEL);
+    model ||
+    (chosenProvider === "anthropic"
+      ? DEFAULT_CLAUDE_MODEL
+      : DEFAULT_OPENAI_MODEL);
   const userMsg = `Tool: ${tool.name}
 Description: ${tool.description || "(none)"}
 inputSchema:
@@ -448,7 +503,9 @@ ${JSON.stringify(tool.inputSchema || {}, null, 2)}`;
         system: SAMPLE_ARGS_SYSTEM,
         messages: [{ role: "user", content: userMsg }],
       });
-      parsed = safeParseJson((msg.content || []).map((c) => c.text || "").join("\n"));
+      parsed = safeParseJson(
+        (msg.content || []).map((c) => c.text || "").join("\n"),
+      );
       usage = {
         inputTokens: msg.usage?.input_tokens || 0,
         outputTokens: msg.usage?.output_tokens || 0,
@@ -460,11 +517,21 @@ ${JSON.stringify(tool.inputSchema || {}, null, 2)}`;
   }
 
   const fallback = sampleArgsFromSchema(tool.inputSchema || {});
-  const args = parsed && parsed.args && typeof parsed.args === "object" ? parsed.args : fallback;
+  const args =
+    parsed && parsed.args && typeof parsed.args === "object"
+      ? parsed.args
+      : fallback;
   return { args, usage };
 }
 
-async function saveDocs({ docs, config, projectId, userId, companyId, tags = [] }) {
+async function saveDocs({
+  docs,
+  config,
+  projectId,
+  userId,
+  companyId,
+  tags = [],
+}) {
   if (!docs.length) return 0;
 
   const serverName = config.name || config.url || "unnamed";
@@ -517,11 +584,20 @@ async function generateDocs({
   const argSuggestions = await Promise.all(
     (tools || []).map(async (tool) => {
       if (sampleArgsByTool[tool.name]) {
-        return { toolName: tool.name, args: sampleArgsByTool[tool.name], usage: null };
+        return {
+          toolName: tool.name,
+          args: sampleArgsByTool[tool.name],
+          usage: null,
+        };
       }
-      const out = await suggestSampleArgs({ tool, provider, model, anthropicClient });
+      const out = await suggestSampleArgs({
+        tool,
+        provider,
+        model,
+        anthropicClient,
+      });
       return { toolName: tool.name, args: out.args, usage: out.usage };
-    })
+    }),
   );
   const argsByTool = argSuggestions.reduce((acc, item) => {
     acc[item.toolName] = item.args;
@@ -540,7 +616,8 @@ async function generateDocs({
       }).catch((err) => ({
         responseVerified: false,
         responseStatus: "unverified",
-        sampleArgs: argsByTool[tool.name] || sampleArgsFromSchema(tool.inputSchema || {}),
+        sampleArgs:
+          argsByTool[tool.name] || sampleArgsFromSchema(tool.inputSchema || {}),
         sampleResponse: null,
         rawToolResponse: null,
         responseExample: null,
@@ -548,11 +625,13 @@ async function generateDocs({
         inferredOutputSchema: null,
         responseError: err.message || String(err),
       }))),
-    }))
+    })),
   );
 
   const toolsWithResponses = tools.map((tool) => {
-    const verification = verifications.find((item) => item.toolName === tool.name);
+    const verification = verifications.find(
+      (item) => item.toolName === tool.name,
+    );
     return {
       ...tool,
       responseVerified: verification?.responseVerified || false,
@@ -560,8 +639,10 @@ async function generateDocs({
       sampleArgs: verification?.sampleArgs || {},
       sampleResponse: verification?.sampleResponse || null,
       rawToolResponse: verification?.rawToolResponse || null,
-      responseExample: verification?.responseExample || verification?.sampleResponse || null,
-      responseSchema: tool.outputSchema || verification?.inferredOutputSchema || null,
+      responseExample:
+        verification?.responseExample || verification?.sampleResponse || null,
+      responseSchema:
+        tool.outputSchema || verification?.inferredOutputSchema || null,
       inferredOutputSchema: verification?.inferredOutputSchema || null,
       responseError: verification?.responseError || null,
     };
@@ -582,8 +663,18 @@ async function generateDocs({
   const perToolResults = await Promise.all(
     toolsWithResponses.map(async (tool) => {
       try {
-        const curated = await curateToolDoc({ tool, provider, model, anthropicClient });
-        return { toolName: tool.name, parsed: curated.parsed, usage: curated.usage, error: null };
+        const curated = await curateToolDoc({
+          tool,
+          provider,
+          model,
+          anthropicClient,
+        });
+        return {
+          toolName: tool.name,
+          parsed: curated.parsed,
+          usage: curated.usage,
+          error: null,
+        };
       } catch (err) {
         return {
           toolName: tool.name,
@@ -592,7 +683,7 @@ async function generateDocs({
           error: err.message || String(err),
         };
       }
-    })
+    }),
   );
 
   const generatedDocs = [];
@@ -629,7 +720,10 @@ async function generateDocs({
       sampleArgs: verification.sampleArgs,
       response: verification.sampleResponse,
       rawToolResponse: verification.rawToolResponse || null,
-      responseSchema: verification.responseSchema || verification.inferredOutputSchema || null,
+      responseSchema:
+        verification.responseSchema ||
+        verification.inferredOutputSchema ||
+        null,
       responseError: verification.responseError || null,
     };
     return acc;
@@ -685,8 +779,10 @@ async function generateDocForTool({
     sampleArgs: verification.sampleArgs || {},
     sampleResponse: verification.sampleResponse || null,
     rawToolResponse: verification.rawToolResponse || null,
-    responseExample: verification.responseExample || verification.sampleResponse || null,
-    responseSchema: tool.outputSchema || verification.inferredOutputSchema || null,
+    responseExample:
+      verification.responseExample || verification.sampleResponse || null,
+    responseSchema:
+      tool.outputSchema || verification.inferredOutputSchema || null,
     inferredOutputSchema: verification.inferredOutputSchema || null,
     responseError: verification.responseError || null,
   };
@@ -697,7 +793,12 @@ async function generateDocForTool({
   let generatedBy = { provider: "none", model: null };
 
   try {
-    const curated = await curateToolDoc({ tool: toolWithResponse, provider, model, anthropicClient });
+    const curated = await curateToolDoc({
+      tool: toolWithResponse,
+      provider,
+      model,
+      anthropicClient,
+    });
     usage = curated.usage;
     if (curated.parsed?.doc) {
       generatedDoc = { ...curated.parsed.doc, toolName: tool.name };
@@ -731,7 +832,14 @@ async function generateDocForTool({
   };
 }
 
-async function listDocs({ serverName, serverUrl, toolName, projectId, companyId, limit = 100 }) {
+async function listDocs({
+  serverName,
+  serverUrl,
+  toolName,
+  projectId,
+  companyId,
+  limit = 100,
+}) {
   const q = {};
   if (projectId) q.projectId = projectId;
   if (serverName) q.serverName = serverName;

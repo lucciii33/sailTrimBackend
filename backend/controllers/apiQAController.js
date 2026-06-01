@@ -123,6 +123,22 @@ async function deleteBug(req, res) {
   res.json({ message: "Bug deleted" });
 }
 
+// Mark a bug open / fixed (done) / ignored.
+async function updateBugStatus(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { status } = req.body;
+  if (!["open", "fixed", "ignored"].includes(status)) {
+    return res.status(400).json({ message: "Invalid status" });
+  }
+  const bug = await Bug.findOneAndUpdate(
+    { _id: req.params.id, companyId: req.user.companyId },
+    { status },
+    { new: true }
+  );
+  if (!bug) return res.status(404).json({ message: "Bug not found" });
+  res.json(bug);
+}
+
 async function getCollection(req, res) {
   if (!requireCompany(req, res)) return;
   const { docId } = req.params;
@@ -188,6 +204,12 @@ function serializeProject(p) {
       valueMasked: maskSecret(decrypt(auth.valueEncrypted)),
       passwordMasked: maskSecret(decrypt(auth.passwordEncrypted)),
     },
+    // Non-secret vars show their value; secret ones are masked.
+    variables: (p.variables || []).map((v) => ({
+      key: v.key,
+      secret: !!v.secret,
+      value: v.secret ? maskSecret(decrypt(v.value)) : v.value,
+    })),
     github: p.github || {},
     updatedAt: p.updatedAt,
   };
@@ -237,10 +259,11 @@ async function getProjectDocs(req, res) {
   res.json({ project: serializeProject(project), docs });
 }
 
-// Set baseUrl + auth on a project. The secret is encrypted at rest.
+// Set baseUrl + auth + environment variables on a project. Secrets are
+// encrypted at rest.
 async function setProjectAuth(req, res) {
   if (!requireCompany(req, res)) return;
-  const { baseUrl, auth = {} } = req.body;
+  const { baseUrl, auth = {}, variables } = req.body;
   const project = await ApiProject.findOne({
     _id: req.params.id,
     companyId: req.user.companyId,
@@ -260,6 +283,24 @@ async function setProjectAuth(req, res) {
       ? encrypt(auth.password)
       : project.auth?.passwordEncrypted || "",
   };
+
+  // Environment variables: encrypt secret ones; keep an unchanged secret if the
+  // client sent a blank/masked value (so editing other fields doesn't wipe it).
+  if (Array.isArray(variables)) {
+    const prev = new Map((project.variables || []).map((v) => [v.key, v]));
+    project.variables = variables
+      .filter((v) => v && v.key)
+      .map((v) => {
+        if (!v.secret) return { key: v.key, value: v.value ?? "", secret: false };
+        const incoming = v.value;
+        const looksMasked = !incoming || /\*/.test(incoming);
+        const value = looksMasked
+          ? prev.get(v.key)?.value || ""
+          : encrypt(incoming);
+        return { key: v.key, value, secret: true };
+      });
+  }
+
   project.updatedAt = new Date();
   await project.save();
   res.json(serializeProject(project));
@@ -304,6 +345,7 @@ module.exports = {
   findBugs,
   getBugs,
   deleteBug,
+  updateBugStatus,
   getCollection,
   listRuns,
   getRun,
