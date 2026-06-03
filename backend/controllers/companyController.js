@@ -7,7 +7,7 @@ const CompanyInvite = require("../model/companyInviteModel");
 const User = require("../model/userModel");
 const { encrypt, maskSecret } = require("../services/secretCrypto");
 
-const FRONTEND_URL = process.env.FRONTEND_URL;
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.oliviatools.co";
 const FROM_EMAIL = process.env.MAIL_FROM_EMAIL;
 const FROM_NAME = process.env.MAIL_FROM_NAME || "Workspace Invite";
 
