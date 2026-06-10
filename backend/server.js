@@ -257,6 +257,7 @@ app.use("/api/mcp-lab", require("./routes/mcpLabRoutes"));
 app.use("/api/qa", require("./routes/apiQARoutes"));
 app.use("/api/installations", require("./routes/installationsRoutes"));
 
+app.use((req, res) => res.status(404).json({ message: 'Route not found' }))
 app.use(errorHandler);
 
 // app.listen(port, () => console.log(`Server started on port ${port}`));

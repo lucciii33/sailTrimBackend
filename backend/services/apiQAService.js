@@ -6,6 +6,7 @@ const ApiQaConfig = require("../model/ApiQaConfig");
 const ApiProject = require("../model/ApiProject");
 const Bug = require("../model/BugModel");
 const TestRun = require("../model/TestRunModel");
+const SuiteRun = require("../model/SuiteRunModel");
 const { decrypt } = require("./secretCrypto");
 
 let _anthropic = null;
@@ -102,6 +103,38 @@ function expandMarkers(value) {
 
 // ---------- Auth resolution ----------
 
+// Resolve the runtime auth for a run.
+// Priority:
+//   1. Explicit oauth2_client_credentials auth type
+//   2. Auto-detect: variables contain token_url + client_id → fetch OAuth2 token automatically
+//   3. Configured bearer/apiKey/basic/custom → use as-is
+async function resolveRuntimeAuth(auth, variables) {
+  if (auth?.type === "oauth2_client_credentials") {
+    const token = await fetchOAuth2Token(variables);
+    return { type: "_oauth2_resolved", resolvedToken: token };
+  }
+  // Auto-detect OAuth2: user added client_id/client_secret/token_url as project variables
+  // but didn't change the auth type in the UI — fetch the token anyway.
+  if (variables.token_url && variables.client_id) {
+    const token = await fetchOAuth2Token(variables);
+    return { type: "_oauth2_resolved", resolvedToken: token };
+  }
+  return auth;
+}
+
+function assertAuthConfigured(runtimeAuth) {
+  if (!runtimeAuth || runtimeAuth.type === "none") return;
+  const headers = buildAuthHeaders(runtimeAuth);
+  if (Object.keys(headers).length === 0) {
+    const err = new Error(
+      `Auth type "${runtimeAuth.type}" is configured but credentials are empty. ` +
+      `Open "Target & auth", enter your token or OAuth2 variables (token_url, client_id, client_secret), and save.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 function buildAuthHeaders(authConfig) {
   if (!authConfig || authConfig.type === "none") return {};
   const headers = {};
@@ -128,8 +161,55 @@ function buildAuthHeaders(authConfig) {
       }
       break;
     }
+    // Runtime-only: token fetched at run time from OAuth2, never stored
+    case "_oauth2_resolved": {
+      if (authConfig.resolvedToken)
+        headers["Authorization"] = `Bearer ${authConfig.resolvedToken}`;
+      break;
+    }
   }
   return headers;
+}
+
+// ---------- OAuth2 client_credentials token fetch ----------
+
+async function fetchOAuth2Token(variables) {
+  const tokenUrl = variables.token_url;
+  const clientId = variables.client_id;
+  const clientSecret = variables.client_secret;
+  const scope = variables.scope;
+  const grantType = variables.grant_type || "client_credentials";
+
+  if (!tokenUrl || !clientId) {
+    const err = new Error(
+      "oauth2_client_credentials auth requires token_url and client_id variables. Add them in Target & auth → Variables.",
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const params = new URLSearchParams();
+  params.set("grant_type", grantType);
+  params.set("client_id", clientId);
+  if (clientSecret) params.set("client_secret", clientSecret);
+  if (scope) params.set("scope", scope);
+
+  const resp = await axios.post(tokenUrl, params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 15000,
+    validateStatus: () => true,
+  });
+
+  if (!resp.data?.access_token) {
+    const err = new Error(
+      `OAuth2 token fetch failed (${resp.status}): ${JSON.stringify(resp.data)}`,
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  console.log(`[QA] OAuth2 token fetched (expires_in: ${resp.data.expires_in}s)`);
+  return resp.data.access_token;
 }
 
 // ---------- Postman collection builder ----------
@@ -214,6 +294,13 @@ function buildPostmanCollection({ doc, config, testCases }) {
 const TESTGEN_SYSTEM_PROMPT = `You are a senior QA engineer generating a COMPLETE test suite for an HTTP endpoint.
 You will receive a JSON spec of one endpoint (method, path, requestBody fields, queryParams, expected responses).
 
+IMPORTANT — REAL DATA FROM DISCOVERY:
+If you receive a "REAL DATA FROM DISCOVERY GETs" section, it contains actual IDs and objects fetched live from this API.
+You MUST use these real values in your happy_path and realistic cases instead of inventing plausible-looking IDs.
+Example: if discovery shows entitlements[0].entitlement.id = 45, use 45 as providerEntitlementId — not a fake number.
+Map field names semantically: providerEntitlementId → entitlement.id, requestId → request.id, etc.
+For not_found / invalid cases, still use obviously-bogus values (999999, "00000000-0000-0000-0000-000000000000").
+
 Return STRICT JSON only, starting with {, matching this exact shape:
 {
   "cases": [
@@ -278,7 +365,7 @@ Rules:
 - COMPACTNESS (critical): keep every value SHORT. Never write a string longer than ~60 chars or an array longer than 3 items. For oversized/max_length use the markers above — the output must stay small or it gets truncated.
 - Return ONLY the JSON, no prose.`;
 
-async function generateTestCases(doc, { anthropicClient = null, variables = {} } = {}) {
+async function generateTestCases(doc, { anthropicClient = null, variables = {}, context = {} } = {}) {
   const spec = {
     method: doc.method,
     path: doc.path,
@@ -296,6 +383,10 @@ async function generateTestCases(doc, { anthropicClient = null, variables = {} }
 Use a "{{key}}" placeholder wherever a path param or field matches one of these (e.g. /users/{{userId}}) so the runner injects the real value. For not_found / invalid cases, use an obviously-bogus literal instead of the placeholder.`
     : "";
 
+  // Real data from discovery GETs — lets Claude use actual IDs instead of
+  // invented ones, making happy-path tests accurate.
+  const contextNote = buildContextNote(context);
+
   const client = anthropicClient || getAnthropic();
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
@@ -306,7 +397,7 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}`,
       },
     ],
   });
@@ -343,14 +434,8 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
 async function executeTestCase({ testCase, doc, config, variables = {} }) {
   const method = (testCase.method || doc.method).toUpperCase();
   const baseUrl = fillTemplate(config.baseUrl, variables);
-  // Inject env vars + resolve {param}/:param path segments into the URL path.
   const path = fillPath(testCase.path || doc.path, variables);
   const url = joinUrl(baseUrl, path);
-
-  // DEBUG: confirms the env vars/ids you passed actually land in the request.
-  console.log(
-    `[QA] ${method} ${url}  (vars: ${Object.keys(variables).join(", ") || "none"})`,
-  );
 
   const defaultHeaders = config.defaultHeaders
     ? Object.fromEntries(config.defaultHeaders)
@@ -525,6 +610,63 @@ function truncateForLLM(body) {
   return s.slice(0, 2000) + "…[truncated]";
 }
 
+// ---------- Discovery phase (context store) ----------
+
+// Only list-GET endpoints (no path params) are safe to run during discovery.
+function isListGet(doc) {
+  if (doc.method?.toUpperCase() !== "GET") return false;
+  // Skip any path with {param} or :param — those need IDs we don't have yet.
+  return !/{[^}]+}/.test(doc.path) && !/(\/:[a-zA-Z])/.test(doc.path);
+}
+
+// Run all list-GET endpoints in the project and collect real data.
+// Returns { "/path": responseBody, ... }
+async function runDiscoveryGets(projectId, companyId, config, variables) {
+  const listDocs = await Doc.find({ companyId, projectId }).lean();
+  const gets = listDocs.filter(isListGet).slice(0, 8); // max 8 GETs
+  const context = {};
+  await Promise.all(
+    gets.map(async (doc) => {
+      try {
+        const result = await executeTestCase({
+          testCase: { method: "GET", path: doc.path, headers: {}, body: null, query: {} },
+          doc,
+          config,
+          variables,
+        });
+        if (result.response.status === 200 && result.response.body != null) {
+          context[doc.path] = result.response.body;
+        }
+      } catch (_) {
+        // non-fatal — skip failed GETs
+      }
+    }),
+  );
+  if (Object.keys(context).length > 0) {
+    console.log(`[QA] Discovery: real data from ${Object.keys(context).length} GET(s): ${Object.keys(context).join(", ")}`);
+  }
+  return context;
+}
+
+// Format the context store as a compact note for Claude.
+// Keeps max 3 items per endpoint and caps total size to avoid token waste.
+function buildContextNote(context) {
+  if (!context || Object.keys(context).length === 0) return "";
+  const lines = [
+    "REAL DATA FROM DISCOVERY GETs — use these IDs/values in happy path and realistic test cases (don't invent IDs when a real one is available here):",
+  ];
+  for (const [path, body] of Object.entries(context)) {
+    const arr = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : null;
+    if (arr && arr.length > 0) {
+      const sample = JSON.stringify(arr.slice(0, 3)).slice(0, 600);
+      lines.push(`${path} → ${sample}`);
+    } else if (body && typeof body === "object") {
+      lines.push(`${path} → ${JSON.stringify(body).slice(0, 400)}`);
+    }
+  }
+  return "\n\n" + lines.join("\n");
+}
+
 // ---------- Orchestrator ----------
 
 async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
@@ -556,12 +698,14 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
       err.statusCode = 400;
       throw err;
     }
+    variables = buildVarMap(project.variables);
+    const runtimeAuth = await resolveRuntimeAuth(project.auth, variables);
+    assertAuthConfigured(runtimeAuth);
     config = {
       baseUrl: project.baseUrl,
-      auth: project.auth,
+      auth: runtimeAuth,
       defaultHeaders: null,
     };
-    variables = buildVarMap(project.variables);
   } else {
     config = await ApiQaConfig.findOne({
       companyId,
@@ -579,10 +723,18 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
 
   const runId = crypto.randomUUID();
 
+  // 0) Discovery phase — run all list-GETs in the project to build a context
+  // store of real IDs/data. These get passed to Claude so happy-path bodies
+  // use actual IDs instead of invented ones.
+  const context = doc.projectId
+    ? await runDiscoveryGets(doc.projectId, companyId, config, variables)
+    : {};
+
   // 1) generate test cases
   const { cases, usage: genUsage } = await generateTestCases(doc, {
     anthropicClient,
     variables,
+    context,
   });
   if (cases.length === 0) {
     return { runId, executions: [], bugs: [], usage: { genUsage } };
@@ -681,9 +833,275 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUITE MODE — multi-endpoint test run grouped by section/tag
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SUITE_TESTGEN_SYSTEM_PROMPT = `You are a senior QA engineer generating a test SUITE for a GROUP of related HTTP endpoints in the same API section.
+
+Unlike single-endpoint testing, a suite tests how endpoints INTERACT: state transitions, chained operations, dependency chains, and cross-endpoint consistency.
+
+You will receive an array of endpoint specs from the same section, plus real data already discovered from GET endpoints.
+
+Return STRICT JSON only, starting with {, matching this exact shape:
+{
+  "cases": [
+    {
+      "name": "Short descriptive name",
+      "group": "happy | sad | boundary | security | chain",
+      "category": "happy_path | state_transition | dependency_chain | missing_required | wrong_type | not_found | conflict | unauthorized | injection_sql | injection_xss | oversized_payload | empty_string | negative | extra_fields",
+      "stepIndex": 0,
+      "targetMethod": "GET",
+      "targetPath": "/api/v1/example/resources",
+      "headers": {},
+      "body": null,
+      "query": {},
+      "expectedStatus": [200],
+      "rationale": "Why this case matters — for chain/state cases explain what prior step it depends on"
+    }
+  ]
+}
+
+AUTH NOTE: The runner pre-fetches auth automatically before executing any test — do NOT add a "fetch token" step. Auth headers are injected into every request. Your job is to test API behavior, not to set up auth.
+
+OAUTH/TOKEN ENDPOINTS: If the section includes a token endpoint (path contains /token, /oauth, /auth/token):
+- Use "body": { "grant_type": "client_credentials", "client_id": "{{client_id}}", "client_secret": "{{client_secret}}" }
+- Use "headers": { "Content-Type": "application/x-www-form-urlencoded" }
+- For the happy path, set "headers": { "Authorization": "" } to override the pre-fetched token (this endpoint doesn't need auth)
+- The body must be sent as application/x-www-form-urlencoded, NEVER as JSON
+
+EXECUTION ORDER RULES (assign stepIndex accordingly):
+1. List GETs (no path params) — discovery of real IDs
+2. POSTs that create resources — use {{step_N_fieldName}} for any IDs needed in the body
+3. GETs with path params — verify the created resource using {{step_N_id}}
+4. PUT/PATCH mutations — update the created resource
+5. State-changing operations (approve, deny, grant, revoke, activate, etc.)
+6. Illegal state transitions — e.g. deny an already-denied request (expect 409/422)
+7. DELETE or terminal operations — use IDs obtained in earlier steps
+8. Validation/security edge cases last
+
+CHAINING — reference prior step response values with {{step_N_fieldName}}:
+- {{step_0_id}}          → "id" field from step 0 response body
+- {{step_1_data_0_id}}   → data[0].id from step 1 (paginated list)
+- {{step_2_requestId}}   → "requestId" from step 2
+
+For path params like :id, {id}, :requestId — replace with the appropriate {{step_N_field}} once a real ID exists from prior steps, or with a discovery-context real ID if available. For not_found cases use "00000000-0000-0000-0000-000000000000" or 999999.
+
+Also set "method" = targetMethod and "path" = targetPath on every case (the runner uses these directly).
+
+WHAT TO COVER (~20 cases total across the suite):
+- Full happy-path CRUD chain end-to-end
+- After each mutation, a GET to verify the state change persisted
+- At least one illegal state transition (e.g. re-granting an already granted item)
+- Missing required field on each critical mutation endpoint
+- Unauthorized (clear auth) on 2+ different endpoints
+- One injection attempt on the most user-facing string field
+- One oversized payload (use __QA_OVERSIZED__ marker)
+
+REAL DATA: use IDs from the discovery section instead of inventing them. Invent only for not_found/invalid cases.
+COMPACT: never write strings > 60 chars or arrays > 3 items. Use __QA_LONG_STRING__ and __QA_OVERSIZED__ markers.
+Return ONLY the JSON, no prose.`;
+
+async function generateSuiteTestCases(docs, { anthropicClient = null, variables = {}, context = {} } = {}) {
+  const specs = docs.map((doc) => ({
+    method: doc.method,
+    path: doc.path,
+    description: doc.description,
+    requestBody: doc.requestBody,
+    queryParams: doc.queryParams,
+    responses: doc.responses,
+  }));
+
+  const varKeys = Object.keys(variables || {});
+  const envNote = varKeys.length
+    ? `\n\nAVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}\nUse {{key}} placeholders where path params or fields match.`
+    : "";
+
+  const contextNote = buildContextNote(context);
+
+  const client = anthropicClient || getAnthropic();
+  const response = await client.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 20000,
+    system: SUITE_TESTGEN_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: `SECTION ENDPOINTS (${specs.length} total):\n${JSON.stringify(specs, null, 2)}${envNote}${contextNote}`,
+      },
+    ],
+  });
+
+  const raw = (response.content || []).map((c) => c.text || "").join("");
+  const parsed = safeParseJson(raw);
+  let cases = parsed?.cases || [];
+  if (cases.length === 0) {
+    cases = salvageCases(raw);
+    if (cases.length === 0) {
+      console.warn(`generateSuiteTestCases: 0 cases (stop=${response.stop_reason}). Raw head: ${raw.slice(0, 200)}`);
+    }
+  }
+
+  // Sort by stepIndex, then re-number gaplessly so execution order is guaranteed.
+  cases.sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0));
+  cases = cases.map((c, i) => ({ ...c, stepIndex: i, method: c.targetMethod || c.method, path: c.targetPath || c.path }));
+
+  return {
+    cases,
+    usage: { inputTokens: response.usage?.input_tokens || 0, outputTokens: response.usage?.output_tokens || 0 },
+  };
+}
+
+// Shallow-extract response body values into {{step_N_field}} variables so
+// subsequent test cases can reference real IDs without hardcoding them.
+function extractResponseVars(body, stepIndex) {
+  const vars = {};
+  if (body == null || typeof body !== "object") return vars;
+  const pfx = `step_${stepIndex}`;
+
+  function flatten(obj, prefix) {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "string" || typeof v === "number") vars[`${prefix}_${k}`] = String(v);
+    }
+  }
+
+  flatten(body, pfx);
+
+  if (Array.isArray(body.data)) {
+    // paginated: { data: [...] }
+    if (body.data[0]) flatten(body.data[0], `${pfx}_data_0`);
+  } else if (body.data && typeof body.data === "object") {
+    // single resource: { data: {...} }
+    flatten(body.data, `${pfx}_data`);
+  }
+
+  return vars;
+}
+
+// ---------- Suite orchestrator ----------
+
+async function findBugsForSection({ projectId, section, userId, companyId, anthropicClient = null }) {
+  const project = await ApiProject.findOne({ _id: projectId, companyId });
+  if (!project || !project.baseUrl) {
+    const err = new Error("No base URL set for this project. Configure it first.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const docs = await Doc.find({ companyId, projectId, section }).lean();
+  if (docs.length === 0) {
+    const err = new Error(`No endpoints found in section "${section}".`);
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const variables = buildVarMap(project.variables);
+  const runtimeAuth = await resolveRuntimeAuth(project.auth, variables);
+  assertAuthConfigured(runtimeAuth);
+  const config = { baseUrl: project.baseUrl, auth: runtimeAuth, defaultHeaders: null };
+
+  const runId = crypto.randomUUID();
+
+  // 1) Discovery — run all list-GETs in the section to seed the context store.
+  const context = await runDiscoveryGets(projectId, companyId, config, variables);
+
+  // 2) Generate the suite — Claude sees all endpoints at once.
+  const { cases, usage: genUsage } = await generateSuiteTestCases(docs, {
+    anthropicClient,
+    variables,
+    context,
+  });
+  if (cases.length === 0) {
+    return { runId, section, executions: [], bugs: [], usage: { genUsage } };
+  }
+
+  // 3) Execute in step order, accumulating response values for chaining.
+  const executions = [];
+  let runtimeVars = { ...variables };
+
+  for (const testCase of cases) {
+    // Match the doc whose method+path this case targets.
+    const matchDoc =
+      docs.find(
+        (d) =>
+          d.method.toUpperCase() === (testCase.targetMethod || "").toUpperCase() &&
+          d.path === testCase.targetPath,
+      ) || docs[0];
+
+    const result = await executeTestCase({ testCase, doc: matchDoc, config, variables: runtimeVars });
+
+    // Accumulate vars from successful responses for the next steps.
+    if (result.response.status >= 200 && result.response.status < 300) {
+      Object.assign(runtimeVars, extractResponseVars(result.response.body, testCase.stepIndex));
+    }
+
+    executions.push({ testCase, result });
+  }
+
+  // 4) Analyze — pass a section-level "doc" so the analyzer sees all endpoints.
+  const sectionDoc = {
+    method: "SUITE",
+    path: section,
+    description: `Section "${section}" — ${docs.length} endpoints: ${docs.map((d) => `${d.method} ${d.path}`).join(" | ")}`,
+    requestBody: [],
+    queryParams: [],
+    responses: [],
+  };
+
+  const { bugs, usage: analyzeUsage } = await analyzeForBugs({ doc: sectionDoc, executions, anthropicClient });
+
+  // 5) Map bugs onto executions.
+  const bugByName = new Map(bugs.map((b) => [b.testCaseName, b]));
+  const fullExecutions = executions.map((e) => {
+    const bug = bugByName.get(e.testCase.name) || null;
+    return {
+      name: e.testCase.name,
+      group: e.testCase.group || null,
+      category: e.testCase.category || null,
+      rationale: e.testCase.rationale || "",
+      stepIndex: e.testCase.stepIndex,
+      targetMethod: e.testCase.targetMethod || null,
+      targetPath: e.testCase.targetPath || null,
+      expectedStatus: e.testCase.expectedStatus || [],
+      request: e.result.request,
+      response: e.result.response,
+      isBug: Boolean(bug),
+      bugTitle: bug?.title || null,
+      bugDescription: bug?.description || null,
+      bugSeverity: bug?.severity || null,
+      bugCategory: bug?.category || null,
+    };
+  });
+
+  // 6) Persist suite run.
+  const savedRun = await SuiteRun.create({
+    userId,
+    companyId,
+    projectId,
+    section,
+    runId,
+    totalTests: fullExecutions.length,
+    bugCount: bugs.length,
+    executions: fullExecutions,
+  });
+
+  return {
+    runId,
+    suiteRunId: savedRun._id,
+    section,
+    totalTests: fullExecutions.length,
+    bugCount: bugs.length,
+    executions: fullExecutions,
+    usage: { genUsage, analyzeUsage },
+  };
+}
+
 module.exports = {
   findBugs,
+  findBugsForSection,
   generateTestCases,
+  generateSuiteTestCases,
   buildPostmanCollection,
   executeTestCase,
   analyzeForBugs,

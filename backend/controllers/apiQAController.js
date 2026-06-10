@@ -5,6 +5,7 @@ const Doc = require("../model/DocModel");
 const TestRun = require("../model/TestRunModel");
 const { encrypt, maskSecret, decrypt } = require("../services/secretCrypto");
 const apiQAService = require("../services/apiQAService");
+const SuiteRun = require("../model/SuiteRunModel");
 const openApiService = require("../services/openApiService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
 
@@ -334,19 +335,71 @@ async function getProjectSectionCollection(req, res) {
   res.json(collection);
 }
 
+async function findBugsForSection(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { id, section } = req.params;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await apiQAService.findBugsForSection({
+      projectId: id,
+      section: decodeURIComponent(section),
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("findBugsForSection error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function listSuiteRuns(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { id } = req.params;
+  const { section } = req.query;
+  const filter = { companyId: req.user.companyId, projectId: id };
+  if (section) filter.section = decodeURIComponent(section);
+  const runs = await SuiteRun.find(filter, { executions: 0 }).sort({ createdAt: -1 });
+  res.json(runs);
+}
+
+async function getSuiteRun(req, res) {
+  if (!requireCompany(req, res)) return;
+  const run = await SuiteRun.findOne({ _id: req.params.id, companyId: req.user.companyId });
+  if (!run) return res.status(404).json({ message: "Suite run not found" });
+  res.json(run);
+}
+
+async function deleteProject(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { id } = req.params;
+  const project = await ApiProject.findOne({ _id: id, companyId: req.user.companyId });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+  await Doc.deleteMany({ apiProjectId: id });
+  await Bug.deleteMany({ apiProjectId: id });
+  await ApiProject.deleteOne({ _id: id });
+  res.json({ deleted: true });
+}
+
 module.exports = {
   getConfig,
   upsertConfig,
   importProjectSpec,
   listProjects,
   getProjectDocs,
+  deleteProject,
   setProjectAuth,
   getProjectSectionCollection,
   findBugs,
+  findBugsForSection,
   getBugs,
   deleteBug,
   updateBugStatus,
   getCollection,
   listRuns,
   getRun,
+  listSuiteRuns,
+  getSuiteRun,
 };

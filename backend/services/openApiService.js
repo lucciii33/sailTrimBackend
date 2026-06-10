@@ -276,33 +276,47 @@ function extractBaseUrl(spec) {
 
 // ---------- auth detection (from securitySchemes) ----------
 
+// Extract OAuth2 tokenUrl from any flow in a securityScheme entry.
+function extractTokenUrl(scheme) {
+  const flows = scheme.flows || {};
+  // clientCredentials is most common for machine-to-machine APIs
+  for (const flow of ["clientCredentials", "password", "authorizationCode", "implicit"]) {
+    if (flows[flow]?.tokenUrl) return flows[flow].tokenUrl;
+  }
+  // Swagger 2: tokenUrl is directly on the scheme
+  if (scheme.tokenUrl) return scheme.tokenUrl;
+  return null;
+}
+
 // Read what KIND of auth the spec declares (never the secret value — that's
 // never in a spec) and map it to our auth config shape.
+// Also returns tokenUrl (for OAuth2) and requiredVariables the user must still provide.
 function detectAuth(spec) {
   // OpenAPI 3: components.securitySchemes ; Swagger 2: securityDefinitions
   const schemes =
     spec.components?.securitySchemes || spec.securityDefinitions || {};
   const first = Object.values(schemes)[0];
-  if (!first) return { type: "none", headerName: "" };
+  if (!first) return { type: "none", headerName: "", tokenUrl: null, requiredVariables: [] };
 
   const t = (first.type || "").toLowerCase();
   // OpenAPI 3 http+bearer
   if (t === "http") {
     const scheme = (first.scheme || "").toLowerCase();
-    if (scheme === "bearer") return { type: "bearer", headerName: "" };
-    if (scheme === "basic") return { type: "basic", headerName: "" };
+    if (scheme === "bearer") return { type: "bearer", headerName: "", tokenUrl: null, requiredVariables: ["token"] };
+    if (scheme === "basic") return { type: "basic", headerName: "", tokenUrl: null, requiredVariables: ["username", "password"] };
   }
   // OpenAPI 3 apiKey in header  /  Swagger 2 apiKey
   if (t === "apikey") {
-    return { type: "apiKey", headerName: first.name || "X-API-Key" };
+    return { type: "apiKey", headerName: first.name || "X-API-Key", tokenUrl: null, requiredVariables: ["api_key"] };
   }
   // Swagger 2 "basic"
-  if (t === "basic") return { type: "basic", headerName: "" };
-  // oauth2 / openIdConnect → token goes in Authorization: Bearer
+  if (t === "basic") return { type: "basic", headerName: "", tokenUrl: null, requiredVariables: ["username", "password"] };
+  // oauth2 / openIdConnect → extract tokenUrl, user still needs client_id + client_secret
   if (t === "oauth2" || t === "openidconnect") {
-    return { type: "bearer", headerName: "" };
+    const tokenUrl = extractTokenUrl(first);
+    return { type: "bearer", headerName: "", tokenUrl, requiredVariables: ["client_id", "client_secret"] };
   }
-  return { type: "none", headerName: "" };
+  return { type: "none", headerName: "", tokenUrl: null, requiredVariables: [] };
 }
 
 // ---------- public: import ----------
@@ -333,7 +347,29 @@ async function importSpec({ specText, userId, companyId, projectId }) {
   const title = spec.info?.title || "Untitled API";
   const name = slugify(title) || "api";
   const baseUrl = extractBaseUrl(spec);
-  const detectedAuth = detectAuth(spec);
+  let detectedAuth = detectAuth(spec);
+
+  // If securitySchemes didn't give us a tokenUrl (e.g. spec uses http bearer),
+  // scan paths for a POST token endpoint and derive it.
+  if (!detectedAuth.tokenUrl) {
+    const tokenPath = Object.keys(spec.paths || {}).find(
+      (p) => /\/(oauth|auth|connect|oidc)?\/?token(\/?)$/.test(p) && spec.paths[p]?.post
+    );
+    if (tokenPath) {
+      const derivedUrl = baseUrl ? `${baseUrl.replace(/\/$/, "")}${tokenPath}` : tokenPath;
+      detectedAuth = { ...detectedAuth, tokenUrl: derivedUrl, requiredVariables: ["client_id", "client_secret"] };
+    }
+  }
+
+  // Collect all path parameters across every endpoint (e.g. {requestId}, {providerId}).
+  // These become required variables the user must fill — Olivia tells them up front.
+  const pathParamSet = new Set();
+  for (const p of Object.keys(spec.paths || {})) {
+    for (const m of (p.match(/\{([^}]+)\}/g) || [])) {
+      pathParamSet.add(m.slice(1, -1));
+    }
+  }
+  const pathParams = Array.from(pathParamSet);
 
   // Find the existing project (explicit id, or by name within the company) so
   // re-imports update in place. Seed baseUrl/auth-type only on first create —
@@ -341,6 +377,23 @@ async function importSpec({ specText, userId, companyId, projectId }) {
   let project = projectId
     ? await ApiProject.findOne({ _id: projectId, companyId })
     : await ApiProject.findOne({ companyId, name });
+
+  // Build the initial variables array from data the spec already provides.
+  // token_url comes from securitySchemes — user never needs to look it up.
+  function buildSpecVariables(existing = []) {
+    const vars = existing.map((v) => ({ ...v })); // shallow clone
+    if (detectedAuth.tokenUrl) {
+      const already = vars.find((v) => v.key === "token_url");
+      if (!already) {
+        vars.push({ key: "token_url", value: detectedAuth.tokenUrl, secret: false });
+      }
+      // Never overwrite a value the user already set — just backfill if empty.
+      else if (!already.value) {
+        already.value = detectedAuth.tokenUrl;
+      }
+    }
+    return vars;
+  }
 
   if (!project) {
     project = await ApiProject.create({
@@ -352,6 +405,7 @@ async function importSpec({ specText, userId, companyId, projectId }) {
       source: "manual",
       baseUrl: baseUrl || "",
       auth: { type: detectedAuth.type, headerName: detectedAuth.headerName },
+      variables: buildSpecVariables([]),
     });
   } else {
     project.title = title;
@@ -362,6 +416,7 @@ async function importSpec({ specText, userId, companyId, projectId }) {
       project.auth.type = detectedAuth.type;
       project.auth.headerName = detectedAuth.headerName;
     }
+    project.variables = buildSpecVariables(project.variables || []);
     project.updatedAt = new Date();
     await project.save();
   }
@@ -390,11 +445,14 @@ async function importSpec({ specText, userId, companyId, projectId }) {
     projectId: project._id,
     title,
     version: project.version,
-    detectedAuth, // { type, headerName } — for prefilling the auth form
+    detectedAuth, // { type, headerName, tokenUrl, requiredVariables }
     totalEndpoints: endpoints.length,
     created: result.upsertedCount || 0,
     updated: result.modifiedCount || 0,
     baseUrl: project.baseUrl || null,
+    autoFilledVariables: detectedAuth.tokenUrl ? ["token_url"] : [],
+    // Auth credentials + path params the user must fill — Olivia shows these in the dialog
+    requiredVariables: [...(detectedAuth.requiredVariables || []), ...pathParams],
     endpoints: endpoints.map((e) => ({
       method: e.method,
       path: e.path,
