@@ -255,6 +255,7 @@ app.use("/api/docs", require("./routes/docRoutes"));
 app.use("/api/github", require("./routes/githubRoutes"));
 app.use("/api/mcp-lab", require("./routes/mcpLabRoutes"));
 app.use("/api/qa", require("./routes/apiQARoutes"));
+app.use("/api/e2e", require("./routes/e2eQaRoutes"));
 app.use("/api/installations", require("./routes/installationsRoutes"));
 
 app.use(errorHandler);
