@@ -7,15 +7,19 @@ const {
   importProjectSpec,
   listProjects,
   getProjectDocs,
+  deleteProject,
   setProjectAuth,
   getProjectSectionCollection,
   findBugs,
+  findBugsForSection,
   getBugs,
   deleteBug,
   updateBugStatus,
   getCollection,
   listRuns,
   getRun,
+  listSuiteRuns,
+  getSuiteRun,
 } = require("../controllers/apiQAController");
 
 router.get("/config/:owner/:repo", protect, getConfig);
@@ -25,6 +29,7 @@ router.put("/config/:owner/:repo", protect, upsertConfig);
 router.post("/projects/import", protect, importProjectSpec);
 router.get("/projects", protect, listProjects);
 router.get("/projects/:id/docs", protect, getProjectDocs);
+router.delete("/projects/:id", protect, deleteProject);
 router.put("/projects/:id/auth", protect, setProjectAuth);
 router.get("/projects/:id/section-collection", protect, getProjectSectionCollection);
 
@@ -37,5 +42,10 @@ router.get("/collection/:docId", protect, getCollection);
 
 router.get("/runs/:docId", protect, listRuns);
 router.get("/run/:id", protect, getRun);
+
+// Suite QA — section-level multi-endpoint runs
+router.post("/projects/:id/suite/:section", protect, findBugsForSection);
+router.get("/projects/:id/suite-runs", protect, listSuiteRuns);
+router.get("/suite-run/:id", protect, getSuiteRun);
 
 module.exports = router;
