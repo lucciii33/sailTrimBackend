@@ -3,6 +3,7 @@ const path = require("path");
 const E2eProject = require("../model/E2eProject");
 const E2eTest = require("../model/E2eTest");
 const e2eQaService = require("../services/e2eQaService");
+const e2eHealService = require("../services/e2eHealService");
 const { recordSpec } = require("../services/e2eRecorderService");
 const { encrypt, decrypt, maskSecret } = require("../services/secretCrypto");
 const { getUserAnthropicClient } = require("../services/userKeyService");
@@ -64,7 +65,7 @@ async function listProjects(req, res) {
 
 async function createProject(req, res) {
   if (!requireCompany(req, res)) return;
-  const { name, title, baseUrl } = req.body;
+  const { name, title, baseUrl, github } = req.body;
   if (!name) return res.status(400).json({ message: "name is required" });
   try {
     const project = await E2eProject.create({
@@ -73,6 +74,16 @@ async function createProject(req, res) {
       name,
       title: title || name,
       baseUrl: baseUrl || "",
+      // Repo picked from the connected-installations dropdown. Lets the
+      // improve/heal step read the repo's helpers + data-testids. Optional.
+      github: github
+        ? {
+            owner: github.owner || "",
+            repo: github.repo || "",
+            branch: github.branch || "",
+            testDir: github.testDir || "tests/e2e",
+          }
+        : undefined,
     });
     res.status(201).json(serializeProject(project));
   } catch (err) {
@@ -299,6 +310,65 @@ async function recordTest(req, res) {
   }
 }
 
+// Feature 3 — improve + self-heal. Takes the recorded spec (the UI movements),
+// reads the front-end repo for reuse (helpers/page-objects/data-testids), has
+// Claude rewrite it to senior quality (DRY, real selectors, assertions), then
+// runs it locally and feeds failures back until it goes green (bounded). Returns
+// the green spec; we persist specCode + heal[] + status (repo code is never
+// stored — it's read at request time and discarded).
+async function improveTest(req, res) {
+  if (!requireCompany(req, res)) return;
+  const test = await E2eTest.findOne({
+    _id: req.params.testId,
+    companyId: req.user.companyId,
+  });
+  if (!test) return res.status(404).json({ message: "Test not found" });
+  if (!test.specCode || !test.specCode.trim()) {
+    return res
+      .status(400)
+      .json({ message: "Record the test first — there's no spec to improve." });
+  }
+
+  const project = await E2eProject.findOne({
+    _id: test.projectId,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  // Run already logged in if the project's session was captured.
+  const storagePath = project.login?.storageStatePath;
+  const loadStorage =
+    storagePath && fs.existsSync(storagePath) ? storagePath : undefined;
+
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await e2eHealService.improveAndHeal({
+      test,
+      project,
+      storagePath: loadStorage,
+      anthropicClient,
+    });
+
+    test.specCode = result.specCode;
+    test.heal = result.heal;
+    test.status = result.passed ? "passing" : "failing";
+    test.updatedAt = new Date();
+    await test.save();
+
+    res.json({
+      specCode: test.specCode,
+      status: test.status,
+      passed: result.passed,
+      heal: test.heal,
+      repo: { files: result.repo?.files || 0, testIds: result.repo?.testIds || 0 },
+    });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("e2e improveTest error:", err);
+    res.status(status).json({ message: err.message || "Improve/heal failed" });
+  }
+}
+
 async function deleteTest(req, res) {
   if (!requireCompany(req, res)) return;
   const test = await E2eTest.findOneAndDelete({
@@ -320,5 +390,6 @@ module.exports = {
   getTest,
   recordLogin,
   recordTest,
+  improveTest,
   deleteTest,
 };
