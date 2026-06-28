@@ -8,6 +8,12 @@ const apiQAService = require("../services/apiQAService");
 const SuiteRun = require("../model/SuiteRunModel");
 const openApiService = require("../services/openApiService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
+const {
+  getOctokit,
+  getDefaultBranch,
+  findSpecCandidates,
+  fetchFileAtRef,
+} = require("../services/githubService");
 
 function requireCompany(req, res) {
   if (!req.user.companyId) {
@@ -383,10 +389,137 @@ async function deleteProject(req, res) {
   res.json({ deleted: true });
 }
 
+// ---------- GitHub-connected spec flow ----------
+
+// Step 1: user picks a connected repo and types the spec file name. We scan
+// the repo and return matching candidates so they confirm the right file.
+async function discoverGithubSpec(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { installationId, owner, repo, filename } = req.body;
+  if (!installationId || !owner || !repo) {
+    return res
+      .status(400)
+      .json({ message: "installationId, owner and repo are required" });
+  }
+  try {
+    const octokit = await getOctokit(Number(installationId));
+    const candidates = await findSpecCandidates(octokit, owner, repo, filename);
+    res.json({ candidates });
+  } catch (err) {
+    console.error("discoverGithubSpec error:", err);
+    res
+      .status(err.status || 500)
+      .json({ message: err.message || "Could not scan repo" });
+  }
+}
+
+// Step 2: fetch the confirmed spec file from the repo and import it, stamping
+// the github link so it can be re-synced later. Pass projectId to re-import
+// into an existing project.
+async function importGithubSpec(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { installationId, owner, repo, specPath, projectId } = req.body;
+  if (!installationId || !owner || !repo || !specPath) {
+    return res.status(400).json({
+      message: "installationId, owner, repo and specPath are required",
+    });
+  }
+  try {
+    const octokit = await getOctokit(Number(installationId));
+    const defaultBranch = await getDefaultBranch(octokit, owner, repo);
+    const specText = await fetchFileAtRef(
+      octokit,
+      owner,
+      repo,
+      specPath,
+      defaultBranch
+    );
+    if (!specText) {
+      return res
+        .status(404)
+        .json({ message: `Could not read ${specPath} in ${owner}/${repo}` });
+    }
+    const result = await openApiService.importSpec({
+      specText,
+      projectId,
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      github: {
+        owner,
+        repo,
+        specPath,
+        installationId: Number(installationId),
+        defaultBranch,
+      },
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode || err.status || 500;
+    console.error("importGithubSpec error:", err);
+    res.status(status).json({ message: err.message || "Import failed" });
+  }
+}
+
+// Step 3: "Sync" button — re-fetch the linked spec and re-import in place so
+// the project picks up whatever changed in the repo.
+async function syncGithubSpec(req, res) {
+  if (!requireCompany(req, res)) return;
+  const project = await ApiProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const gh = project.github || {};
+  if (!gh.owner || !gh.repo || !gh.specPath || !gh.installationId) {
+    return res
+      .status(400)
+      .json({ message: "Project is not linked to a GitHub spec" });
+  }
+  try {
+    const octokit = await getOctokit(Number(gh.installationId));
+    const branch =
+      gh.defaultBranch || (await getDefaultBranch(octokit, gh.owner, gh.repo));
+    const specText = await fetchFileAtRef(
+      octokit,
+      gh.owner,
+      gh.repo,
+      gh.specPath,
+      branch
+    );
+    if (!specText) {
+      return res.status(404).json({
+        message: `Could not read ${gh.specPath} in ${gh.owner}/${gh.repo}`,
+      });
+    }
+    const result = await openApiService.importSpec({
+      specText,
+      projectId: project._id,
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      github: {
+        owner: gh.owner,
+        repo: gh.repo,
+        specPath: gh.specPath,
+        installationId: Number(gh.installationId),
+        defaultBranch: branch,
+      },
+    });
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode || err.status || 500;
+    console.error("syncGithubSpec error:", err);
+    res.status(status).json({ message: err.message || "Sync failed" });
+  }
+}
+
 module.exports = {
   getConfig,
   upsertConfig,
   importProjectSpec,
+  discoverGithubSpec,
+  importGithubSpec,
+  syncGithubSpec,
   listProjects,
   getProjectDocs,
   deleteProject,

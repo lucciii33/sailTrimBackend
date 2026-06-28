@@ -372,6 +372,53 @@ function pickSchemasForFile(routeContent, schemaContext) {
   return out;
 }
 
+// OpenAPI specs live in yaml/json. The user tells Olivia the file name; we
+// scan the repo tree and return matching candidates (a name can exist in more
+// than one folder, so we return a list and let the user confirm).
+const SPEC_EXTENSIONS = [".yaml", ".yml", ".json"];
+
+function looksLikeSpecPath(filePath) {
+  const lower = filePath.toLowerCase();
+  return SPEC_EXTENSIONS.some((e) => lower.endsWith(e));
+}
+
+/**
+ * Find OpenAPI spec candidates in a repo by the file name the user gave.
+ * Matches case-insensitively against the basename and the full path so
+ * "openapi.yml" or "docs/openapi" both work. With no hint, returns every
+ * spec-looking file so the user can pick.
+ */
+async function findSpecCandidates(octokit, owner, repo, filenameHint) {
+  const tree = await scanRepoTree(octokit, owner, repo);
+  const blobs = tree.filter(
+    (n) => n.type === "blob" && !isExcludedPath(n.path)
+  );
+  const hint = (filenameHint || "").trim().toLowerCase();
+
+  let matches;
+  if (hint) {
+    matches = blobs.filter((n) => {
+      const lower = n.path.toLowerCase();
+      const base = lower.split("/").pop();
+      return lower.includes(hint) || base.includes(hint);
+    });
+  } else {
+    matches = blobs.filter((n) => looksLikeSpecPath(n.path));
+  }
+
+  // Spec-extension files first, then shorter (shallower) paths.
+  matches.sort((a, b) => {
+    const sa = looksLikeSpecPath(a.path) ? 0 : 1;
+    const sb = looksLikeSpecPath(b.path) ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return a.path.length - b.path.length;
+  });
+
+  return matches
+    .slice(0, 20)
+    .map((n) => ({ path: n.path, sha: n.sha, size: n.size }));
+}
+
 async function scanRepoTree(octokit, owner, repo) {
   const branch = await getDefaultBranch(octokit, owner, repo);
   const { data: branchData } = await octokit.request(
@@ -446,6 +493,8 @@ module.exports = {
   pickSchemasForFile,
   scanRepoForApiFiles,
   scanRepoTree,
+  findSpecCandidates,
+  getDefaultBranch,
   fetchBlobContent,
   fetchMountContext,
   fileLooksLikeApi,

@@ -5,6 +5,9 @@ const {
   getConfig,
   upsertConfig,
   importProjectSpec,
+  discoverGithubSpec,
+  importGithubSpec,
+  syncGithubSpec,
   listProjects,
   getProjectDocs,
   deleteProject,
@@ -27,6 +30,10 @@ router.put("/config/:owner/:repo", protect, upsertConfig);
 
 // API Project (spec-import) flow
 router.post("/projects/import", protect, importProjectSpec);
+// GitHub-connected spec: discover the file, import it, and re-sync on demand
+router.post("/projects/github/discover", protect, discoverGithubSpec);
+router.post("/projects/github/import", protect, importGithubSpec);
+router.post("/projects/:id/sync", protect, syncGithubSpec);
 router.get("/projects", protect, listProjects);
 router.get("/projects/:id/docs", protect, getProjectDocs);
 router.delete("/projects/:id", protect, deleteProject);

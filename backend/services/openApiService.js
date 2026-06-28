@@ -334,7 +334,7 @@ function slugify(s) {
  * projectId). Decoupled from any GitHub owner/repo so it scales and can be
  * GitHub-linked later. Re-importing the same spec updates the same project.
  */
-async function importSpec({ specText, userId, companyId, projectId }) {
+async function importSpec({ specText, userId, companyId, projectId, github }) {
   const spec = parseSpec(specText);
   const endpoints = specToEndpoints(spec);
 
@@ -395,6 +395,19 @@ async function importSpec({ specText, userId, companyId, projectId }) {
     return vars;
   }
 
+  // When the spec came from a connected repo, stamp the link so the project
+  // can later be re-synced from source with one button.
+  const githubLink = github
+    ? {
+        owner: github.owner || "",
+        repo: github.repo || "",
+        specPath: github.specPath || "",
+        installationId: github.installationId,
+        defaultBranch: github.defaultBranch || "",
+        lastSyncedAt: new Date(),
+      }
+    : null;
+
   if (!project) {
     project = await ApiProject.create({
       userId,
@@ -402,10 +415,11 @@ async function importSpec({ specText, userId, companyId, projectId }) {
       name,
       title,
       version: spec.info?.version || "",
-      source: "manual",
+      source: githubLink ? "github" : "manual",
       baseUrl: baseUrl || "",
       auth: { type: detectedAuth.type, headerName: detectedAuth.headerName },
       variables: buildSpecVariables([]),
+      github: githubLink || undefined,
     });
   } else {
     project.title = title;
@@ -417,6 +431,10 @@ async function importSpec({ specText, userId, companyId, projectId }) {
       project.auth.headerName = detectedAuth.headerName;
     }
     project.variables = buildSpecVariables(project.variables || []);
+    if (githubLink) {
+      project.source = "github";
+      project.github = githubLink;
+    }
     project.updatedAt = new Date();
     await project.save();
   }

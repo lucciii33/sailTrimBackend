@@ -35,6 +35,11 @@ const githubSchema = new mongoose.Schema(
     owner: { type: String, default: "" },
     repo: { type: String, default: "" },
     specPath: { type: String, default: "" },
+    // GitHub App installation that can read the repo — stored so the manual
+    // "Sync" button can re-fetch the spec without re-picking the install.
+    installationId: { type: Number },
+    defaultBranch: { type: String, default: "" },
+    lastSyncedAt: { type: Date },
   },
   { _id: false }
 );
