@@ -78,7 +78,10 @@ function renderVariables(variables = []) {
 
 // Improve a recorded spec using repo understanding, then run/heal until green.
 // Returns { specCode, passed, heal, repo }.
-async function improveAndHeal({ test, project, storagePath, anthropicClient = null }) {
+async function improveAndHeal({ test, project, storagePath, env = null, anthropicClient = null }) {
+  // Run against the selected environment's URL when given, else the legacy
+  // project baseUrl.
+  const runBaseUrl = env?.baseUrl || project.baseUrl;
   const client = anthropicClient || getAnthropic();
   const recorded = test.specCode || "";
   if (!recorded.trim()) {
@@ -141,7 +144,7 @@ async function improveAndHeal({ test, project, storagePath, anthropicClient = nu
 
     const t0 = Date.now();
     const run = await runSpec(spec, {
-      baseUrl: project.baseUrl,
+      baseUrl: runBaseUrl,
       storagePath,
     });
     heal.push({

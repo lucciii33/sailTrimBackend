@@ -11,9 +11,41 @@ const { getUserAnthropicClient } = require("../services/userKeyService");
 // Where the per-project authenticated Playwright session lives. Gitignored —
 // it holds live session cookies. (Productized: encrypt + store in S3.)
 const AUTH_DIR = path.resolve(__dirname, "../.e2e-auth");
-function authPathFor(projectId) {
+function authPathFor(projectId, env) {
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
-  return path.join(AUTH_DIR, `${projectId}.json`);
+  // No env → legacy single-session path (keeps already-captured sessions valid).
+  const suffix = env ? `__${String(env).replace(/[^a-z0-9_-]/gi, "_")}` : "";
+  return path.join(AUTH_DIR, `${projectId}${suffix}.json`);
+}
+
+// Find a named environment on a project. Returns the subdoc (mutable) or null.
+function resolveEnv(project, envName) {
+  if (!envName) return null;
+  return (project.environments || []).find((e) => e.name === envName) || null;
+}
+
+// The run target for a request: the named environment when given, else the
+// legacy project-level baseUrl + login (so old projects keep working).
+function resolveTarget(project, envName) {
+  const env = resolveEnv(project, envName);
+  if (env) {
+    return {
+      env,
+      name: env.name,
+      baseUrl: env.baseUrl || "",
+      loginUrl: env.loginUrl || "",
+      storageStatePath: env.storageStatePath || "",
+      authReady: Boolean(env.authSavedAt),
+    };
+  }
+  return {
+    env: null,
+    name: "",
+    baseUrl: project.baseUrl || "",
+    loginUrl: project.login?.url || "",
+    storageStatePath: project.login?.storageStatePath || "",
+    authReady: Boolean(project.login?.authSavedAt),
+  };
 }
 
 function requireCompany(req, res) {
@@ -43,6 +75,13 @@ function serializeProject(p) {
       authReady: Boolean(login.authSavedAt),
       authSavedAt: login.authSavedAt || null,
     },
+    environments: (p.environments || []).map((e) => ({
+      name: e.name,
+      baseUrl: e.baseUrl || "",
+      loginUrl: e.loginUrl || "",
+      authReady: Boolean(e.authSavedAt),
+      authSavedAt: e.authSavedAt || null,
+    })),
     github: p.github || {},
     variables: (p.variables || []).map((v) => ({
       key: v.key,
@@ -65,15 +104,25 @@ async function listProjects(req, res) {
 
 async function createProject(req, res) {
   if (!requireCompany(req, res)) return;
-  const { name, title, baseUrl, github } = req.body;
+  const { name, title, baseUrl, github, environments } = req.body;
   if (!name) return res.status(400).json({ message: "name is required" });
   try {
+    const envs = Array.isArray(environments)
+      ? environments
+          .filter((e) => e && e.name)
+          .map((e) => ({
+            name: e.name,
+            baseUrl: e.baseUrl || "",
+            loginUrl: e.loginUrl || "",
+          }))
+      : [];
     const project = await E2eProject.create({
       userId: req.user._id,
       companyId: req.user.companyId,
       name,
       title: title || name,
       baseUrl: baseUrl || "",
+      environments: envs,
       // Repo picked from the connected-installations dropdown. Lets the
       // improve/heal step read the repo's helpers + data-testids. Optional.
       github: github
@@ -117,9 +166,30 @@ async function updateProject(req, res) {
   });
   if (!project) return res.status(404).json({ message: "Project not found" });
 
-  const { title, baseUrl, login, github, variables } = req.body;
+  const { title, baseUrl, login, github, variables, environments } = req.body;
   if (title != null) project.title = title;
   if (baseUrl != null) project.baseUrl = baseUrl;
+
+  // Replace the environments list, but keep each env's captured session
+  // (storageStatePath/authSavedAt) by matching on name — editing a baseUrl
+  // must not log you out of that environment.
+  if (Array.isArray(environments)) {
+    const prev = new Map(
+      (project.environments || []).map((e) => [e.name, e])
+    );
+    project.environments = environments
+      .filter((e) => e && e.name)
+      .map((e) => {
+        const old = prev.get(e.name);
+        return {
+          name: e.name,
+          baseUrl: e.baseUrl ?? old?.baseUrl ?? "",
+          loginUrl: e.loginUrl ?? old?.loginUrl ?? "",
+          storageStatePath: old?.storageStatePath || "",
+          authSavedAt: old?.authSavedAt || null,
+        };
+      });
+  }
 
   if (login) {
     project.login = {
@@ -134,6 +204,8 @@ async function updateProject(req, res) {
         login.passwordSelector ?? project.login?.passwordSelector ?? "",
       submitSelector:
         login.submitSelector ?? project.login?.submitSelector ?? "",
+      storageStatePath: project.login?.storageStatePath || "",
+      authSavedAt: project.login?.authSavedAt || null,
     };
   }
 
@@ -239,15 +311,27 @@ async function recordLogin(req, res) {
   });
   if (!project) return res.status(404).json({ message: "Project not found" });
 
-  const base = (project.baseUrl || "").replace(/\/+$/, "");
-  const startUrl = project.login?.url || (base ? `${base}/login` : "");
-  if (!startUrl) {
+  // Optional env: capture the session for that specific environment. Without
+  // it we fall back to the legacy project-level login.
+  const envName = req.body?.env;
+  const target = resolveTarget(project, envName);
+  if (envName && !target.env) {
     return res
       .status(400)
-      .json({ message: "Set a base URL (or login URL) on the project first." });
+      .json({ message: `Environment "${envName}" not found on this project.` });
   }
 
-  const authFile = authPathFor(project._id);
+  const base = (target.baseUrl || "").replace(/\/+$/, "");
+  const startUrl = target.loginUrl || (base ? `${base}/login` : "");
+  if (!startUrl) {
+    return res.status(400).json({
+      message: `Set a base URL (or login URL) for ${
+        target.name || "this project"
+      } first.`,
+    });
+  }
+
+  const authFile = authPathFor(project._id, target.env ? target.name : undefined);
   try {
     // We only care about the captured session here, not the throwaway spec.
     await recordSpec(startUrl, { saveStorage: authFile, requireSpec: false });
@@ -256,11 +340,18 @@ async function recordLogin(req, res) {
         message: "No session was captured — did the login complete?",
       });
     }
-    project.login.storageStatePath = authFile;
-    project.login.authSavedAt = new Date();
+    const savedAt = new Date();
+    if (target.env) {
+      target.env.storageStatePath = authFile;
+      target.env.authSavedAt = savedAt;
+      project.markModified("environments");
+    } else {
+      project.login.storageStatePath = authFile;
+      project.login.authSavedAt = savedAt;
+    }
     project.updatedAt = new Date();
     await project.save();
-    res.json({ authReady: true, authSavedAt: project.login.authSavedAt });
+    res.json({ authReady: true, authSavedAt: savedAt, env: target.name || null });
   } catch (err) {
     const status = err.statusCode || 500;
     console.error("e2e recordLogin error:", err);
@@ -283,17 +374,38 @@ async function recordTest(req, res) {
     _id: test.projectId,
     companyId: req.user.companyId,
   });
-  const url = project?.baseUrl;
-  if (!url) {
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const envName = req.body?.env;
+  const target = resolveTarget(project, envName);
+  if (envName && !target.env) {
     return res
       .status(400)
-      .json({ message: "Set a base URL on the project before recording." });
+      .json({ message: `Environment "${envName}" not found on this project.` });
+  }
+  const url = target.baseUrl;
+  if (!url) {
+    return res.status(400).json({
+      message: `Set a base URL for ${
+        target.name || "this project"
+      } before recording.`,
+    });
   }
 
-  // Start logged in if the project's session was captured.
-  const storagePath = project.login?.storageStatePath;
+  // GATE: a recording on an unauthenticated session just lands on the login
+  // page. Tell the front to capture the login for THIS environment first.
+  const storagePath = target.storageStatePath;
   const loadStorage =
     storagePath && fs.existsSync(storagePath) ? storagePath : undefined;
+  if (!loadStorage) {
+    return res.status(409).json({
+      code: "LOGIN_REQUIRED",
+      env: target.name || null,
+      message: `Capture the login for ${
+        target.name || "this project"
+      } before recording, or the test will start logged out.`,
+    });
+  }
 
   try {
     const spec = await recordSpec(url, { loadStorage });
@@ -335,10 +447,28 @@ async function improveTest(req, res) {
   });
   if (!project) return res.status(404).json({ message: "Project not found" });
 
-  // Run already logged in if the project's session was captured.
-  const storagePath = project.login?.storageStatePath;
+  const envName = req.body?.env;
+  const target = resolveTarget(project, envName);
+  if (envName && !target.env) {
+    return res
+      .status(400)
+      .json({ message: `Environment "${envName}" not found on this project.` });
+  }
+
+  // Run already logged in. Same gate as recording — no session for this env
+  // means the heal loop would chase failures caused by being logged out.
+  const storagePath = target.storageStatePath;
   const loadStorage =
     storagePath && fs.existsSync(storagePath) ? storagePath : undefined;
+  if (!loadStorage) {
+    return res.status(409).json({
+      code: "LOGIN_REQUIRED",
+      env: target.name || null,
+      message: `Capture the login for ${
+        target.name || "this project"
+      } before improving this test.`,
+    });
+  }
 
   try {
     const anthropicClient = await getUserAnthropicClient(req.user._id);
@@ -346,6 +476,7 @@ async function improveTest(req, res) {
       test,
       project,
       storagePath: loadStorage,
+      env: target.env ? { name: target.name, baseUrl: target.baseUrl } : undefined,
       anthropicClient,
     });
 

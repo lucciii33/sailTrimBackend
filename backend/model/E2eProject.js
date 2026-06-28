@@ -34,6 +34,21 @@ const githubSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// A target environment the suite can run against (local / staging / prod).
+// Each carries its OWN captured session — cookies on staging ≠ prod, so the
+// login is reused per environment, never shared across them.
+const environmentSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true }, // "local" | "staging" | "production" (free text)
+    baseUrl: { type: String, default: "" },
+    loginUrl: { type: String, default: "" }, // optional explicit login page
+    // Per-environment authenticated Playwright session (captured once).
+    storageStatePath: { type: String, default: "" },
+    authSavedAt: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
 // Reusable test data the generator/runner can inject (e.g. a known account,
 // a search term). Mirrors ApiProject.variables. Secrets encrypted at rest.
 const variableSchema = new mongoose.Schema(
@@ -54,8 +69,11 @@ const e2eProjectSchema = new mongoose.Schema({
   },
   name: { type: String, required: true }, // slug used for de-dup per company
   title: { type: String, default: "" },
-  baseUrl: { type: String, default: "" }, // deployed app under test
+  baseUrl: { type: String, default: "" }, // deployed app under test (legacy/default env)
   login: { type: loginSchema, default: () => ({}) },
+  // Multiple run targets, each with its own login session. When empty, the
+  // legacy baseUrl + login above act as the single implicit environment.
+  environments: { type: [environmentSchema], default: [] },
   github: { type: githubSchema, default: () => ({}) },
   variables: { type: [variableSchema], default: [] },
   createdAt: { type: Date, default: Date.now },
