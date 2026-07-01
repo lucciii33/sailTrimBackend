@@ -57,6 +57,15 @@ const e2eTestSchema = new mongoose.Schema({
     required: true,
     index: true,
   },
+  // The feature this test belongs to. New hierarchy: project → feature → test.
+  // Optional so pre-feature tests still load (they just won't show under a
+  // feature until re-parented). The video drop now sets this.
+  featureId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "E2eFeature",
+    index: true,
+    default: null,
+  },
   name: { type: String, required: true },
   source: { type: String, enum: ["video", "recording"], default: "video" },
   kind: {

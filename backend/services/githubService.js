@@ -203,6 +203,43 @@ async function getDefaultBranch(octokit, owner, repo) {
   return data.default_branch;
 }
 
+// Commit a single file straight to a branch on GitHub via the Contents API.
+// This writes the commit on the REMOTE (it's pushed + visible on GitHub
+// immediately — no local clone). Creates the file or updates it in place when
+// it already exists (we look up its current sha first). Returns the commit.
+async function commitFileToBranch(octokit, { owner, repo, branch, path, content, message }) {
+  // Updating an existing file needs its current blob sha; a 404 means it's new.
+  let sha;
+  try {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      { owner, repo, path, ref: branch }
+    );
+    if (!Array.isArray(data)) sha = data.sha;
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
+
+  const { data } = await octokit.request(
+    "PUT /repos/{owner}/{repo}/contents/{path}",
+    {
+      owner,
+      repo,
+      path,
+      message,
+      content: Buffer.from(content, "utf8").toString("base64"),
+      branch,
+      ...(sha ? { sha } : {}),
+    }
+  );
+  return {
+    sha: data.commit?.sha,
+    url: data.content?.html_url,
+    branch,
+    path,
+  };
+}
+
 async function scanRepoForApiFiles(octokit, owner, repo) {
   const branch = await getDefaultBranch(octokit, owner, repo);
 
@@ -495,6 +532,7 @@ module.exports = {
   scanRepoTree,
   findSpecCandidates,
   getDefaultBranch,
+  commitFileToBranch,
   fetchBlobContent,
   fetchMountContext,
   fileLooksLikeApi,

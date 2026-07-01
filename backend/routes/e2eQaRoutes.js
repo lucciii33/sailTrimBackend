@@ -11,12 +11,16 @@ const {
   getProject,
   updateProject,
   deleteProject,
+  listFeatures,
+  createFeature,
+  deleteFeature,
   generateFromVideo,
   listTests,
   getTest,
   recordLogin,
   recordTest,
   improveTest,
+  commitTest,
   deleteTest,
 } = require("../controllers/e2eQaController");
 
@@ -27,13 +31,20 @@ router.get("/projects/:id", protect, getProject);
 router.put("/projects/:id", protect, updateProject);
 router.delete("/projects/:id", protect, deleteProject);
 
-// Feature 1: upload a demo video → BDD test cases (draft tests)
+// Features (group tests inside a project; the video is dropped on a feature)
+router.get("/projects/:id/features", protect, listFeatures);
+router.post("/projects/:id/features", protect, createFeature);
+router.delete("/features/:featureId", protect, deleteFeature);
+
+// Feature 1: upload a demo video to a FEATURE → BDD test cases (draft tests)
 router.post(
-  "/projects/:id/from-video",
+  "/features/:featureId/from-video",
   protect,
   upload.single("video"),
   generateFromVideo
 );
+// Tests of a feature.
+router.get("/features/:featureId/tests", protect, listTests);
 
 // Feature 2: capture the login session ONCE for the project.
 router.post("/projects/:id/record-login", protect, recordLogin);
@@ -46,6 +57,8 @@ router.post("/tests/:testId/record", protect, recordTest);
 // Feature 3: read the repo + rewrite the recording senior-quality + self-heal
 // until it passes → saves the green spec + heal log on the test.
 router.post("/tests/:testId/improve", protect, improveTest);
+// Commit & push the green spec to the project's connected repo (direct to branch).
+router.post("/tests/:testId/commit", protect, commitTest);
 router.delete("/tests/:testId", protect, deleteTest);
 
 module.exports = router;

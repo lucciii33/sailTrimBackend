@@ -1,10 +1,14 @@
 const fs = require("fs");
 const path = require("path");
+const mongoose = require("mongoose");
 const E2eProject = require("../model/E2eProject");
+const E2eFeature = require("../model/E2eFeature");
 const E2eTest = require("../model/E2eTest");
 const e2eQaService = require("../services/e2eQaService");
 const e2eHealService = require("../services/e2eHealService");
 const { recordSpec } = require("../services/e2eRecorderService");
+const { resolveOctokit } = require("../services/repoContextService");
+const { commitFileToBranch, getDefaultBranch } = require("../services/githubService");
 const { encrypt, decrypt, maskSecret } = require("../services/secretCrypto");
 const { getUserAnthropicClient } = require("../services/userKeyService");
 
@@ -46,6 +50,17 @@ function resolveTarget(project, envName) {
     storageStatePath: project.login?.storageStatePath || "",
     authReady: Boolean(project.login?.authSavedAt),
   };
+}
+
+// Turn a test name into a safe file slug for the spec path on commit.
+function slugify(name) {
+  return (
+    String(name || "test")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "test"
+  );
 }
 
 function requireCompany(req, res) {
@@ -245,11 +260,94 @@ async function deleteProject(req, res) {
     companyId: req.user.companyId,
   });
   if (!project) return res.status(404).json({ message: "Project not found" });
+  // Cascade: a project's features and tests go with it.
+  await E2eFeature.deleteMany({
+    projectId: project._id,
+    companyId: req.user.companyId,
+  });
   await E2eTest.deleteMany({
     projectId: project._id,
     companyId: req.user.companyId,
   });
   res.json({ message: "Project deleted" });
+}
+
+// ----------------------------- Features -----------------------------
+// A feature groups tests inside a project. The video is dropped on a feature,
+// not the project, so generated cases land grouped instead of flat.
+
+function serializeFeature(f, testCount) {
+  if (!f) return null;
+  return {
+    _id: f._id,
+    projectId: f.projectId,
+    name: f.name,
+    description: f.description || "",
+    testCount: typeof testCount === "number" ? testCount : undefined,
+    createdAt: f.createdAt,
+    updatedAt: f.updatedAt,
+  };
+}
+
+async function listFeatures(req, res) {
+  if (!requireCompany(req, res)) return;
+  const features = await E2eFeature.find({
+    companyId: req.user.companyId,
+    projectId: req.params.id,
+  }).sort({ createdAt: -1 });
+
+  // Attach a per-feature test count so the UI can show "3 tests" on each card.
+  const counts = await E2eTest.aggregate([
+    {
+      $match: {
+        companyId: req.user.companyId,
+        projectId: new mongoose.Types.ObjectId(req.params.id),
+      },
+    },
+    { $group: { _id: "$featureId", n: { $sum: 1 } } },
+  ]).catch(() => []);
+  const byFeature = new Map(counts.map((c) => [String(c._id), c.n]));
+
+  res.json(
+    features.map((f) => serializeFeature(f, byFeature.get(String(f._id)) || 0))
+  );
+}
+
+async function createFeature(req, res) {
+  if (!requireCompany(req, res)) return;
+  const project = await E2eProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const { name, description } = req.body;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ message: "Feature name is required" });
+  }
+  const feature = await E2eFeature.create({
+    userId: req.user._id,
+    companyId: req.user.companyId,
+    projectId: project._id,
+    name: name.trim(),
+    description: description || "",
+  });
+  res.status(201).json(serializeFeature(feature, 0));
+}
+
+async function deleteFeature(req, res) {
+  if (!requireCompany(req, res)) return;
+  const feature = await E2eFeature.findOneAndDelete({
+    _id: req.params.featureId,
+    companyId: req.user.companyId,
+  });
+  if (!feature) return res.status(404).json({ message: "Feature not found" });
+  // Cascade: a feature's tests go with it.
+  await E2eTest.deleteMany({
+    featureId: feature._id,
+    companyId: req.user.companyId,
+  });
+  res.json({ message: "Feature deleted" });
 }
 
 // ------------------- Feature 1: video → test cases -------------------
@@ -259,10 +357,20 @@ async function generateFromVideo(req, res) {
   if (!req.file) {
     return res.status(400).json({ message: "No video file uploaded (field 'video')" });
   }
+
+  // Video is now dropped on a feature. Resolve the feature → its project so the
+  // generated tests are tagged with both.
+  const feature = await E2eFeature.findOne({
+    _id: req.params.featureId,
+    companyId: req.user.companyId,
+  });
+  if (!feature) return res.status(404).json({ message: "Feature not found" });
+
   try {
     const anthropicClient = await getUserAnthropicClient(req.user._id);
     const result = await e2eQaService.generateFromVideo({
-      projectId: req.params.id,
+      projectId: feature.projectId,
+      featureId: feature._id,
       userId: req.user._id,
       companyId: req.user.companyId,
       buffer: req.file.buffer,
@@ -282,10 +390,12 @@ async function generateFromVideo(req, res) {
 
 async function listTests(req, res) {
   if (!requireCompany(req, res)) return;
-  const tests = await E2eTest.find({
-    companyId: req.user.companyId,
-    projectId: req.params.id,
-  }).sort({ createdAt: -1 });
+  // Feature-scoped when :featureId is on the route, else all of a project's
+  // tests (kept for any caller still listing at the project level).
+  const filter = { companyId: req.user.companyId };
+  if (req.params.featureId) filter.featureId = req.params.featureId;
+  else filter.projectId = req.params.id;
+  const tests = await E2eTest.find(filter).sort({ createdAt: -1 });
   res.json(tests);
 }
 
@@ -500,6 +610,82 @@ async function improveTest(req, res) {
   }
 }
 
+// Feature 3 — commit & push. Writes the test's spec straight to the project's
+// connected repo (branch from project.github.branch, else the repo default) via
+// the GitHub App. The Contents API commits on the remote, so it's pushed and
+// visible on GitHub instantly. Saves the commit (branch/sha/url) on the test.
+async function commitTest(req, res) {
+  if (!requireCompany(req, res)) return;
+  const test = await E2eTest.findOne({
+    _id: req.params.testId,
+    companyId: req.user.companyId,
+  });
+  if (!test) return res.status(404).json({ message: "Test not found" });
+  if (!test.specCode || !test.specCode.trim()) {
+    return res
+      .status(400)
+      .json({ message: "Nothing to commit — record & improve the test first." });
+  }
+
+  const project = await E2eProject.findOne({
+    _id: test.projectId,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const owner = project.github?.owner;
+  const repo = project.github?.repo;
+  if (!owner || !repo) {
+    return res.status(400).json({
+      message: "Connect a GitHub repo to this project before committing.",
+    });
+  }
+
+  const octokit = await resolveOctokit(project);
+  if (!octokit) {
+    return res.status(409).json({
+      message:
+        "No GitHub App installation can write to this repo. Reconnect the repo.",
+    });
+  }
+
+  try {
+    const branch =
+      project.github?.branch ||
+      (await getDefaultBranch(octokit, owner, repo));
+    const testDir = project.github?.testDir || "tests/e2e";
+    // Reuse the test's stored path so re-commits update the same file.
+    const filePath =
+      test.specPath || `${testDir.replace(/\/+$/, "")}/${slugify(test.name)}.spec.ts`;
+
+    const commit = await commitFileToBranch(octokit, {
+      owner,
+      repo,
+      branch,
+      path: filePath,
+      content: test.specCode,
+      message: `test(e2e): ${test.name}`,
+    });
+
+    test.specPath = filePath;
+    test.commit = {
+      branch: commit.branch,
+      sha: commit.sha,
+      url: commit.url,
+      committedAt: new Date(),
+    };
+    test.status = "committed";
+    test.updatedAt = new Date();
+    await test.save();
+
+    res.json({ status: test.status, commit: test.commit });
+  } catch (err) {
+    const status = err.status || err.statusCode || 500;
+    console.error("e2e commitTest error:", err);
+    res.status(status).json({ message: err.message || "Commit failed" });
+  }
+}
+
 async function deleteTest(req, res) {
   if (!requireCompany(req, res)) return;
   const test = await E2eTest.findOneAndDelete({
@@ -516,11 +702,15 @@ module.exports = {
   getProject,
   updateProject,
   deleteProject,
+  listFeatures,
+  createFeature,
+  deleteFeature,
   generateFromVideo,
   listTests,
   getTest,
   recordLogin,
   recordTest,
   improveTest,
+  commitTest,
   deleteTest,
 };

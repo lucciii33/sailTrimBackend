@@ -189,6 +189,7 @@ async function generateTestCases(transcript, { anthropicClient = null } = {}) {
 
 async function generateFromVideo({
   projectId,
+  featureId = null,
   userId,
   companyId,
   buffer,
@@ -226,6 +227,7 @@ async function generateFromVideo({
     userId,
     companyId,
     projectId: project._id,
+    featureId: featureId || null,
     name: c.name || "Untitled test",
     source: "video",
     kind: c.kind || "regression",

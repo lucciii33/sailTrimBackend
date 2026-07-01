@@ -177,4 +177,4 @@ function render(supportFiles, testIdMap) {
   return text;
 }
 
-module.exports = { buildRepoContext };
+module.exports = { buildRepoContext, resolveOctokit };
