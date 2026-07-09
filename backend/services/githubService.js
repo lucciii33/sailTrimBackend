@@ -152,10 +152,26 @@ const SOURCE_EXTENSIONS = [
 // Multi-framework route detection. Cheap pre-filter to skip files that
 // obviously don't define endpoints. Anything matched is sent to the LLM,
 // which makes the final call.
-const ROUTE_REGEX = new RegExp(
+//
+// Split into a case-INsensitive and a case-SENSITIVE regex. The Go pattern
+// (`.GET(` / `.POST(` — Gin/Echo/Mux convention) needs to stay case-
+// sensitive: with a shared "i" flag it also matched plain lowercase
+// `.get(`/`.post(` method calls on ANY object — e.g. `mailjet.post("send",
+// ...)`, `mountPrefixes.get(path)` — which misclassified plain controller/
+// service files (no real route in them at all) as "looks like an API
+// file". Confirmed on this repo: checkoutController.js, userController.js,
+// companyController.js, githubController.js all got pulled in as backfill
+// candidates purely because of this, and the LLM then invented plausible-
+// looking (wrong) endpoint paths from their handler function names.
+const ROUTE_REGEX_CI = new RegExp(
   [
     // JS/TS: Express, Fastify, Koa, Hapi
     /(router|app|fastify|server|api)\s*\.\s*(get|post|put|patch|delete|options|head|all|use)\s*\(\s*["'`]/.source,
+    // JS/TS: Express chainable routing — router.route("/x").post(handler) —
+    // the .post(handler) part has no string arg to match above, so this
+    // needs its own pattern (checkoutRoutes.js in this repo uses this style
+    // exclusively; the JS pattern above alone would miss it entirely).
+    /\.\s*route\s*\(\s*["'`]/.source,
     // JS/TS decorators: NestJS / TS-controllers
     /@(Get|Post|Put|Patch|Delete|All|Controller|Route|Mapping|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\s*\(/.source,
     // Python: FastAPI / Flask / blueprints
@@ -165,8 +181,6 @@ const ROUTE_REGEX = new RegExp(
     /\b(path|re_path|url)\s*\(\s*r?["']/.source,
     // Ruby: Rails routes.rb / Sinatra
     /^\s*(get|post|put|patch|delete|match|resources|resource|namespace|scope)\s+["':]/m.source,
-    // Go: Gin / Echo / Mux / chi / stdlib
-    /\.\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|HandleFunc|Handle|Group|Route)\s*\(/.source,
     // PHP: Laravel / Symfony
     /Route::(get|post|put|patch|delete|any|match|resource|apiResource|prefix|group)\s*\(/.source,
     /#\[Route\s*\(/.source,
@@ -182,6 +196,8 @@ const ROUTE_REGEX = new RegExp(
   ].join("|"),
   "im"
 );
+// Go: Gin / Echo / Mux / chi / stdlib — deliberately case-SENSITIVE.
+const ROUTE_REGEX_CS = /\.\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|HandleFunc|Handle|Group|Route)\s*\(/;
 
 function isExcludedPath(filePath) {
   const parts = filePath.split("/");
@@ -278,7 +294,7 @@ async function fetchBlobContent(octokit, owner, repo, sha) {
 }
 
 function fileLooksLikeApi(content) {
-  return ROUTE_REGEX.test(content);
+  return ROUTE_REGEX_CI.test(content) || ROUTE_REGEX_CS.test(content);
 }
 
 function isEntryFileCandidate(filePath) {

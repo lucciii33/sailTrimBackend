@@ -275,6 +275,7 @@ async function runBackfill(jobId) {
     let totalOut = 0;
     let cachedCount = 0;
     const processedShas = [];
+    const failedFiles = [];
 
     for (let i = 0; i < hydrated.length; i += CONCURRENCY) {
       const batch = hydrated.slice(i, i + CONCURRENCY);
@@ -324,6 +325,9 @@ async function runBackfill(jobId) {
                 `[backfill ${job._id}] ${file.path}: looks like a route file but isn't mounted anywhere — flagging as unmounted`
               );
             }
+            console.log(
+              `[backfill ${job._id}] ${file.path}: Claude returned ${endpoints.length} endpoint(s)`
+            );
             const saved = await saveBackfillDocs({
               endpoints,
               repo: job.repo,
@@ -334,14 +338,23 @@ async function runBackfill(jobId) {
               sourceSha: file.sha,
               mounted: !orphan,
             });
-            return { saved, usage, sha: file.sha, cached: false };
+            console.log(`[backfill ${job._id}] ${file.path}: saved ${saved} doc(s)`);
+            return { saved, usage, sha: file.sha, cached: false, failed: false };
           } catch (err) {
-            console.error(`Failed to doc ${file.path}:`, err.message);
+            // Surface the full failure — this used to log only err.message
+            // and report saved:0 identically to "this file genuinely has no
+            // endpoints", which made a real failure (e.g. a truncated
+            // Claude response) indistinguishable from a legitimately empty
+            // file. failed:true below makes that distinction explicit.
+            console.error(`[backfill ${job._id}] FAILED to doc ${file.path}:`, err.stack || err.message);
             return {
               saved: 0,
               usage: { inputTokens: 0, outputTokens: 0 },
               sha: file.sha,
               cached: false,
+              failed: true,
+              failedPath: file.path,
+              error: err.message,
             };
           }
         })
@@ -353,10 +366,13 @@ async function runBackfill(jobId) {
         totalOut += r.usage.outputTokens || 0;
         processedShas.push(r.sha);
         if (r.cached) cachedCount += 1;
+        if (r.failed) failedFiles.push({ path: r.failedPath, error: r.error || "unknown error" });
       }
 
       job.filesProcessed += batch.length;
       job.filesCached = cachedCount;
+      job.filesFailed = failedFiles.length;
+      job.failedFiles = failedFiles;
       job.endpointsDetected = totalEndpoints;
       job.tokensInput = totalIn;
       job.tokensOutput = totalOut;

@@ -146,26 +146,48 @@ async function callClaudeWithRetry(client, params) {
   throw lastErr;
 }
 
+// 4096 was too low: a file with 15+ endpoints (full requestBody/response
+// schemas expanded per endpoint, per the system prompt) can legitimately
+// need more output than that. When the response got cut off mid-JSON, it
+// silently parsed to {endpoints: []} — a file with real endpoints reported
+// as if it had none, with no error anywhere. Confirmed on this repo:
+// mcpLabRoutes.js (42 endpoints) and apiQARoutes.js (21 endpoints) both hit
+// exactly 4096 output tokens and lost 100% of their endpoints silently.
+const MAX_OUTPUT_TOKENS = 16_000;
+
 async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, knownPrefix, diff, anthropicClient = null }) {
   const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, knownPrefix, diff });
 
   const client = anthropicClient || getAnthropic();
   const response = await callClaudeWithRetry(client, {
     model: CLAUDE_MODEL,
-    max_tokens: 4096,
+    max_tokens: MAX_OUTPUT_TOKENS,
     system: DOC_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMsg }],
   });
-
-  const raw = (response.content || []).map((c) => c.text || "").join("");
-  const parsed = safeParseJson(raw);
-  const endpoints = parsed?.endpoints || [];
 
   const usage = {
     inputTokens: response.usage?.input_tokens || 0,
     outputTokens: response.usage?.output_tokens || 0,
     model: CLAUDE_MODEL,
   };
+
+  // A response cut off by the token cap is a real failure, not "this file
+  // has no endpoints" — surface it loudly (caller's try/catch logs it and
+  // counts the file as failed) instead of silently returning an empty
+  // array, which is indistinguishable from a genuinely endpoint-less file.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `Claude response truncated at ${MAX_OUTPUT_TOKENS} output tokens for ${filePath || "diff"} — increase MAX_OUTPUT_TOKENS or split the file`
+    );
+  }
+
+  const raw = (response.content || []).map((c) => c.text || "").join("");
+  const parsed = safeParseJson(raw);
+  if (parsed === null) {
+    throw new Error(`Claude response was not valid JSON for ${filePath || "diff"}`);
+  }
+  const endpoints = parsed.endpoints || [];
 
   return { endpoints, usage };
 }
