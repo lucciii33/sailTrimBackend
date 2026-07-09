@@ -41,6 +41,10 @@ const docSchema = new mongoose.Schema({
   source: { type: String, enum: ["pr", "backfill"], default: "pr" },
   sourceFile: { type: String },
   sourceSha: { type: String },
+  // False when the route file that defines this endpoint exists in the repo
+  // but nothing ever mounts it (dead/unreachable code) — see
+  // isOrphanRouteFile in services/githubService.js.
+  mounted: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

@@ -11,6 +11,9 @@ const {
   fetchSchemaContext,
   pickSchemasForFile,
   fileLooksLikeApi,
+  extractMountedModulePaths,
+  extractMountPrefixes,
+  isOrphanRouteFile,
   MAX_FILE_BYTES,
 } = require("../services/githubService");
 const {
@@ -198,6 +201,18 @@ async function runBackfill(jobId) {
       `[backfill ${job._id}] mount=${mountContext.length} schemas=${schemaContext.length}`
     );
 
+    // Resolve which route files are actually required by a mount call, so
+    // route files that exist in the repo but nothing ever wires up (dead
+    // code) get flagged instead of documented as if they were live.
+    const mountedPaths = await extractMountedModulePaths(mountContext);
+    // Exact prefix per module, resolved from the entry file's AST (today:
+    // JS/TS and Python) — a fact we can hand the LLM instead of asking it
+    // to infer the prefix from raw mount-context text.
+    const mountPrefixes = await extractMountPrefixes(mountContext);
+    console.log(
+      `[backfill ${job._id}] mountedPaths=${mountedPaths.size} mountPrefixes=${mountPrefixes.size}`
+    );
+
     // 3) Pick candidates: every source file in the repo. The regex check
     //    on content (fileLooksLikeApi) does the real filtering — path
     //    structure varies too much across repos to gate on it.
@@ -286,13 +301,29 @@ async function runBackfill(jobId) {
             console.log(
               `[backfill ${job._id}] ${file.path}: schemas=${relevantSchemas.length}/${schemaContext.length}`
             );
+            const normalizedPath = file.path.replace(/\.(jsx?|tsx?|py)$/i, "");
+            const knownPrefix = mountPrefixes.has(normalizedPath)
+              ? mountPrefixes.get(normalizedPath)
+              : undefined;
+            if (knownPrefix !== undefined) {
+              console.log(
+                `[backfill ${job._id}] ${file.path}: verified prefix "${knownPrefix}" (from AST, not a guess)`
+              );
+            }
             const { endpoints, usage } = await generateDocsFromFile({
               filePath: file.path,
               content: file.content,
               mountContext,
               schemaContext: relevantSchemas,
+              knownPrefix,
               anthropicClient,
             });
+            const orphan = isOrphanRouteFile(file.path, mountedPaths);
+            if (orphan) {
+              console.log(
+                `[backfill ${job._id}] ${file.path}: looks like a route file but isn't mounted anywhere — flagging as unmounted`
+              );
+            }
             const saved = await saveBackfillDocs({
               endpoints,
               repo: job.repo,
@@ -301,6 +332,7 @@ async function runBackfill(jobId) {
               companyId,
               sourceFile: file.path,
               sourceSha: file.sha,
+              mounted: !orphan,
             });
             return { saved, usage, sha: file.sha, cached: false };
           } catch (err) {

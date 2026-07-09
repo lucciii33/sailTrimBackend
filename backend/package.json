@@ -13,6 +13,8 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
+    "@babel/parser": "^7.29.7",
+    "@babel/traverse": "^7.29.7",
     "@google/generative-ai": "^0.14.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/app": "^16.1.2",
@@ -41,7 +43,9 @@
     "openai": "^4.52.2",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",
-    "stripe": "^16.2.0"
+    "stripe": "^16.2.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
     "jest": "^30.2.0",

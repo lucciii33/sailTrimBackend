@@ -4,11 +4,15 @@ async function getDocs(req, res) {
   if (!req.user.companyId) {
     return res.status(400).json({ message: "User has no company" });
   }
-  const { owner, repo } = req.query;
+  const { owner, repo, includeUnmounted } = req.query;
 
   const filter = { companyId: req.user.companyId };
   if (repo) filter.repo = repo;
   if (owner) filter.owner = owner;
+  // Route files that exist in the repo but nothing ever mounts them are
+  // dead code — hide them by default so the list matches the live API.
+  // Pass ?includeUnmounted=true to see them (e.g. a "show dead code" view).
+  if (includeUnmounted !== "true") filter.mounted = { $ne: false };
 
   const docs = await Doc.find(filter).sort({ createdAt: -1 });
   res.json(docs);

@@ -80,10 +80,16 @@ function buildSchemaContextBlock(schemaContext) {
     .join("\n\n");
 }
 
-function buildUserMessage({ filePath, content, mountContext, schemaContext, diff }) {
+function buildUserMessage({ filePath, content, mountContext, schemaContext, knownPrefix, diff }) {
   const mountBlock = buildMountContextBlock(mountContext);
   const schemaBlock = buildSchemaContextBlock(schemaContext);
-  const header = `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nSCHEMA / MODEL FILES (use these to fully populate request bodies, query params, and response shapes — every field, every nested object):\n${schemaBlock}`;
+  let header = `ENTRY FILES (for mount prefix resolution):\n${mountBlock}\n\nSCHEMA / MODEL FILES (use these to fully populate request bodies, query params, and response shapes — every field, every nested object):\n${schemaBlock}`;
+  // knownPrefix comes from parsing the entry file's AST directly (not a
+  // guess) — when we have it, it overrides whatever the LLM would infer
+  // from the mount-context text.
+  if (knownPrefix !== undefined && knownPrefix !== null) {
+    header += `\n\nVERIFIED MOUNT PREFIX for this file: "${knownPrefix}"\nThis was resolved by parsing the entry file's code directly, not inferred — it is a fact, not a guess. Every endpoint path you output for this file MUST start with this exact prefix (concatenated with the route's own path). Do not recompute or second-guess it from the ENTRY FILES text above.`;
+  }
   if (diff) {
     return `${header}\n\nDIFF:\n${diff}`;
   }
@@ -140,8 +146,8 @@ async function callClaudeWithRetry(client, params) {
   throw lastErr;
 }
 
-async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, diff, anthropicClient = null }) {
-  const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, diff });
+async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, knownPrefix, diff, anthropicClient = null }) {
+  const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, knownPrefix, diff });
 
   const client = anthropicClient || getAnthropic();
   const response = await callClaudeWithRetry(client, {
@@ -200,8 +206,8 @@ async function generateAndSaveDocs(diff, prNumber, repo, owner, userId, mountCon
  * Backfill-mode: called per source file.
  * Returns { endpoints, usage } so the caller can aggregate token counts.
  */
-async function generateDocsFromFile({ filePath, content, mountContext, schemaContext, anthropicClient = null }) {
-  return callClaudeForDocs({ filePath, content, mountContext, schemaContext, anthropicClient });
+async function generateDocsFromFile({ filePath, content, mountContext, schemaContext, knownPrefix, anthropicClient = null }) {
+  return callClaudeForDocs({ filePath, content, mountContext, schemaContext, knownPrefix, anthropicClient });
 }
 
 async function saveBackfillDocs({
@@ -212,6 +218,7 @@ async function saveBackfillDocs({
   companyId,
   sourceFile,
   sourceSha,
+  mounted = true,
 }) {
   if (!endpoints.length) return 0;
 
@@ -228,6 +235,7 @@ async function saveBackfillDocs({
           source: "backfill",
           sourceFile,
           sourceSha,
+          mounted,
           updatedAt: new Date(),
         },
       },
