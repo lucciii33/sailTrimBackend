@@ -127,7 +127,14 @@ async function callClaudeWithRetry(client, params) {
   let lastErr;
   while (attempt <= MAX_RETRIES) {
     try {
-      return await client.messages.create(params);
+      // Streamed, not a plain .create() call: at MAX_OUTPUT_TOKENS (near the
+      // model's real ceiling), a response that actually needs most of that
+      // budget can run for minutes — a non-streaming HTTP call risks a
+      // client-side timeout killing the whole request with nothing to show
+      // for it. Streaming removes that failure mode; .finalMessage() still
+      // gives back the same accumulated Message this caller expects.
+      const stream = client.messages.stream(params);
+      return await stream.finalMessage();
     } catch (err) {
       lastErr = err;
       const status = err?.status || err?.response?.status;
@@ -153,7 +160,16 @@ async function callClaudeWithRetry(client, params) {
 // as if it had none, with no error anywhere. Confirmed on this repo:
 // mcpLabRoutes.js (42 endpoints) and apiQARoutes.js (21 endpoints) both hit
 // exactly 4096 output tokens and lost 100% of their endpoints silently.
-const MAX_OUTPUT_TOKENS = 16_000;
+//
+// Set to the model's actual output ceiling, not a conservative guess: Claude
+// only bills for tokens it actually generates, not this ceiling, so there's
+// no cost reason to under-set it — and Olivia scans arbitrary customer repos,
+// where some file will eventually be denser than anything in this repo. The
+// only real risk at a high ceiling is a non-streaming HTTP call timing out
+// on a genuinely long generation; callClaudeWithRetry uses
+// client.messages.stream(...).finalMessage() specifically to remove that
+// risk, so raising this number doesn't trade one failure mode for another.
+const MAX_OUTPUT_TOKENS = 128_000;
 
 async function callClaudeForDocs({ filePath, content, mountContext, schemaContext, knownPrefix, diff, anthropicClient = null }) {
   const userMsg = buildUserMessage({ filePath, content, mountContext, schemaContext, knownPrefix, diff });
