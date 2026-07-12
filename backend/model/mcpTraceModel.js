@@ -96,6 +96,8 @@ const mcpSuiteSchema = new mongoose.Schema(
         expectedTool: String,
         expectedArgs: mongoose.Schema.Types.Mixed,
         expectedResponse: mongoose.Schema.Types.Mixed, // baseline response for regression checks
+        // One human-readable sentence describing what this case currently covers.
+        covers: String,
         assertions: [String], // plain english, judge evaluates
       },
     ],

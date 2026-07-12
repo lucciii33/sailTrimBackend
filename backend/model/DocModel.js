@@ -27,6 +27,10 @@ const docSchema = new mongoose.Schema({
   requestBody: [paramSchema],
   queryParams: [paramSchema],
   responses: [responseSchema],
+  // Optional user-provided body the QA generator uses as the base for the
+  // happy_path case. When empty, the model builds the body from requestBody +
+  // discovery data as before.
+  exampleBody: { type: mongoose.Schema.Types.Mixed },
   prNumber: { type: Number },
   // Spec-import endpoints belong to an ApiProject instead of a GitHub repo.
   projectId: {

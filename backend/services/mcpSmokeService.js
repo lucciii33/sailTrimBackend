@@ -151,6 +151,91 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
   return { suite, generatedBy: { provider: usedProvider, model: usedModel } };
 }
 
+const SMOKE_REFINE_SYSTEM = `You are editing ONE smoke test case for an MCP tool based on a user instruction.
+You receive the tool schema, the current case (args, assertions) and a natural-language instruction describing how to change it.
+Apply the instruction and return the UPDATED case as STRICT JSON:
+{
+  "name": string,
+  "toolName": string,
+  "args": object,
+  "expectedBehavior": string
+}
+
+Rules:
+- Keep the same toolName. Keep args valid against the inputSchema (required fields, correct types, enum values).
+- The instruction may ask to use different valid inputs, cover an extra field/id, or restate the success criteria. Apply it faithfully.
+- "expectedBehavior": one short sentence a non-technical user can read describing what success looks like.
+- This is a smoke ("is the tool alive?") case — keep it a single realistic happy path, not an edge case.
+- Return only the single updated case object.`;
+
+// Refine one smoke case from a natural-language instruction. Mirrors the
+// regression refiner so both suites feel identical in the UI.
+async function refineSmokeCase({
+  suiteId,
+  caseId,
+  instruction,
+  userId,
+  companyId,
+  provider = "anthropic",
+  model,
+  anthropicClient = null,
+}) {
+  if (!instruction || !instruction.trim()) {
+    throw new Error("An instruction is required to refine a case.");
+  }
+  const filter = { _id: suiteId, kind: "smoke" };
+  if (companyId) filter.companyId = companyId;
+  const suite = await McpSuite.findOne(filter);
+  if (!suite) throw new Error("Smoke suite not found");
+
+  const current = suite.cases.id(caseId);
+  if (!current) throw new Error("Case not found in suite");
+
+  const toolQuery = { projectId: suite.projectId, name: current.expectedTool };
+  if (companyId) toolQuery.companyId = companyId;
+  const tool = await McpTool.findOne(toolQuery);
+
+  const payload = {
+    tool: tool
+      ? {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }
+      : { name: current.expectedTool },
+    currentCase: {
+      name: current.name,
+      toolName: current.expectedTool,
+      args: current.expectedArgs || {},
+      expectedBehavior: current.assertions?.[0] || "",
+    },
+    instruction,
+  };
+
+  const { parsed } = await callJsonLLM({
+    provider,
+    model,
+    system: SMOKE_REFINE_SYSTEM,
+    user: JSON.stringify(payload, null, 2),
+    maxTokens: 2048,
+    anthropicClient,
+  });
+
+  if (!parsed || !parsed.toolName) {
+    throw new Error(
+      "Could not refine the case — the model returned no usable output."
+    );
+  }
+
+  // Never let a refine switch tools.
+  current.name = parsed.name || current.name;
+  current.expectedArgs = parsed.args || current.expectedArgs;
+  if (parsed.expectedBehavior) current.assertions = [parsed.expectedBehavior];
+
+  await suite.save();
+  return { suite, case: current };
+}
+
 async function runSmokeSuite({ suiteId, userId, companyId }) {
   const filter = { _id: suiteId };
   if (companyId) filter.companyId = companyId;
@@ -215,5 +300,6 @@ async function runSmokeSuite({ suiteId, userId, companyId }) {
 
 module.exports = {
   generateSmokeSuite,
+  refineSmokeCase,
   runSmokeSuite,
 };

@@ -5,83 +5,142 @@ const { McpSuite } = require("../model/mcpTraceModel.js");
 const mcpLab = require("./mcpLabService.js");
 const mcpDocs = require("./mcpDocService.js");
 const mcpProjects = require("./mcpProjectService.js");
+const { callJsonLLM } = require("./mcpQaService.js");
 
-function flattenValues(value, prefix = "") {
-  const out = {};
-  if (value === null || value === undefined) {
-    out[prefix || "$"] = value;
-    return out;
-  }
-  if (Array.isArray(value)) {
-    if (!value.length) {
-      out[`${prefix}[]`] = [];
-      return out;
+// ---------- Prompts ----------
+
+const REGRESSION_SYSTEM = `You are a regression-test author for MCP servers.
+You receive the project's tools and their docs (which may include verified sampleArgs and response schemas).
+For EACH tool, produce a small regression suite: several cases that lock in the tool's current behavior so future changes that break it are caught.
+Return STRICT JSON:
+{
+  "cases": [
+    {
+      "name": string,
+      "toolName": string,
+      "args": object,
+      "covers": string,
+      "assertions": string[]
     }
-    value.forEach((item, idx) => {
-      Object.assign(out, flattenValues(item, `${prefix}[${idx}]`));
-    });
-    return out;
-  }
-  if (typeof value === "object") {
-    const keys = Object.keys(value);
-    if (!keys.length) {
-      out[prefix || "$"] = {};
-      return out;
-    }
-    for (const key of keys) {
-      const nextPrefix = prefix ? `${prefix}.${key}` : key;
-      Object.assign(out, flattenValues(value[key], nextPrefix));
-    }
-    return out;
-  }
-  out[prefix || "$"] = value;
-  return out;
+  ]
 }
 
-function valuesEqual(a, b) {
-  if (a === b) return true;
-  if (a === null || b === null) return false;
-  if (typeof a !== typeof b) return false;
-  if (typeof a === "object") {
-    try {
-      return JSON.stringify(a) === JSON.stringify(b);
-    } catch (_) {
-      return false;
-    }
-  }
-  return false;
+Rules:
+- Produce 2-4 cases per tool: at least one happy path, plus meaningful variations (different valid inputs, an edge/boundary input, and an expected-error input when the schema allows it).
+- Every case must call an existing toolName and its args must satisfy the inputSchema (required fields, correct types, enum values).
+- Prefer the doc's verified sampleArgs for happy paths — they are known to work.
+- "covers": ONE short human sentence describing exactly what this case checks, readable by a non-technical user (e.g. "Returns weather for a valid city").
+- "assertions": concrete, checkable statements about the response a judge will evaluate. Be specific about shape/types/values/status, e.g.:
+  - "response.temperature is a number"
+  - "response.city equals the requested city"
+  - "returns an error because the city is missing"
+  - "HTTP-like status is 400, not 401"
+- Keep args realistic and minimal. Do not invent secret IDs, tokens, or production data — use placeholders only when the schema does not constrain a value.`;
+
+const REGRESSION_JUDGE_SYSTEM = `You are an MCP regression judge.
+You receive one executed regression case: its "covers" description, the assertions to check, the tool schema, the args sent, the tool status/error, and the parsed response.
+Evaluate EACH assertion against the actual response and decide an overall verdict.
+Return STRICT JSON:
+{
+  "verdict": "pass" | "fail" | "warn",
+  "assertionResults": [ { "assertion": string, "ok": boolean, "note": string } ],
+  "reasoning": string
 }
 
-function diffResponse(expected, actual) {
-  const expectedFlat = flattenValues(expected);
-  const actualFlat = flattenValues(actual);
-  const diffs = [];
+Rules:
+- "pass": every assertion holds against the actual response.
+- "fail": at least one assertion is clearly violated (this is a regression).
+- "warn": the response is ambiguous or the tool errored in a way that makes an assertion impossible to verify.
+- Judge only from the provided evidence; do not speculate beyond the response/error.`;
 
-  for (const [path, expectedValue] of Object.entries(expectedFlat)) {
-    if (!(path in actualFlat)) {
-      diffs.push({ path, kind: "missing", expected: expectedValue, actual: undefined });
-      continue;
-    }
-    const actualValue = actualFlat[path];
-    if (!valuesEqual(expectedValue, actualValue)) {
-      diffs.push({ path, kind: "changed", expected: expectedValue, actual: actualValue });
-    }
-  }
+const REGRESSION_REFINE_SYSTEM = `You are editing ONE regression test case for an MCP tool based on a user instruction.
+You receive the tool schema, the current case (args, covers, assertions) and a natural-language instruction describing how to change it.
+Apply the instruction and return the UPDATED case as STRICT JSON:
+{
+  "name": string,
+  "toolName": string,
+  "args": object,
+  "covers": string,
+  "assertions": string[]
+}
 
-  for (const path of Object.keys(actualFlat)) {
-    if (!(path in expectedFlat)) {
-      diffs.push({ path, kind: "added", expected: undefined, actual: actualFlat[path] });
-    }
-  }
+Rules:
+- Keep the same toolName. Keep args valid against the inputSchema.
+- The instruction may ask to cover an extra id/field, add more assertions, assert a field's type (number/string), change an expected status (e.g. "should return 400 not 401"), or broaden/narrow coverage. Apply it faithfully.
+- Update "covers" so it still describes, in one sentence, what the case now checks.
+- Preserve existing coverage unless the instruction says to replace it — prefer adding to the assertions over dropping them.
+- Return only the single updated case object.`;
 
+// ---------- Helpers ----------
+
+function toSuiteCase(c) {
   return {
-    diffs,
-    expectedFieldCount: Object.keys(expectedFlat).length,
-    actualFieldCount: Object.keys(actualFlat).length,
+    name: c.name || `${c.toolName} regression`,
+    expectedTool: c.toolName,
+    expectedArgs: c.args || {},
+    covers: c.covers || "",
+    assertions: Array.isArray(c.assertions) ? c.assertions : [],
   };
 }
 
-async function generateRegressionSuite({ projectId, userId, companyId }) {
+// One safe happy-path case per tool when the LLM is unavailable/invalid.
+function fallbackRegressionCases({ tools, docByName }) {
+  return tools.map((tool) => {
+    const doc = docByName.get(tool.name);
+    const args =
+      doc?.sampleArgs || mcpDocs.sampleArgsFromSchema(tool.inputSchema || {});
+    return {
+      name: `${tool.name} regression`,
+      toolName: tool.name,
+      args,
+      covers: "Tool responds successfully with its known-good sample arguments.",
+      assertions: ["Tool returns a successful response without an error."],
+    };
+  });
+}
+
+function buildLlmInput(tools, docByName) {
+  return tools.map((tool) => {
+    const doc = docByName.get(tool.name);
+    return {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      sampleArgs: doc?.sampleArgs || null,
+      responseSchema: doc?.responseSchema || null,
+      responseVerified: doc?.responseVerified || false,
+      summary: doc?.summary || null,
+    };
+  });
+}
+
+// Guarantee every tool ends up with at least one case.
+function ensureAllToolsCovered(cases, tools, docByName) {
+  const covered = new Set(cases.map((c) => c.toolName));
+  for (const tool of tools) {
+    if (covered.has(tool.name)) continue;
+    const doc = docByName.get(tool.name);
+    cases.push({
+      name: `${tool.name} regression`,
+      toolName: tool.name,
+      args: doc?.sampleArgs || mcpDocs.sampleArgsFromSchema(tool.inputSchema || {}),
+      covers: "Tool responds successfully with its known-good sample arguments.",
+      assertions: ["Tool returns a successful response without an error."],
+    });
+  }
+  return cases;
+}
+
+// ---------- Generate ----------
+
+async function generateRegressionSuite({
+  projectId,
+  userId,
+  companyId,
+  provider = "anthropic",
+  model,
+  anthropicClient = null,
+}) {
   const projectQuery = { _id: projectId };
   if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
@@ -97,32 +156,37 @@ async function generateRegressionSuite({ projectId, userId, companyId }) {
   if (!tools.length) throw new Error("Project has no tools to regression-test");
 
   const docByName = new Map(docs.map((doc) => [doc.toolName, doc]));
-  const cases = [];
-  const skipped = [];
 
-  for (const tool of tools) {
-    const doc = docByName.get(tool.name);
-    if (!doc || doc.sampleResponse === undefined || doc.sampleResponse === null) {
-      skipped.push({ toolName: tool.name, reason: "no sampleResponse on doc" });
-      continue;
-    }
-    const expectedFieldCount = Object.keys(flattenValues(doc.sampleResponse)).length;
-    cases.push({
-      name: `${tool.name} regression`,
-      expectedTool: tool.name,
-      expectedArgs: doc.sampleArgs || {},
-      expectedResponse: doc.sampleResponse,
-      assertions: [
-        `Tool response must match the baseline across ${expectedFieldCount} field(s).`,
-      ],
+  let usedProvider = "none";
+  let usedModel = null;
+  let cases = null;
+
+  try {
+    const { parsed, model: chosenModel } = await callJsonLLM({
+      provider,
+      model,
+      system: REGRESSION_SYSTEM,
+      user: JSON.stringify({ tools: buildLlmInput(tools, docByName) }, null, 2),
+      maxTokens: 8192,
+      anthropicClient,
     });
+    const toolNames = new Set(tools.map((tool) => tool.name));
+    const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
+    const valid = generated.filter((c) => c.toolName && toolNames.has(c.toolName));
+    if (valid.length) {
+      cases = ensureAllToolsCovered(valid, tools, docByName);
+      usedProvider = provider;
+      usedModel = chosenModel;
+    }
+  } catch (_) {
+    /* fall through to fallback */
   }
 
-  if (!cases.length) {
-    throw new Error(
-      "No tools have a verified sampleResponse yet — run the docs generator first."
-    );
+  if (!cases) {
+    cases = fallbackRegressionCases({ tools, docByName });
   }
+
+  const suiteCases = cases.map(toSuiteCase);
 
   const filter = { projectId, kind: "regression" };
   if (companyId) filter.companyId = companyId;
@@ -133,14 +197,14 @@ async function generateRegressionSuite({ projectId, userId, companyId }) {
       $set: {
         name: `${project.projectName} regression`,
         description:
-          "Auto-generated regression suite — compares each tool's response against its verified baseline.",
+          "Auto-generated regression suite — locks in each tool's current behavior.",
         serverName: config?.name || project.projectName,
         serverUrl: mcpProjects.publicServerUrl(config?.url),
         transport: config?.transport || "http",
         projectId,
         kind: "regression",
-        cases,
-        generatedBy: { provider: "none", model: null },
+        cases: suiteCases,
+        generatedBy: { provider: usedProvider, model: usedModel },
         userId,
         companyId,
       },
@@ -148,10 +212,146 @@ async function generateRegressionSuite({ projectId, userId, companyId }) {
     { new: true, upsert: true }
   );
 
-  return { suite, skipped };
+  return { suite, generatedBy: { provider: usedProvider, model: usedModel } };
 }
 
-async function runRegressionSuite({ suiteId, userId, companyId }) {
+// ---------- Refine one case via natural-language instruction ----------
+
+async function refineRegressionCase({
+  suiteId,
+  caseId,
+  instruction,
+  userId,
+  companyId,
+  provider = "anthropic",
+  model,
+  anthropicClient = null,
+}) {
+  if (!instruction || !instruction.trim()) {
+    throw new Error("An instruction is required to refine a case.");
+  }
+  const filter = { _id: suiteId, kind: "regression" };
+  if (companyId) filter.companyId = companyId;
+  const suite = await McpSuite.findOne(filter);
+  if (!suite) throw new Error("Regression suite not found");
+
+  const current = suite.cases.id(caseId);
+  if (!current) throw new Error("Case not found in suite");
+
+  // Give the model the tool's schema so refined args stay valid.
+  const toolQuery = { projectId: suite.projectId, name: current.expectedTool };
+  if (companyId) toolQuery.companyId = companyId;
+  const tool = await McpTool.findOne(toolQuery);
+
+  const payload = {
+    tool: tool
+      ? {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }
+      : { name: current.expectedTool },
+    currentCase: {
+      name: current.name,
+      toolName: current.expectedTool,
+      args: current.expectedArgs || {},
+      covers: current.covers || "",
+      assertions: current.assertions || [],
+    },
+    instruction,
+  };
+
+  const { parsed } = await callJsonLLM({
+    provider,
+    model,
+    system: REGRESSION_REFINE_SYSTEM,
+    user: JSON.stringify(payload, null, 2),
+    maxTokens: 2048,
+    anthropicClient,
+  });
+
+  if (!parsed || !parsed.toolName) {
+    throw new Error(
+      "Could not refine the case — the model returned no usable output."
+    );
+  }
+
+  // Never let a refine switch tools.
+  current.name = parsed.name || current.name;
+  current.expectedArgs = parsed.args || current.expectedArgs;
+  current.covers = parsed.covers || current.covers;
+  current.assertions = Array.isArray(parsed.assertions)
+    ? parsed.assertions
+    : current.assertions;
+
+  await suite.save();
+  return { suite, case: current };
+}
+
+// ---------- Run ----------
+
+async function judgeRegressionCase({
+  suiteCase,
+  tool,
+  execution,
+  provider,
+  model,
+  anthropicClient,
+}) {
+  // No assertions to judge → success == tool didn't error.
+  if (!suiteCase.assertions || suiteCase.assertions.length === 0) {
+    const ok = execution.status === "ok" && !execution.error;
+    return {
+      verdict: ok ? "pass" : "fail",
+      assertionResults: [],
+      reasoning: ok
+        ? "No assertions; tool responded successfully."
+        : "No assertions; tool errored.",
+    };
+  }
+  try {
+    const { parsed } = await callJsonLLM({
+      provider,
+      model,
+      system: REGRESSION_JUDGE_SYSTEM,
+      user: JSON.stringify(
+        {
+          covers: suiteCase.covers,
+          assertions: suiteCase.assertions,
+          tool: tool
+            ? { name: tool.name, inputSchema: tool.inputSchema }
+            : { name: suiteCase.expectedTool },
+          execution,
+        },
+        null,
+        2
+      ),
+      maxTokens: 2048,
+      anthropicClient,
+    });
+    if (parsed?.verdict) return parsed;
+  } catch (_) {
+    /* fall through */
+  }
+  // Fallback: if the tool errored, fail; otherwise warn (can't verify).
+  const errored = execution.status !== "ok" || !!execution.error;
+  return {
+    verdict: errored ? "fail" : "warn",
+    assertionResults: [],
+    reasoning: errored
+      ? "Judge unavailable and the tool errored."
+      : "Judge unavailable; could not verify assertions.",
+  };
+}
+
+async function runRegressionSuite({
+  suiteId,
+  userId,
+  companyId,
+  provider = "anthropic",
+  model,
+  anthropicClient = null,
+}) {
   const filter = { _id: suiteId };
   if (companyId) filter.companyId = companyId;
   const suite = await McpSuite.findOne(filter);
@@ -166,6 +366,11 @@ async function runRegressionSuite({ suiteId, userId, companyId }) {
     projectId: suite.projectId,
     companyId,
   });
+
+  const toolsQuery = { projectId: suite.projectId };
+  if (companyId) toolsQuery.companyId = companyId;
+  const tools = await McpTool.find(toolsQuery);
+  const toolByName = new Map(tools.map((t) => [t.name, t]));
 
   const results = [];
 
@@ -183,45 +388,42 @@ async function runRegressionSuite({ suiteId, userId, companyId }) {
       companyId,
     });
     const latencyMs = Date.now() - started;
-    const actualResponse = run.toolResponse
+    const parsedResponse = run.toolResponse
       ? mcpDocs.extractToolResponseJson(run.toolResponse)
       : null;
+    const execution = {
+      status: run.status,
+      error: run.error || null,
+      response: parsedResponse,
+    };
 
-    if (run.status !== "ok" || run.error) {
-      results.push({
-        caseName: c.name,
-        toolName,
-        args,
-        status: "broken",
-        latencyMs,
-        error: run.error || "Tool invocation failed",
-        expectedResponse: c.expectedResponse,
-        actualResponse,
-        diffs: [],
-        checkedFieldCount: 0,
-        changedFieldCount: 0,
-      });
-      continue;
-    }
-
-    const { diffs, expectedFieldCount } = diffResponse(
-      c.expectedResponse,
-      actualResponse
-    );
-    const regressionDiffs = diffs.filter((d) => d.kind !== "added");
+    const judged = await judgeRegressionCase({
+      suiteCase: c,
+      tool: toolByName.get(toolName),
+      execution,
+      provider,
+      model,
+      anthropicClient,
+    });
 
     results.push({
       caseName: c.name,
       toolName,
       args,
-      status: regressionDiffs.length ? "regression" : "ok",
+      covers: c.covers || null,
+      assertions: c.assertions || [],
+      status:
+        judged.verdict === "pass"
+          ? "ok"
+          : judged.verdict === "warn"
+            ? "warn"
+            : "regression",
+      verdict: judged.verdict,
+      assertionResults: judged.assertionResults || [],
+      reasoning: judged.reasoning || null,
       latencyMs,
-      error: null,
-      expectedResponse: c.expectedResponse,
-      actualResponse,
-      diffs,
-      checkedFieldCount: expectedFieldCount,
-      changedFieldCount: regressionDiffs.length,
+      error: run.error || null,
+      response: parsedResponse,
     });
   }
 
@@ -229,7 +431,7 @@ async function runRegressionSuite({ suiteId, userId, companyId }) {
     total: results.length,
     ok: results.filter((r) => r.status === "ok").length,
     regression: results.filter((r) => r.status === "regression").length,
-    broken: results.filter((r) => r.status === "broken").length,
+    warn: results.filter((r) => r.status === "warn").length,
   };
 
   return {
@@ -242,7 +444,6 @@ async function runRegressionSuite({ suiteId, userId, companyId }) {
 
 module.exports = {
   generateRegressionSuite,
+  refineRegressionCase,
   runRegressionSuite,
-  diffResponse,
-  flattenValues,
 };

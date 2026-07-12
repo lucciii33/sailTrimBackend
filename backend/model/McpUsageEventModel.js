@@ -4,7 +4,14 @@ const mcpUsageEventSchema = new mongoose.Schema(
   {
     action: {
       type: String,
-      enum: ["docs_generate", "qa_run", "smoke_generate", "smoke_run"],
+      enum: [
+        "docs_generate",
+        "qa_run",
+        "smoke_generate",
+        "smoke_run",
+        "regression_generate",
+        "regression_run",
+      ],
       required: true,
       index: true,
     },

@@ -128,7 +128,7 @@ function assertAuthConfigured(runtimeAuth) {
   if (Object.keys(headers).length === 0) {
     const err = new Error(
       `Auth type "${runtimeAuth.type}" is configured but credentials are empty. ` +
-      `Open "Target & auth", enter your token or OAuth2 variables (token_url, client_id, client_secret), and save.`
+        `Open "Target & auth", enter your token or OAuth2 variables (token_url, client_id, client_secret), and save.`,
     );
     err.statusCode = 400;
     throw err;
@@ -208,7 +208,9 @@ async function fetchOAuth2Token(variables) {
     throw err;
   }
 
-  console.log(`[QA] OAuth2 token fetched (expires_in: ${resp.data.expires_in}s)`);
+  console.log(
+    `[QA] OAuth2 token fetched (expires_in: ${resp.data.expires_in}s)`,
+  );
   return resp.data.access_token;
 }
 
@@ -365,7 +367,10 @@ Rules:
 - COMPACTNESS (critical): keep every value SHORT. Never write a string longer than ~60 chars or an array longer than 3 items. For oversized/max_length use the markers above — the output must stay small or it gets truncated.
 - Return ONLY the JSON, no prose.`;
 
-async function generateTestCases(doc, { anthropicClient = null, variables = {}, context = {} } = {}) {
+async function generateTestCases(
+  doc,
+  { anthropicClient = null, variables = {}, context = {} } = {},
+) {
   const spec = {
     method: doc.method,
     path: doc.path,
@@ -387,6 +392,10 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
   // invented ones, making happy-path tests accurate.
   const contextNote = buildContextNote(context);
 
+  // User-provided custom body: use it verbatim as the happy_path base instead
+  // of building one from the schema. Absent → old schema-driven behavior.
+  const bodyNote = buildExampleBodyNote(doc.exampleBody);
+
   const client = anthropicClient || getAnthropic();
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
@@ -397,7 +406,7 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}${bodyNote}`,
       },
     ],
   });
@@ -459,7 +468,7 @@ async function executeTestCase({ testCase, doc, config, variables = {} }) {
   if (body != null && body !== "__QA_OVERSIZED__") {
     const raw = typeof body === "string" ? body : JSON.stringify(body);
     const filled = fillTemplate(raw, variables);
-    body = typeof body === "string" ? filled : safeParseJson(filled) ?? body;
+    body = typeof body === "string" ? filled : (safeParseJson(filled) ?? body);
   }
   const sendBody = body != null ? expandMarkers(body) : null;
 
@@ -629,7 +638,13 @@ async function runDiscoveryGets(projectId, companyId, config, variables) {
     gets.map(async (doc) => {
       try {
         const result = await executeTestCase({
-          testCase: { method: "GET", path: doc.path, headers: {}, body: null, query: {} },
+          testCase: {
+            method: "GET",
+            path: doc.path,
+            headers: {},
+            body: null,
+            query: {},
+          },
           doc,
           config,
           variables,
@@ -643,7 +658,9 @@ async function runDiscoveryGets(projectId, companyId, config, variables) {
     }),
   );
   if (Object.keys(context).length > 0) {
-    console.log(`[QA] Discovery: real data from ${Object.keys(context).length} GET(s): ${Object.keys(context).join(", ")}`);
+    console.log(
+      `[QA] Discovery: real data from ${Object.keys(context).length} GET(s): ${Object.keys(context).join(", ")}`,
+    );
   }
   return context;
 }
@@ -656,7 +673,11 @@ function buildContextNote(context) {
     "REAL DATA FROM DISCOVERY GETs — use these IDs/values in happy path and realistic test cases (don't invent IDs when a real one is available here):",
   ];
   for (const [path, body] of Object.entries(context)) {
-    const arr = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : null;
+    const arr = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.data)
+        ? body.data
+        : null;
     if (arr && arr.length > 0) {
       const sample = JSON.stringify(arr.slice(0, 3)).slice(0, 600);
       lines.push(`${path} → ${sample}`);
@@ -665,6 +686,22 @@ function buildContextNote(context) {
     }
   }
   return "\n\n" + lines.join("\n");
+}
+
+// A user-supplied custom body (Mongoose Mixed) becomes the mandatory base for
+// the happy_path case. sad/boundary/security cases still mutate off it.
+function buildExampleBodyNote(exampleBody) {
+  if (exampleBody == null) return "";
+  const isEmptyObj =
+    typeof exampleBody === "object" &&
+    !Array.isArray(exampleBody) &&
+    Object.keys(exampleBody).length === 0;
+  if (isEmptyObj) return "";
+  const json = JSON.stringify(exampleBody, null, 2);
+  return `\n\nCUSTOM REQUEST BODY (user-provided — AUTHORITATIVE):
+Use this EXACT object as the body for the happy_path case(s), keeping its {{placeholders}} intact:
+${json}
+For sad/boundary/security cases, start from this body and mutate only the field under test.`;
 }
 
 // ---------- Orchestrator ----------
@@ -902,19 +939,40 @@ REAL DATA: use IDs from the discovery section instead of inventing them. Invent 
 COMPACT: never write strings > 60 chars or arrays > 3 items. Use __QA_LONG_STRING__ and __QA_OVERSIZED__ markers.
 Return ONLY the JSON, no prose.`;
 
-async function generateSuiteTestCases(docs, { anthropicClient = null, variables = {}, context = {} } = {}) {
-  const specs = docs.map((doc) => ({
-    method: doc.method,
-    path: doc.path,
-    description: doc.description,
-    requestBody: doc.requestBody,
-    queryParams: doc.queryParams,
-    responses: doc.responses,
-  }));
+async function generateSuiteTestCases(
+  docs,
+  { anthropicClient = null, variables = {}, context = {} } = {},
+) {
+  const specs = docs.map((doc) => {
+    const spec = {
+      method: doc.method,
+      path: doc.path,
+      description: doc.description,
+      requestBody: doc.requestBody,
+      queryParams: doc.queryParams,
+      responses: doc.responses,
+    };
+    // Custom body override (if the user set one) — authoritative base for this
+    // endpoint's happy-path body inside the chain.
+    const eb = doc.exampleBody;
+    const hasBody =
+      eb != null &&
+      !(
+        typeof eb === "object" &&
+        !Array.isArray(eb) &&
+        Object.keys(eb).length === 0
+      );
+    if (hasBody) spec.customBody = eb;
+    return spec;
+  });
 
   const varKeys = Object.keys(variables || {});
   const envNote = varKeys.length
     ? `\n\nAVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}\nUse {{key}} placeholders where path params or fields match.`
+    : "";
+  const hasCustomBody = specs.some((s) => s.customBody);
+  const customBodyNote = hasCustomBody
+    ? `\n\nCUSTOM BODIES: Some endpoints include a "customBody" field — it is user-provided and AUTHORITATIVE. Use it EXACTLY as the body for that endpoint's happy-path/mutation step (keep {{placeholders}} intact); mutate off it only for sad/security cases.`
     : "";
 
   const contextNote = buildContextNote(context);
@@ -938,17 +996,27 @@ async function generateSuiteTestCases(docs, { anthropicClient = null, variables 
   if (cases.length === 0) {
     cases = salvageCases(raw);
     if (cases.length === 0) {
-      console.warn(`generateSuiteTestCases: 0 cases (stop=${response.stop_reason}). Raw head: ${raw.slice(0, 200)}`);
+      console.warn(
+        `generateSuiteTestCases: 0 cases (stop=${response.stop_reason}). Raw head: ${raw.slice(0, 200)}`,
+      );
     }
   }
 
   // Sort by stepIndex, then re-number gaplessly so execution order is guaranteed.
   cases.sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0));
-  cases = cases.map((c, i) => ({ ...c, stepIndex: i, method: c.targetMethod || c.method, path: c.targetPath || c.path }));
+  cases = cases.map((c, i) => ({
+    ...c,
+    stepIndex: i,
+    method: c.targetMethod || c.method,
+    path: c.targetPath || c.path,
+  }));
 
   return {
     cases,
-    usage: { inputTokens: response.usage?.input_tokens || 0, outputTokens: response.usage?.output_tokens || 0 },
+    usage: {
+      inputTokens: response.usage?.input_tokens || 0,
+      outputTokens: response.usage?.output_tokens || 0,
+    },
   };
 }
 
@@ -962,7 +1030,8 @@ function extractResponseVars(body, stepIndex) {
   function flatten(obj, prefix) {
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
     for (const [k, v] of Object.entries(obj)) {
-      if (typeof v === "string" || typeof v === "number") vars[`${prefix}_${k}`] = String(v);
+      if (typeof v === "string" || typeof v === "number")
+        vars[`${prefix}_${k}`] = String(v);
     }
   }
 
@@ -981,10 +1050,18 @@ function extractResponseVars(body, stepIndex) {
 
 // ---------- Suite orchestrator ----------
 
-async function findBugsForSection({ projectId, section, userId, companyId, anthropicClient = null }) {
+async function findBugsForSection({
+  projectId,
+  section,
+  userId,
+  companyId,
+  anthropicClient = null,
+}) {
   const project = await ApiProject.findOne({ _id: projectId, companyId });
   if (!project || !project.baseUrl) {
-    const err = new Error("No base URL set for this project. Configure it first.");
+    const err = new Error(
+      "No base URL set for this project. Configure it first.",
+    );
     err.statusCode = 400;
     throw err;
   }
@@ -999,12 +1076,21 @@ async function findBugsForSection({ projectId, section, userId, companyId, anthr
   const variables = buildVarMap(project.variables);
   const runtimeAuth = await resolveRuntimeAuth(project.auth, variables);
   assertAuthConfigured(runtimeAuth);
-  const config = { baseUrl: project.baseUrl, auth: runtimeAuth, defaultHeaders: null };
+  const config = {
+    baseUrl: project.baseUrl,
+    auth: runtimeAuth,
+    defaultHeaders: null,
+  };
 
   const runId = crypto.randomUUID();
 
   // 1) Discovery — run all list-GETs in the section to seed the context store.
-  const context = await runDiscoveryGets(projectId, companyId, config, variables);
+  const context = await runDiscoveryGets(
+    projectId,
+    companyId,
+    config,
+    variables,
+  );
 
   // 2) Generate the suite — Claude sees all endpoints at once.
   const { cases, usage: genUsage } = await generateSuiteTestCases(docs, {
@@ -1025,15 +1111,24 @@ async function findBugsForSection({ projectId, section, userId, companyId, anthr
     const matchDoc =
       docs.find(
         (d) =>
-          d.method.toUpperCase() === (testCase.targetMethod || "").toUpperCase() &&
+          d.method.toUpperCase() ===
+            (testCase.targetMethod || "").toUpperCase() &&
           d.path === testCase.targetPath,
       ) || docs[0];
 
-    const result = await executeTestCase({ testCase, doc: matchDoc, config, variables: runtimeVars });
+    const result = await executeTestCase({
+      testCase,
+      doc: matchDoc,
+      config,
+      variables: runtimeVars,
+    });
 
     // Accumulate vars from successful responses for the next steps.
     if (result.response.status >= 200 && result.response.status < 300) {
-      Object.assign(runtimeVars, extractResponseVars(result.response.body, testCase.stepIndex));
+      Object.assign(
+        runtimeVars,
+        extractResponseVars(result.response.body, testCase.stepIndex),
+      );
     }
 
     executions.push({ testCase, result });
@@ -1049,7 +1144,11 @@ async function findBugsForSection({ projectId, section, userId, companyId, anthr
     responses: [],
   };
 
-  const { bugs, usage: analyzeUsage } = await analyzeForBugs({ doc: sectionDoc, executions, anthropicClient });
+  const { bugs, usage: analyzeUsage } = await analyzeForBugs({
+    doc: sectionDoc,
+    executions,
+    anthropicClient,
+  });
 
   // 5) Map bugs onto executions.
   const bugByName = new Map(bugs.map((b) => [b.testCaseName, b]));

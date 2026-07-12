@@ -4,6 +4,7 @@ const mcpDocs = require("../services/mcpDocService.js");
 const mcpQa = require("../services/mcpQaService.js");
 const mcpProjects = require("../services/mcpProjectService.js");
 const mcpSmoke = require("../services/mcpSmokeService.js");
+const mcpRegression = require("../services/mcpRegressionService.js");
 const mcpProfiler = require("../services/mcpProfilerService.js");
 const mcpSecurity = require("../services/mcpSecurityService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
@@ -22,6 +23,8 @@ const FREE_LIMITS = {
   qa_run: 5,
   smoke_generate: 3,
   smoke_run: 5,
+  regression_generate: 3,
+  regression_run: 5,
   profile_run: 3,
   security_scan: 3,
 };
@@ -494,6 +497,116 @@ const getSmoke = asyncHandler(async (req, res) => {
   res.json({ suite: suite || null });
 });
 
+/** POST /api/mcp-lab/projects/:id/smoke/cases/:caseId/refine */
+const refineSmokeCase = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const { instruction, provider, model } = req.body || {};
+  if (!instruction || !instruction.trim()) {
+    return res.status(400).json({ message: "instruction is required" });
+  }
+  const suite = await McpSuite.findOne({
+    projectId: req.params.id,
+    kind: "smoke",
+    companyId: req.user.companyId,
+  });
+  if (!suite) {
+    return res.status(404).json({ message: "No smoke suite for this project." });
+  }
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const out = await mcpSmoke.refineSmokeCase({
+    suiteId: suite._id,
+    caseId: req.params.caseId,
+    instruction,
+    provider: provider || "anthropic",
+    model,
+    anthropicClient,
+    ...ctx(req),
+  });
+  res.json({ suite: out.suite, case: out.case });
+});
+
+/** GET /api/mcp-lab/projects/:id/regression */
+const getRegression = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const suite = await McpSuite.findOne({
+    projectId: req.params.id,
+    kind: "regression",
+    companyId: req.user.companyId,
+  });
+  res.json({ suite: suite || null });
+});
+
+/** POST /api/mcp-lab/projects/:id/regression/generate */
+const generateRegression = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const { provider, model } = req.body || {};
+  if (!(await requireMonthlyLimit(req, res, "regression_generate"))) return;
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const out = await mcpRegression.generateRegressionSuite({
+    projectId: req.params.id,
+    provider: provider || "anthropic",
+    model,
+    anthropicClient,
+    ...ctx(req),
+  });
+  await recordUsage(req, "regression_generate", req.params.id);
+  res.json(out);
+});
+
+/** POST /api/mcp-lab/projects/:id/regression/run */
+const runRegression = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  if (!(await requireMonthlyLimit(req, res, "regression_run"))) return;
+  const suite = await McpSuite.findOne({
+    projectId: req.params.id,
+    kind: "regression",
+    companyId: req.user.companyId,
+  });
+  if (!suite) {
+    return res.status(404).json({
+      message: "No regression suite for this project. Generate one first.",
+    });
+  }
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const out = await mcpRegression.runRegressionSuite({
+    suiteId: suite._id,
+    anthropicClient,
+    ...ctx(req),
+  });
+  await recordUsage(req, "regression_run", req.params.id);
+  res.json(out);
+});
+
+/** POST /api/mcp-lab/projects/:id/regression/cases/:caseId/refine */
+const refineRegressionCase = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const { instruction, provider, model } = req.body || {};
+  if (!instruction || !instruction.trim()) {
+    return res.status(400).json({ message: "instruction is required" });
+  }
+  const suite = await McpSuite.findOne({
+    projectId: req.params.id,
+    kind: "regression",
+    companyId: req.user.companyId,
+  });
+  if (!suite) {
+    return res
+      .status(404)
+      .json({ message: "No regression suite for this project." });
+  }
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const out = await mcpRegression.refineRegressionCase({
+    suiteId: suite._id,
+    caseId: req.params.caseId,
+    instruction,
+    provider: provider || "anthropic",
+    model,
+    anthropicClient,
+    ...ctx(req),
+  });
+  res.json({ suite: out.suite, case: out.case });
+});
+
 /** GET /api/mcp-lab/bugs */
 const listBugs = asyncHandler(async (req, res) => {
   if (!requireCompany(req, res)) return;
@@ -827,6 +940,11 @@ module.exports = {
   generateSmoke,
   runSmoke,
   getSmoke,
+  refineSmokeCase,
+  getRegression,
+  generateRegression,
+  runRegression,
+  refineRegressionCase,
   listBugs,
   updateBugStatus,
   deleteBug,

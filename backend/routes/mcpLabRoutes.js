@@ -41,6 +41,21 @@ router.delete("/qa/runs/:id", protect, c.deleteQaRun);
 router.get("/projects/:id/smoke", protect, c.getSmoke);
 router.post("/projects/:id/smoke/generate", protect, c.generateSmoke);
 router.post("/projects/:id/smoke/run", protect, c.runSmoke);
+router.post(
+  "/projects/:id/smoke/cases/:caseId/refine",
+  protect,
+  c.refineSmokeCase
+);
+
+// --- Regression suite (per project) ---
+router.get("/projects/:id/regression", protect, c.getRegression);
+router.post("/projects/:id/regression/generate", protect, c.generateRegression);
+router.post("/projects/:id/regression/run", protect, c.runRegression);
+router.post(
+  "/projects/:id/regression/cases/:caseId/refine",
+  protect,
+  c.refineRegressionCase
+);
 
 // --- MCP bugs ---
 router.get("/bugs", protect, c.listBugs);

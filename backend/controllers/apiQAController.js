@@ -266,6 +266,30 @@ async function getProjectDocs(req, res) {
   res.json({ project: serializeProject(project), docs });
 }
 
+// Set (or clear) a custom example body on one endpoint. The QA generator uses
+// it as the base for the happy_path case; send null/{} to clear it.
+async function updateDocBody(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { exampleBody } = req.body;
+  const doc = await Doc.findOne({
+    _id: req.params.docId,
+    companyId: req.user.companyId,
+  });
+  if (!doc) return res.status(404).json({ message: "Endpoint not found" });
+
+  // Treat null / empty object as "no override" so the generator falls back to
+  // building the body from the schema.
+  const isEmpty =
+    exampleBody == null ||
+    (typeof exampleBody === "object" &&
+      !Array.isArray(exampleBody) &&
+      Object.keys(exampleBody).length === 0);
+  doc.exampleBody = isEmpty ? undefined : exampleBody;
+  doc.updatedAt = new Date();
+  await doc.save();
+  res.json(doc);
+}
+
 // Set baseUrl + auth + environment variables on a project. Secrets are
 // encrypted at rest.
 async function setProjectAuth(req, res) {
@@ -522,6 +546,7 @@ module.exports = {
   syncGithubSpec,
   listProjects,
   getProjectDocs,
+  updateDocBody,
   deleteProject,
   setProjectAuth,
   getProjectSectionCollection,

@@ -10,6 +10,7 @@ const {
   syncGithubSpec,
   listProjects,
   getProjectDocs,
+  updateDocBody,
   deleteProject,
   setProjectAuth,
   getProjectSectionCollection,
@@ -36,6 +37,7 @@ router.post("/projects/github/import", protect, importGithubSpec);
 router.post("/projects/:id/sync", protect, syncGithubSpec);
 router.get("/projects", protect, listProjects);
 router.get("/projects/:id/docs", protect, getProjectDocs);
+router.put("/docs/:docId/body", protect, updateDocBody);
 router.delete("/projects/:id", protect, deleteProject);
 router.put("/projects/:id/auth", protect, setProjectAuth);
 router.get("/projects/:id/section-collection", protect, getProjectSectionCollection);
