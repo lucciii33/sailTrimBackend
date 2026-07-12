@@ -31,7 +31,11 @@ function publicServerUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
     for (const key of [...parsed.searchParams.keys()]) {
-      if (/api[-_]?key|access[-_]?token|token|secret|password|bearer|auth/i.test(key)) {
+      if (
+        /api[-_]?key|access[-_]?token|token|secret|password|bearer|auth/i.test(
+          key,
+        )
+      ) {
         parsed.searchParams.set(key, "***encrypted***");
       }
     }
@@ -49,7 +53,9 @@ let _openai = null;
 let _anthropic = null;
 function getOpenAI() {
   if (!_openai) {
-    _openai = new OpenAI({ apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY });
+    _openai = new OpenAI({
+      apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY,
+    });
   }
   return _openai;
 }
@@ -79,8 +85,7 @@ function buildTransport(config = {}) {
     if (!config.url) throw new Error("MCP http transport requires `url`");
     const headers = buildHttpHeaders(config);
     const parsedUrl = new URL(config.url);
-    console.log("[MCP DEBUG] Connecting to:", parsedUrl.toString());
-    console.log("[MCP DEBUG] Headers being sent:", Object.keys(headers).length ? headers : "(none)");
+
     return new StreamableHTTPClientTransport(parsedUrl, {
       requestInit: { headers },
     });
@@ -99,7 +104,11 @@ function buildTransport(config = {}) {
 
 function buildHttpHeaders(config = {}) {
   const headers = {};
-  if (config.headers && typeof config.headers === "object" && !Array.isArray(config.headers)) {
+  if (
+    config.headers &&
+    typeof config.headers === "object" &&
+    !Array.isArray(config.headers)
+  ) {
     for (const [key, value] of Object.entries(config.headers)) {
       if (value !== undefined && value !== null) headers[key] = String(value);
     }
@@ -123,7 +132,7 @@ function buildHttpHeaders(config = {}) {
 async function withClient(config, fn) {
   const client = new Client(
     { name: "mcp-lab", version: "0.1.0" },
-    { capabilities: {} }
+    { capabilities: {} },
   );
   const transport = buildTransport(config);
   await client.connect(transport);
@@ -175,7 +184,15 @@ async function listPrompts(config) {
 // Direct tool invocation (manual playground)
 // -------------------------------------------------------------
 
-async function invokeTool({ config, toolName, args, saveTrace = true, tags = [], userId, companyId }) {
+async function invokeTool({
+  config,
+  toolName,
+  args,
+  saveTrace = true,
+  tags = [],
+  userId,
+  companyId,
+}) {
   const started = Date.now();
   let toolResponse = null;
   let toolSchema = null;
@@ -186,7 +203,8 @@ async function invokeTool({ config, toolName, args, saveTrace = true, tags = [],
     toolResponse = await withClient(config, async (client) => {
       const { tools } = await client.listTools();
       toolSchema = (tools || []).find((t) => t.name === toolName) || null;
-      if (!toolSchema) throw new Error(`Tool "${toolName}" not found on server`);
+      if (!toolSchema)
+        throw new Error(`Tool "${toolName}" not found on server`);
       return client.callTool({ name: toolName, arguments: args || {} });
     });
   } catch (err) {
@@ -216,7 +234,14 @@ async function invokeTool({ config, toolName, args, saveTrace = true, tags = [],
     });
   }
 
-  return { trace, toolResponse, toolSchema, latencyMs, status, error: errorMsg };
+  return {
+    trace,
+    toolResponse,
+    toolSchema,
+    latencyMs,
+    status,
+    error: errorMsg,
+  };
 }
 
 // -------------------------------------------------------------
@@ -353,7 +378,9 @@ async function runPromptAgainstMcp({
         status,
         error: errorMsg,
         provider,
-        model: model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL),
+        model:
+          model ||
+          (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL),
         tags,
         userId,
         companyId,
@@ -387,7 +414,12 @@ Score the interaction from 0-10 and return STRICT JSON with this shape:
 }
 Focus on: correctness, whether the tool choice made sense, whether the response actually satisfies the prompt, schema ambiguity, and hallucination risk.`;
 
-function buildJudgeUserMessage({ userPrompt, toolSchema, toolArgs, toolResponse }) {
+function buildJudgeUserMessage({
+  userPrompt,
+  toolSchema,
+  toolArgs,
+  toolResponse,
+}) {
   return `USER PROMPT:
 ${userPrompt || "(direct tool call, no prompt)"}
 
@@ -419,7 +451,13 @@ function safeParseJson(txt) {
   }
 }
 
-async function judgeTrace({ traceId, provider = "openai", model, companyId, anthropicClient = null }) {
+async function judgeTrace({
+  traceId,
+  provider = "openai",
+  model,
+  companyId,
+  anthropicClient = null,
+}) {
   const filter = { _id: traceId };
   if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
@@ -435,7 +473,8 @@ async function judgeTrace({ traceId, provider = "openai", model, companyId, anth
   let verdict = null;
   let rawText = null;
   const chosenModel =
-    model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
+    model ||
+    (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
 
   if (provider === "openai") {
     const completion = await getOpenAI().chat.completions.create({
@@ -506,12 +545,19 @@ Return STRICT JSON with shape:
 Cover happy paths, ambiguous prompts (confusion between similar tools),
 invalid/missing arguments, and adversarial inputs.`;
 
-async function generateTestCases({ config, provider = "openai", model, count = 10, anthropicClient = null }) {
+async function generateTestCases({
+  config,
+  provider = "openai",
+  model,
+  count = 10,
+  anthropicClient = null,
+}) {
   const tools = await listTools(config);
   const userMsg = `Tools:\n${JSON.stringify(tools, null, 2)}\n\nGenerate ${count} test cases.`;
 
   const chosenModel =
-    model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
+    model ||
+    (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
 
   if (provider === "openai") {
     const completion = await getOpenAI().chat.completions.create({
@@ -522,7 +568,9 @@ async function generateTestCases({ config, provider = "openai", model, count = 1
         { role: "user", content: userMsg },
       ],
     });
-    return safeParseJson(completion.choices?.[0]?.message?.content) || { cases: [] };
+    return (
+      safeParseJson(completion.choices?.[0]?.message?.content) || { cases: [] }
+    );
   }
   if (provider === "anthropic") {
     const client = anthropicClient || getAnthropic();
@@ -551,7 +599,15 @@ Return STRICT JSON:
   "missingInApi": string[]
 }`;
 
-async function compareWithApi({ traceId, apiResponse, apiUrl, provider = "openai", model, companyId, anthropicClient = null }) {
+async function compareWithApi({
+  traceId,
+  apiResponse,
+  apiUrl,
+  provider = "openai",
+  model,
+  companyId,
+  anthropicClient = null,
+}) {
   const filter = { _id: traceId };
   if (companyId) filter.companyId = companyId;
   const trace = await McpTrace.findOne(filter);
@@ -564,7 +620,8 @@ API RESPONSE:
 ${JSON.stringify(apiResponse, null, 2)}`;
 
   const chosenModel =
-    model || (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
+    model ||
+    (provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CLAUDE_MODEL);
 
   let parsed = null;
   if (provider === "openai") {
@@ -585,7 +642,9 @@ ${JSON.stringify(apiResponse, null, 2)}`;
       system: COMPARE_SYSTEM,
       messages: [{ role: "user", content: userMsg }],
     });
-    parsed = safeParseJson((msg.content || []).map((c) => c.text || "").join("\n"));
+    parsed = safeParseJson(
+      (msg.content || []).map((c) => c.text || "").join("\n"),
+    );
   }
 
   trace.comparison = {
