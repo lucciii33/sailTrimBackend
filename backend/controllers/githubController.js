@@ -23,6 +23,8 @@ const {
   CLAUDE_MODEL,
 } = require("../services/docService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
+const { renderGithubResultPage } = require("../views/githubResultPage");
+const PendingInstall = require("../model/PendingInstall");
 
 const CONCURRENCY = 2;
 
@@ -91,10 +93,57 @@ async function fetchInstallationRepos(octokit) {
 }
 
 async function githubCallback(req, res) {
-  const { installation_id, state } = req.query;
+  const { installation_id, state, setup_action } = req.query;
+  const frontendUrl = process.env.FRONTEND_URL;
+
+  // GitHub sends the user here with setup_action=request (and NO
+  // installation_id) when they tried to install on an org where they're not
+  // an admin: instead of installing, GitHub sends an approval request to the
+  // org owner and the install stays pending. This is a normal, expected flow
+  // for org installs — show a friendly "pending approval" page, not an error.
+  if (!installation_id && setup_action === "request") {
+    // Remember who asked, so the later approval webhook (which carries no
+    // `state`) can link the installation back to this user. See PendingInstall.
+    if (state) {
+      try {
+        const user = await User.findById(state).select("companyId");
+        await PendingInstall.create({
+          userId: state,
+          companyId: user?.companyId || undefined,
+        });
+      } catch (err) {
+        console.error("Failed to record pending install:", err.message);
+      }
+    }
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        renderGithubResultPage({
+          variant: "pending",
+          title: "Request sent",
+          message:
+            "You requested to install OliviaTools on an organization where you're not an admin. GitHub has sent an approval request to the organization owner. Once they approve it, your connection will activate automatically.",
+          ctaHref: frontendUrl || undefined,
+          ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+        })
+      );
+  }
 
   if (!installation_id) {
-    return res.status(400).json({ message: "Missing installation_id" });
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        renderGithubResultPage({
+          variant: "error",
+          title: "We couldn't complete the installation",
+          message:
+            "GitHub didn't send an installation identifier. Please try installing the app again from OliviaTools. If the problem persists, contact us.",
+          ctaHref: frontendUrl || undefined,
+          ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+        })
+      );
   }
 
   const installationId = Number(installation_id);

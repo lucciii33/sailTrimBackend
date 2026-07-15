@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const Installation = require("../model/Installation");
+const PendingInstall = require("../model/PendingInstall");
 const {
   getOctokit,
   getPRDiff,
@@ -79,22 +80,54 @@ function verifySignature(body, signature) {
 
 async function handleInstallation(payload) {
   try {
-    const { installation, repositories } = payload;
+    const { installation, repositories, requester } = payload;
 
     const repos = (repositories || []).map((r) => ({
       repoName: r.name,
       repoFullName: r.full_name,
     }));
 
+    // Keep any user link the /callback already set for this install (direct
+    // installs hit the callback with `state` before/around this webhook).
+    const existing = await Installation.findOne({
+      installationId: installation.id,
+    });
+    let userId = existing?.userId || null;
+    let companyId = existing?.companyId || null;
+
+    // Org-approval flow: the install arrives here with no callback `state`,
+    // so nothing above tells us whose it is. Claim the most recent pending
+    // request (recorded when the user asked to install) to link it back to
+    // the customer. TTL on PendingInstall keeps stale ones from being
+    // mis-claimed. Best-effort: if there's no pending record, the install is
+    // still saved (just unlinked) rather than lost.
+    //
+    // Gate on `requester`: GitHub only populates it when this install came
+    // from an admin APPROVING a request. Direct self-installs have it null
+    // and are linked by the /callback instead, so we must NOT let them
+    // consume another user's pending record.
+    if (!userId && requester) {
+      const pending = await PendingInstall.findOne().sort({ createdAt: -1 });
+      if (pending) {
+        userId = pending.userId;
+        companyId = pending.companyId || null;
+        await PendingInstall.deleteOne({ _id: pending._id });
+      }
+    }
+
+    const update = {
+      installationId: installation.id,
+      accountLogin: installation.account.login,
+      accountType: installation.account.type,
+      repos,
+      installedAt: new Date(),
+    };
+    if (userId) update.userId = userId;
+    if (companyId) update.companyId = companyId;
+
     await Installation.findOneAndUpdate(
       { installationId: installation.id },
-      {
-        installationId: installation.id,
-        accountLogin: installation.account.login,
-        accountType: installation.account.type,
-        repos,
-        installedAt: new Date(),
-      },
+      update,
       { upsert: true, new: true }
     );
   } catch (err) {

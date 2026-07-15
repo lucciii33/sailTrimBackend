@@ -147,6 +147,35 @@ async function withClient(config, fn) {
   }
 }
 
+/**
+ * Open a *persistent* MCP connection for load testing. Unlike `withClient`,
+ * this does NOT close after one call — a virtual user connects once, fires many
+ * tool calls in a loop, then closes at the end. This measures real tool latency
+ * under load instead of per-call connection setup/teardown overhead.
+ *
+ * Returns { client, callTool(name, args), close() }.
+ */
+async function openClient(config) {
+  const client = new Client(
+    { name: "mcp-load", version: "0.1.0" },
+    { capabilities: {} },
+  );
+  const transport = buildTransport(config);
+  await client.connect(transport);
+  return {
+    client,
+    callTool: (name, args) =>
+      client.callTool({ name, arguments: args || {} }),
+    close: async () => {
+      try {
+        await client.close();
+      } catch (_) {
+        /* swallow close errors */
+      }
+    },
+  };
+}
+
 // -------------------------------------------------------------
 // Introspection
 // -------------------------------------------------------------
@@ -661,6 +690,7 @@ module.exports = {
   listTools,
   listResources,
   listPrompts,
+  openClient,
   invokeTool,
   runPromptAgainstMcp,
   judgeTrace,

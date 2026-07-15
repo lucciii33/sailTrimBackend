@@ -6,12 +6,14 @@ const mcpProjects = require("../services/mcpProjectService.js");
 const mcpSmoke = require("../services/mcpSmokeService.js");
 const mcpRegression = require("../services/mcpRegressionService.js");
 const mcpProfiler = require("../services/mcpProfilerService.js");
+const mcpLoad = require("../services/mcpLoadService.js");
 const mcpSecurity = require("../services/mcpSecurityService.js");
 const { McpTrace, McpSuite } = require("../model/mcpTraceModel.js");
 const McpDoc = require("../model/McpDocModel.js");
 const McpBug = require("../model/McpBugModel.js");
 const McpQaRun = require("../model/McpQaRunModel.js");
 const McpProfileRun = require("../model/McpProfileRunModel.js");
+const McpLoadRun = require("../model/McpLoadRunModel.js");
 const McpSecurityRun = require("../model/McpSecurityRunModel.js");
 const McpProject = require("../model/McpProjectModel.js");
 const McpUsageEvent = require("../model/McpUsageEventModel.js");
@@ -26,6 +28,7 @@ const FREE_LIMITS = {
   regression_generate: 3,
   regression_run: 5,
   profile_run: 3,
+  load_run: 3,
   security_scan: 3,
 };
 
@@ -864,6 +867,62 @@ const deleteProfileRun = asyncHandler(async (req, res) => {
   res.json({ ok: true });
 });
 
+// ----- Load / stress tester ("k6 for MCP") -----
+
+/** POST /api/mcp-lab/projects/:id/load/run */
+const runLoad = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  if (!(await requireMonthlyLimit(req, res, "load_run"))) return;
+  const { testType, vus, durationSec, stages, tools, thresholds } = req.body || {};
+  const out = await mcpLoad.runLoadTest({
+    projectId: req.params.id,
+    testType,
+    vus,
+    durationSec,
+    stages,
+    tools,
+    thresholds,
+    ...ctx(req),
+  });
+  await recordUsage(req, "load_run", req.params.id);
+  res.json(out);
+});
+
+/** GET /api/mcp-lab/load/runs */
+const listLoadRuns = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const q = { companyId: req.user.companyId };
+  if (req.query.projectId) q.projectId = req.query.projectId;
+  const runs = await McpLoadRun.find(q)
+    .select(
+      "projectId serverName serverUrl transport testType peakVUs totalDurationSec verdict summary createdAt updatedAt"
+    )
+    .sort({ createdAt: -1 });
+  res.json({ runs });
+});
+
+/** GET /api/mcp-lab/load/runs/:id */
+const getLoadRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpLoadRun.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ run });
+});
+
+/** DELETE /api/mcp-lab/load/runs/:id */
+const deleteLoadRun = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const run = await McpLoadRun.findOneAndDelete({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!run) return res.status(404).json({ message: "Not found" });
+  res.json({ ok: true });
+});
+
 // ----- Security scanner -----
 
 /** POST /api/mcp-lab/projects/:id/security/scan */
@@ -961,6 +1020,10 @@ module.exports = {
   listProfileRuns,
   getProfileRun,
   deleteProfileRun,
+  runLoad,
+  listLoadRuns,
+  getLoadRun,
+  deleteLoadRun,
   runSecurityScan,
   listSecurityRuns,
   getSecurityRun,

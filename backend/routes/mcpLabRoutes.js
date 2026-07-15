@@ -73,6 +73,12 @@ router.get("/profile/runs", protect, c.listProfileRuns);
 router.get("/profile/runs/:id", protect, c.getProfileRun);
 router.delete("/profile/runs/:id", protect, c.deleteProfileRun);
 
+// --- Load / stress tester ("k6 for MCP") ---
+router.post("/projects/:id/load/run", protect, c.runLoad);
+router.get("/load/runs", protect, c.listLoadRuns);
+router.get("/load/runs/:id", protect, c.getLoadRun);
+router.delete("/load/runs/:id", protect, c.deleteLoadRun);
+
 // --- Security scanner ---
 router.post("/projects/:id/security/scan", protect, c.runSecurityScan);
 router.get("/security/runs", protect, c.listSecurityRuns);
