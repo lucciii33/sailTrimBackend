@@ -10,14 +10,17 @@ const mongoose = require("mongoose");
  * it belongs to (and would never show in their repo list).
  *
  * When the webhook arrives we claim the most recent pending record to link
- * the installation back to the requesting user. TTL-expires after 1 hour so
- * abandoned/never-approved requests don't linger and get mis-claimed by an
- * unrelated later install.
+ * the installation back to the requesting user. TTL-expires after 30 days:
+ * long enough that an org owner taking their time to approve still links
+ * correctly (GitHub never expires the request itself), but short enough that
+ * a truly abandoned request eventually gets cleaned up.
  */
+const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+
 const pendingInstallSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
-  createdAt: { type: Date, default: Date.now, expires: 3600 },
+  createdAt: { type: Date, default: Date.now, expires: THIRTY_DAYS_SECONDS },
 });
 
 module.exports = mongoose.model("PendingInstall", pendingInstallSchema);
