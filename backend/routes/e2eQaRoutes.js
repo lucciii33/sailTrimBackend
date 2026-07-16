@@ -22,7 +22,15 @@ const {
   improveTest,
   commitTest,
   deleteTest,
+  startClientRecording,
+  ingestClientRecording,
+  finishClientRecording,
 } = require("../controllers/e2eQaController");
+
+// The injected recorder POSTs events as text/plain (CORS-simple, no preflight).
+// This route needs its own text parser since the app's global json parser
+// won't touch text/plain bodies.
+const ingestBodyParser = express.text({ type: "*/*", limit: "256kb" });
 
 // Projects (tied to user + company)
 router.get("/projects", protect, listProjects);
@@ -54,6 +62,21 @@ router.get("/projects/:id/tests", protect, listTests);
 router.get("/tests/:testId", protect, getTest);
 // Feature 2: record the flow with Playwright → saves the spec on the test.
 router.post("/tests/:testId/record", protect, recordTest);
+
+// Cloud recorder (SaaS): the customer records in an embedded Browserbase
+// browser — no install, no changes to their app.
+router.post("/tests/:testId/client-record/start", protect, startClientRecording);
+router.post("/recordings/:recordingId/finish", protect, finishClientRecording);
+// Public ingest — authenticated by the per-session token in the body, not the
+// user cookie (it's called from inside the cloud browser). CORS-open for the
+// text/plain beacon; preflight answered here too.
+router.options("/recordings/ingest", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.status(204).end();
+});
+router.post("/recordings/ingest", ingestBodyParser, ingestClientRecording);
 // Feature 3: read the repo + rewrite the recording senior-quality + self-heal
 // until it passes → saves the green spec + heal log on the test.
 router.post("/tests/:testId/improve", protect, improveTest);

@@ -1,12 +1,16 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 const E2eProject = require("../model/E2eProject");
 const E2eFeature = require("../model/E2eFeature");
 const E2eTest = require("../model/E2eTest");
+const E2eRecordingSession = require("../model/E2eRecordingSession");
 const e2eQaService = require("../services/e2eQaService");
 const e2eHealService = require("../services/e2eHealService");
 const { recordSpec } = require("../services/e2eRecorderService");
+const browserbase = require("../services/e2eBrowserbaseService");
+const { actionsToPlaywrightSpec } = require("../services/e2eActionsToSpec");
 const { resolveOctokit } = require("../services/repoContextService");
 const { commitFileToBranch, getDefaultBranch } = require("../services/githubService");
 const { encrypt, decrypt, maskSecret } = require("../services/secretCrypto");
@@ -20,6 +24,40 @@ function authPathFor(projectId, env) {
   // No env → legacy single-session path (keeps already-captured sessions valid).
   const suffix = env ? `__${String(env).replace(/[^a-z0-9_-]/gi, "_")}` : "";
   return path.join(AUTH_DIR, `${projectId}${suffix}.json`);
+}
+
+function persistStorageState(target, filePath) {
+  const json = fs.readFileSync(filePath, "utf8");
+  if (target.env) {
+    target.env.storageStatePath = filePath;
+    target.env.storageStateEncrypted = encrypt(json);
+  } else {
+    target.project.login.storageStatePath = filePath;
+    target.project.login.storageStateEncrypted = encrypt(json);
+  }
+}
+
+function ensureStorageStateFile(project, target) {
+  const storagePath = target.storageStatePath;
+  if (storagePath && fs.existsSync(storagePath)) return storagePath;
+
+  const encrypted = target.env
+    ? target.env.storageStateEncrypted
+    : project.login?.storageStateEncrypted;
+  if (!encrypted) return "";
+
+  const json = decrypt(encrypted);
+  if (!json) return "";
+
+  const restoredPath = authPathFor(project._id, target.env ? target.name : undefined);
+  fs.writeFileSync(restoredPath, json, "utf8");
+
+  if (target.env) {
+    target.env.storageStatePath = restoredPath;
+  } else {
+    project.login.storageStatePath = restoredPath;
+  }
+  return restoredPath;
 }
 
 // Find a named environment on a project. Returns the subdoc (mutable) or null.
@@ -43,6 +81,7 @@ function resolveTarget(project, envName) {
     };
   }
   return {
+    project,
     env: null,
     name: "",
     baseUrl: project.baseUrl || "",
@@ -201,6 +240,7 @@ async function updateProject(req, res) {
           baseUrl: e.baseUrl ?? old?.baseUrl ?? "",
           loginUrl: e.loginUrl ?? old?.loginUrl ?? "",
           storageStatePath: old?.storageStatePath || "",
+          storageStateEncrypted: old?.storageStateEncrypted || "",
           authSavedAt: old?.authSavedAt || null,
         };
       });
@@ -220,6 +260,7 @@ async function updateProject(req, res) {
       submitSelector:
         login.submitSelector ?? project.login?.submitSelector ?? "",
       storageStatePath: project.login?.storageStatePath || "",
+      storageStateEncrypted: project.login?.storageStateEncrypted || "",
       authSavedAt: project.login?.authSavedAt || null,
     };
   }
@@ -451,12 +492,11 @@ async function recordLogin(req, res) {
       });
     }
     const savedAt = new Date();
+    persistStorageState({ project, env: target.env }, authFile);
     if (target.env) {
-      target.env.storageStatePath = authFile;
       target.env.authSavedAt = savedAt;
       project.markModified("environments");
     } else {
-      project.login.storageStatePath = authFile;
       project.login.authSavedAt = savedAt;
     }
     project.updatedAt = new Date();
@@ -504,9 +544,7 @@ async function recordTest(req, res) {
 
   // GATE: a recording on an unauthenticated session just lands on the login
   // page. Tell the front to capture the login for THIS environment first.
-  const storagePath = target.storageStatePath;
-  const loadStorage =
-    storagePath && fs.existsSync(storagePath) ? storagePath : undefined;
+  const loadStorage = ensureStorageStateFile(project, target);
   if (!loadStorage) {
     return res.status(409).json({
       code: "LOGIN_REQUIRED",
@@ -518,6 +556,8 @@ async function recordTest(req, res) {
   }
 
   try {
+    if (target.env) project.markModified("environments");
+    await project.save();
     const spec = await recordSpec(url, { loadStorage });
     test.specCode = spec;
     test.source = "recording";
@@ -567,9 +607,7 @@ async function improveTest(req, res) {
 
   // Run already logged in. Same gate as recording — no session for this env
   // means the heal loop would chase failures caused by being logged out.
-  const storagePath = target.storageStatePath;
-  const loadStorage =
-    storagePath && fs.existsSync(storagePath) ? storagePath : undefined;
+  const loadStorage = ensureStorageStateFile(project, target);
   if (!loadStorage) {
     return res.status(409).json({
       code: "LOGIN_REQUIRED",
@@ -581,6 +619,8 @@ async function improveTest(req, res) {
   }
 
   try {
+    if (target.env) project.markModified("environments");
+    await project.save();
     const anthropicClient = await getUserAnthropicClient(req.user._id);
     const result = await e2eHealService.improveAndHeal({
       test,
@@ -696,6 +736,191 @@ async function deleteTest(req, res) {
   res.json({ message: "Test deleted" });
 }
 
+// --- Cloud recorder (SaaS) -------------------------------------------------
+// The customer records their flow in a Browserbase cloud browser driven from an
+// embedded live view — no install, no changes to their app. Olivia injects the
+// recorder + their logged-in session; events stream to ingest; on finish they
+// become a Playwright spec that feeds the existing heal loop.
+
+// Decrypted Playwright storageState JSON for a target (so the cloud session
+// starts already logged in), or "" when no session was captured yet.
+function getStorageStateJson(project, target) {
+  const encrypted = target.env
+    ? target.env.storageStateEncrypted
+    : project.login?.storageStateEncrypted;
+  if (encrypted) {
+    const json = decrypt(encrypted);
+    if (json) return json;
+  }
+  // Fall back to an on-disk session file if present (older captures).
+  const p = target.storageStatePath;
+  if (p && fs.existsSync(p)) {
+    try {
+      return fs.readFileSync(p, "utf8");
+    } catch (_) {}
+  }
+  return "";
+}
+
+function ingestBaseUrl(req) {
+  const base = process.env.E2E_INGEST_BASE_URL || process.env.PUBLIC_BACKEND_URL;
+  if (base) return base.replace(/\/+$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+async function startClientRecording(req, res) {
+  if (!requireCompany(req, res)) return;
+  const test = await E2eTest.findOne({
+    _id: req.params.testId,
+    companyId: req.user.companyId,
+  });
+  if (!test) return res.status(404).json({ message: "Test not found" });
+
+  const project = await E2eProject.findOne({
+    _id: test.projectId,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const envName = req.body?.env;
+  const target = resolveTarget(project, envName);
+  if (envName && !target.env) {
+    return res.status(400).json({ message: `Environment "${envName}" not found on this project.` });
+  }
+  const startUrl = target.baseUrl;
+  if (!startUrl) {
+    return res.status(400).json({
+      message: `Set a base URL for ${target.name || "this project"} before recording.`,
+    });
+  }
+
+  const token = crypto.randomBytes(24).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const ingestEndpoint = `${ingestBaseUrl(req)}/api/e2e/recordings/ingest`;
+  const storageStateJson = getStorageStateJson(project, target);
+
+  try {
+    const { browserbaseSessionId, liveViewUrl } = await browserbase.startSession({
+      startUrl,
+      token,
+      ingestEndpoint,
+      storageStateJson,
+    });
+
+    const session = await E2eRecordingSession.create({
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      projectId: project._id,
+      testId: test._id,
+      envName: target.name || "",
+      tokenHash,
+      browserbaseSessionId,
+      liveViewUrl,
+      status: "recording",
+    });
+
+    res.status(201).json({
+      recordingId: session._id,
+      liveViewUrl,
+      authReady: target.authReady,
+    });
+  } catch (err) {
+    console.error("e2e startClientRecording error:", err);
+    res.status(500).json({ message: err.message || "Could not start cloud recording" });
+  }
+}
+
+// Public: the injected recorder POSTs one event per call from inside the cloud
+// browser. Authenticated by the per-session token, not the user's cookie. Body
+// arrives as text/plain (CORS-simple) so we parse it ourselves.
+async function ingestClientRecording(req, res) {
+  // Always answer fast; the recorder ignores the response body.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    let body = req.body;
+    if (typeof body === "string") {
+      body = body ? JSON.parse(body) : {};
+    } else if (Buffer.isBuffer(body)) {
+      body = JSON.parse(body.toString("utf8") || "{}");
+    }
+    const token = body?.token;
+    if (!token) return res.status(204).end();
+
+    const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
+    const now = new Date();
+    await E2eRecordingSession.updateOne(
+      { tokenHash, status: "recording" },
+      {
+        $push: {
+          events: {
+            type: body.type,
+            url: body.url || "",
+            title: body.title || "",
+            selector: body.selector || "",
+            testId: body.testId || null,
+            role: body.role || "",
+            text: body.text || "",
+            value: body.value || "",
+            sensitive: Boolean(body.sensitive),
+            ts: Number(body.ts) || now.getTime(),
+          },
+        },
+        $set: { lastEventAt: now },
+      }
+    );
+    return res.status(204).end();
+  } catch (err) {
+    console.error("e2e ingestClientRecording error:", err.message);
+    return res.status(204).end(); // never break the recorder
+  }
+}
+
+async function finishClientRecording(req, res) {
+  if (!requireCompany(req, res)) return;
+  const session = await E2eRecordingSession.findOne({
+    _id: req.params.recordingId,
+    companyId: req.user.companyId,
+  });
+  if (!session) return res.status(404).json({ message: "Recording session not found" });
+
+  // Tear down the cloud browser regardless of what happens next.
+  await browserbase.finishSession(session.browserbaseSessionId).catch((err) =>
+    console.error("e2e finishSession teardown error:", err.message)
+  );
+
+  const test = await E2eTest.findOne({
+    _id: session.testId,
+    companyId: req.user.companyId,
+  });
+  if (!test) {
+    session.status = "finished";
+    session.finishedAt = new Date();
+    await session.save();
+    return res.status(404).json({ message: "Test not found" });
+  }
+
+  const specCode = actionsToPlaywrightSpec({
+    title: test.name || test.gherkin?.scenario || "recorded flow",
+    actions: session.events || [],
+  });
+
+  test.specCode = specCode;
+  test.source = "cloud-recording";
+  test.status = "draft";
+  test.updatedAt = new Date();
+  await test.save();
+
+  session.status = "finished";
+  session.finishedAt = new Date();
+  await session.save();
+
+  res.json({
+    specCode,
+    eventCount: (session.events || []).length,
+    status: test.status,
+  });
+}
+
 module.exports = {
   listProjects,
   createProject,
@@ -713,4 +938,7 @@ module.exports = {
   improveTest,
   commitTest,
   deleteTest,
+  startClientRecording,
+  ingestClientRecording,
+  finishClientRecording,
 };

@@ -16,6 +16,7 @@ const loginSchema = new mongoose.Schema(
     // Every test recording + run loads this so it starts already logged in —
     // the login flow never gets re-recorded per test.
     storageStatePath: { type: String, default: "" },
+    storageStateEncrypted: { type: String, default: "" },
     authSavedAt: { type: Date, default: null },
   },
   { _id: false },
@@ -44,6 +45,7 @@ const environmentSchema = new mongoose.Schema(
     loginUrl: { type: String, default: "" }, // optional explicit login page
     // Per-environment authenticated Playwright session (captured once).
     storageStatePath: { type: String, default: "" },
+    storageStateEncrypted: { type: String, default: "" },
     authSavedAt: { type: Date, default: null },
   },
   { _id: false },

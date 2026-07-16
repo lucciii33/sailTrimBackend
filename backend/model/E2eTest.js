@@ -67,7 +67,11 @@ const e2eTestSchema = new mongoose.Schema({
     default: null,
   },
   name: { type: String, required: true },
-  source: { type: String, enum: ["video", "recording"], default: "video" },
+  source: {
+    type: String,
+    enum: ["video", "recording", "cloud-recording"],
+    default: "video",
+  },
   kind: {
     type: String,
     enum: ["smoke", "regression", "bughunt"],
