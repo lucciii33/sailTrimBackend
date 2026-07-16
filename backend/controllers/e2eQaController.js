@@ -765,7 +765,14 @@ function getStorageStateJson(project, target) {
 function ingestBaseUrl(req) {
   const base = process.env.E2E_INGEST_BASE_URL || process.env.PUBLIC_BACKEND_URL;
   if (base) return base.replace(/\/+$/, "");
-  return `${req.protocol}://${req.get("host")}`;
+  // Behind Render/proxies `trust proxy` is off, so req.protocol reports "http".
+  // The recorder runs on the customer's HTTPS app, so an http ingest URL is
+  // mixed-content and gets blocked — read the forwarded proto so we build an
+  // https URL and events actually reach us.
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https")
+    .split(",")[0]
+    .trim();
+  return `${proto}://${req.get("host")}`;
 }
 
 async function startClientRecording(req, res) {
@@ -798,6 +805,7 @@ async function startClientRecording(req, res) {
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   const ingestEndpoint = `${ingestBaseUrl(req)}/api/e2e/recordings/ingest`;
   const storageStateJson = getStorageStateJson(project, target);
+  console.log(`[e2e cloud-record] start test=${test._id} url=${startUrl} ingest=${ingestEndpoint} auth=${storageStateJson ? "yes" : "none"}`);
 
   try {
     const { browserbaseSessionId, liveViewUrl } = await browserbase.startSession({
@@ -848,7 +856,7 @@ async function ingestClientRecording(req, res) {
 
     const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
     const now = new Date();
-    await E2eRecordingSession.updateOne(
+    const result = await E2eRecordingSession.updateOne(
       { tokenHash, status: "recording" },
       {
         $push: {
@@ -868,6 +876,7 @@ async function ingestClientRecording(req, res) {
         $set: { lastEventAt: now },
       }
     );
+    console.log(`[e2e ingest] type=${body.type} sel=${body.selector || body.testId || "?"} matched=${result.matchedCount}`);
     return res.status(204).end();
   } catch (err) {
     console.error("e2e ingestClientRecording error:", err.message);
