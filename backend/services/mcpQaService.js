@@ -51,7 +51,8 @@ Rules:
 - Args must match the target category.
 - Include happy path, sad path, boundary, security, and schema tests when possible.
 - Use supplied sampleArgsByTool for valid happy paths.
-- Do not invent real IDs beyond supplied sample args.`;
+- Do not invent real IDs beyond supplied sample args.
+- If an "alreadyTested" list is provided, it holds scenarios from previous runs. Keep essential happy-path coverage, but PRIORITIZE NEW angles/edge cases not in that list — do not just regenerate the same cases.`;
 
 const QA_JUDGE_SYSTEM = `You are an MCP QA bug judge.
 You receive one executed MCP tool test: case, tool schema, args, raw response, parsed response, status, and error.
@@ -242,14 +243,24 @@ async function callJsonLLM({ provider, model, system, user, maxTokens = 4096, an
   throw new Error(`Unknown provider: ${chosenProvider}`);
 }
 
-async function generateCases({ tools, docs, sampleArgsByTool, provider, model, maxCasesPerTool, anthropicClient = null }) {
+async function generateCases({ tools, docs, sampleArgsByTool, provider, model, maxCasesPerTool, anthropicClient = null, priorCases = [] }) {
   const fallback = fallbackCases({ tools, sampleArgsByTool, maxCasesPerTool });
   try {
     const { parsed, model: chosenModel } = await callJsonLLM({
       provider,
       model,
       system: QA_CASE_SYSTEM,
-      user: JSON.stringify({ tools, docs, sampleArgsByTool, maxCasesPerTool }, null, 2),
+      user: JSON.stringify(
+        {
+          tools,
+          docs,
+          sampleArgsByTool,
+          maxCasesPerTool,
+          ...(priorCases.length ? { alreadyTested: priorCases } : {}),
+        },
+        null,
+        2
+      ),
       anthropicClient,
     });
     const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
@@ -301,6 +312,37 @@ async function judgeCase({ testCase, tool, execution, provider, model, anthropic
   }
 }
 
+// Compact list of cases already tried in recent QA runs (from McpQaRun.cases),
+// optionally scoped to a single tool. No extra storage — reads what we persist.
+async function fetchPriorMcpCases({ projectId, companyId, toolName, limit = 40 }) {
+  if (!projectId) return [];
+  const query = companyId ? { projectId, companyId } : { projectId };
+  const runs = await McpQaRun.find(query)
+    .sort({ createdAt: -1 })
+    .limit(3)
+    .select("cases")
+    .lean();
+
+  const seen = new Set();
+  const prior = [];
+  for (const run of runs) {
+    for (const c of run.cases || []) {
+      if (toolName && c.toolName !== toolName) continue;
+      const key = `${c.toolName}::${(c.name || "").trim().toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      prior.push({
+        toolName: c.toolName,
+        name: c.name,
+        category: c.category || null,
+        expectedBehavior: c.expectedBehavior || "",
+      });
+      if (prior.length >= limit) return prior;
+    }
+  }
+  return prior;
+}
+
 async function runQa({
   config,
   projectId,
@@ -338,6 +380,13 @@ async function runQa({
     companyId,
     limit: 500,
   });
+  // What earlier runs already covered on this project/tool, so this run pushes
+  // into new scenarios instead of regenerating the same cases.
+  const priorCases = await fetchPriorMcpCases({ projectId, companyId, toolName });
+  console.log(
+    `[dedup][mcp] tool=${toolName || "all"} priorCases=${priorCases.length}`,
+    priorCases.map((c) => `${c.toolName}:${c.name}`)
+  );
   const generated = await generateCases({
     tools,
     docs,
@@ -346,7 +395,12 @@ async function runQa({
     model,
     maxCasesPerTool,
     anthropicClient,
+    priorCases,
   });
+  console.log(
+    `[dedup][mcp] generated ${generated.cases.length} cases`,
+    generated.cases.map((c) => `${c.toolName}:${c.name}`)
+  );
 
   const results = [];
   const bugs = [];

@@ -41,6 +41,7 @@ function serializeConfig(cfg) {
     defaultHeaders: cfg.defaultHeaders
       ? Object.fromEntries(cfg.defaultHeaders)
       : {},
+    variables: (cfg.variables || []).map((v) => ({ key: v.key, value: v.value })),
     updatedAt: cfg.updatedAt,
   };
 }
@@ -60,11 +61,27 @@ async function getConfig(req, res) {
 async function upsertConfig(req, res) {
   if (!requireCompany(req, res)) return;
   const { owner, repo } = req.params;
-  const { baseUrl, auth = {}, defaultHeaders = {} } = req.body;
+  const { baseUrl, auth = {}, defaultHeaders = {}, variables = [] } = req.body;
 
   if (!baseUrl) {
     return res.status(400).json({ message: "baseUrl is required" });
   }
+
+  const cleanVariables = (Array.isArray(variables) ? variables : [])
+    .filter((v) => v && typeof v.key === "string" && v.key.trim())
+    .map((v) => ({ key: v.key.trim(), value: String(v.value ?? "").trim() }));
+
+  // The dialog only ever shows a MASKED token, so an empty value on save means
+  // "unchanged", NOT "clear it". Preserve the existing secret when no new value
+  // is sent (same auth type) — otherwise re-saving the config wipes the token.
+  const existing = await ApiQaConfig.findOne({
+    companyId: req.user.companyId,
+    owner,
+    repo,
+  });
+  const prevAuth = existing?.auth || {};
+  const nextType = auth.type || "none";
+  const keepPrev = nextType !== "none" && prevAuth.type === nextType;
 
   const update = {
     userId: req.user._id,
@@ -73,13 +90,22 @@ async function upsertConfig(req, res) {
     repo,
     baseUrl,
     defaultHeaders,
+    variables: cleanVariables,
     updatedAt: new Date(),
     auth: {
-      type: auth.type || "none",
+      type: nextType,
       headerName: auth.headerName || "",
       username: auth.username || "",
-      valueEncrypted: auth.value ? encrypt(auth.value) : "",
-      passwordEncrypted: auth.password ? encrypt(auth.password) : "",
+      valueEncrypted: auth.value
+        ? encrypt(auth.value)
+        : keepPrev
+          ? prevAuth.valueEncrypted || ""
+          : "",
+      passwordEncrypted: auth.password
+        ? encrypt(auth.password)
+        : keepPrev
+          ? prevAuth.passwordEncrypted || ""
+          : "",
     },
   };
 
@@ -177,7 +203,7 @@ async function listRuns(req, res) {
   const { docId } = req.params;
   const runs = await TestRun.find(
     { companyId: req.user.companyId, docId },
-    { executions: 0 }
+    { executions: 0, postmanCollection: 0 }
   ).sort({ createdAt: -1 });
   res.json(runs);
 }

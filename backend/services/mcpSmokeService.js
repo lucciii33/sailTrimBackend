@@ -153,20 +153,24 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
 
 const SMOKE_REFINE_SYSTEM = `You are editing ONE smoke test case for an MCP tool based on a user instruction.
 You receive the tool schema, the current case (args, assertions) and a natural-language instruction describing how to change it.
-Apply the instruction and return the UPDATED case as STRICT JSON:
+
+Your job is ADDITIVE by default: the user is usually asking to ALSO check something, not to throw away what the case already verifies. NEVER drop an existing assertion unless the instruction EXPLICITLY says to remove, replace, or stop checking it.
+
+Return STRICT JSON describing the DELTA to apply:
 {
-  "name": string,
-  "toolName": string,
-  "args": object,
-  "expectedBehavior": string
+  "name": string,                 // updated, descriptive case name
+  "args": object,                 // full args object, valid against the inputSchema
+  "assertionsToAdd": string[],    // brand-new checks to append (may be empty)
+  "assertionsToRemove": string[]  // ONLY checks the user explicitly asked to remove/replace — copy them VERBATIM from the current assertions (usually empty)
 }
 
 Rules:
 - Keep the same toolName. Keep args valid against the inputSchema (required fields, correct types, enum values).
-- The instruction may ask to use different valid inputs, cover an extra field/id, or restate the success criteria. Apply it faithfully.
-- "expectedBehavior": one short sentence a non-technical user can read describing what success looks like.
-- This is a smoke ("is the tool alive?") case — keep it a single realistic happy path, not an edge case.
-- Return only the single updated case object.`;
+- This is a smoke ("is the tool alive?") case — keep it a single realistic happy-path scenario (don't turn it into an edge case), but it MAY carry several checks about that happy response.
+- Put every new check in "assertionsToAdd". Leave "assertionsToRemove" empty unless the user explicitly said to remove/replace an existing check.
+- Entries in "assertionsToRemove" MUST match an existing assertion verbatim so it can be removed reliably.
+- Checks are concrete, checkable statements a non-technical user can read (e.g. "returns a temperature number", "responds without an error").
+- Return only this JSON object.`;
 
 // Refine one smoke case from a natural-language instruction. Mirrors the
 // regression refiner so both suites feel identical in the UI.
@@ -221,16 +225,37 @@ async function refineSmokeCase({
     anthropicClient,
   });
 
-  if (!parsed || !parsed.toolName) {
+  if (!parsed || typeof parsed !== "object") {
     throw new Error(
       "Could not refine the case — the model returned no usable output."
     );
   }
 
+  // Additive merge (mirrors the regression refiner): keep existing checks, drop
+  // only what the user explicitly asked to remove, then append the new ones —
+  // so "add my check" never wipes a validation that was already there.
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const cleanList = (v) =>
+    Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : [];
+  const toAdd = cleanList(parsed.assertionsToAdd);
+  const toRemove = cleanList(parsed.assertionsToRemove);
+  const existing = cleanList(current.assertions);
+
+  const removeSet = new Set(toRemove.map(norm));
+  const merged = existing.filter((a) => !removeSet.has(norm(a)));
+  const seen = new Set(merged.map(norm));
+  for (const a of toAdd) {
+    if (!seen.has(norm(a))) {
+      merged.push(a);
+      seen.add(norm(a));
+    }
+  }
+
   // Never let a refine switch tools.
   current.name = parsed.name || current.name;
   current.expectedArgs = parsed.args || current.expectedArgs;
-  if (parsed.expectedBehavior) current.assertions = [parsed.expectedBehavior];
+  // Guard: if a bad response emptied everything, keep the originals.
+  current.assertions = merged.length ? merged : existing;
 
   await suite.save();
   return { suite, case: current };

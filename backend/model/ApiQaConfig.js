@@ -31,6 +31,16 @@ const apiQaConfigSchema = new mongoose.Schema({
   baseUrl: { type: String, required: true },
   auth: { type: authSchema, default: () => ({ type: "none" }) },
   defaultHeaders: { type: Map, of: String, default: {} },
+  // Path/template variables: fill {id} / :id in the route and {{key}} tokens.
+  variables: {
+    type: [
+      new mongoose.Schema(
+        { key: { type: String, required: true }, value: { type: String, default: "" } },
+        { _id: false }
+      ),
+    ],
+    default: [],
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

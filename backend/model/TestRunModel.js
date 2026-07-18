@@ -31,6 +31,8 @@ const executionSchema = new mongoose.Schema(
     request: requestSchema,
     response: responseSchema,
     isBug: { type: Boolean, default: false },
+    // Happy path we couldn't verify because no real path-param value existed.
+    needsData: { type: Boolean, default: false },
     bugTitle: String,
     bugDescription: String,
     bugSeverity: String,
@@ -61,6 +63,10 @@ const testRunSchema = new mongoose.Schema({
   totalTests: Number,
   bugCount: Number,
   executions: [executionSchema],
+  // Non-bug notices, e.g. "couldn't verify the happy path — no real id".
+  warnings: [mongoose.Schema.Types.Mixed],
+  // Ready-to-import Postman collection for this run, so history can re-download it.
+  postmanCollection: mongoose.Schema.Types.Mixed,
   createdAt: { type: Date, default: Date.now },
 });
 

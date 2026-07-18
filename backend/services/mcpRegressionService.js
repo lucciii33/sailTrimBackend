@@ -55,21 +55,25 @@ Rules:
 
 const REGRESSION_REFINE_SYSTEM = `You are editing ONE regression test case for an MCP tool based on a user instruction.
 You receive the tool schema, the current case (args, covers, assertions) and a natural-language instruction describing how to change it.
-Apply the instruction and return the UPDATED case as STRICT JSON:
+
+Your job is ADDITIVE by default: the user is almost always asking to ALSO check something, not to throw away what the case already verifies. NEVER drop an existing assertion unless the instruction EXPLICITLY says to remove, replace, or stop checking it.
+
+Return STRICT JSON describing the DELTA to apply:
 {
-  "name": string,
-  "toolName": string,
-  "args": object,
-  "covers": string,
-  "assertions": string[]
+  "name": string,                 // updated, descriptive case name
+  "args": object,                 // full args object, valid against the inputSchema
+  "assertionsToAdd": string[],    // brand-new assertions to append (may be empty)
+  "assertionsToRemove": string[], // ONLY assertions the user explicitly asked to remove/replace — copy them VERBATIM from the current assertions (usually empty)
+  "covers": string                // one sentence summarizing what the case checks AFTER the change (existing assertions that stay + the added ones)
 }
 
 Rules:
 - Keep the same toolName. Keep args valid against the inputSchema.
-- The instruction may ask to cover an extra id/field, add more assertions, assert a field's type (number/string), change an expected status (e.g. "should return 400 not 401"), or broaden/narrow coverage. Apply it faithfully.
-- Update "covers" so it still describes, in one sentence, what the case now checks.
-- Preserve existing coverage unless the instruction says to replace it — prefer adding to the assertions over dropping them.
-- Return only the single updated case object.`;
+- Put every new check in "assertionsToAdd". Leave "assertionsToRemove" empty unless the user explicitly said to remove/replace an existing check.
+- Entries in "assertionsToRemove" MUST match an existing assertion verbatim so it can be removed reliably.
+- Assertions are concrete, checkable statements about the response (shape/types/values/status), e.g. "response.temperature is a number", "HTTP-like status is 400, not 401".
+- "covers": ONE short human sentence readable by a non-technical user, describing what the case checks after the change.
+- Return only this JSON object.`;
 
 // ---------- Helpers ----------
 
@@ -270,19 +274,38 @@ async function refineRegressionCase({
     anthropicClient,
   });
 
-  if (!parsed || !parsed.toolName) {
+  if (!parsed || typeof parsed !== "object") {
     throw new Error(
       "Could not refine the case — the model returned no usable output."
     );
+  }
+
+  // Additive merge: start from the existing assertions, drop only the ones the
+  // user explicitly asked to remove, then append the new ones. This guarantees
+  // "add my check" never silently wipes a validation that was already there.
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const cleanList = (v) =>
+    Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : [];
+  const toAdd = cleanList(parsed.assertionsToAdd);
+  const toRemove = cleanList(parsed.assertionsToRemove);
+  const existing = cleanList(current.assertions);
+
+  const removeSet = new Set(toRemove.map(norm));
+  const merged = existing.filter((a) => !removeSet.has(norm(a)));
+  const seen = new Set(merged.map(norm));
+  for (const a of toAdd) {
+    if (!seen.has(norm(a))) {
+      merged.push(a);
+      seen.add(norm(a));
+    }
   }
 
   // Never let a refine switch tools.
   current.name = parsed.name || current.name;
   current.expectedArgs = parsed.args || current.expectedArgs;
   current.covers = parsed.covers || current.covers;
-  current.assertions = Array.isArray(parsed.assertions)
-    ? parsed.assertions
-    : current.assertions;
+  // Guard: if a bad response somehow emptied everything, keep the originals.
+  current.assertions = merged.length ? merged : existing;
 
   await suite.save();
   return { suite, case: current };

@@ -369,7 +369,7 @@ Rules:
 
 async function generateTestCases(
   doc,
-  { anthropicClient = null, variables = {}, context = {} } = {},
+  { anthropicClient = null, variables = {}, context = {}, priorCases = [] } = {},
 ) {
   const spec = {
     method: doc.method,
@@ -396,6 +396,9 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
   // of building one from the schema. Absent → old schema-driven behavior.
   const bodyNote = buildExampleBodyNote(doc.exampleBody);
 
+  // Previously-tried cases (from earlier runs) so a re-run explores new ground.
+  const priorNote = buildPriorCasesNote(priorCases);
+
   const client = anthropicClient || getAnthropic();
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
@@ -406,7 +409,7 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}${bodyNote}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}${bodyNote}${priorNote}`,
       },
     ],
   });
@@ -619,6 +622,41 @@ function truncateForLLM(body) {
   return s.slice(0, 2000) + "…[truncated]";
 }
 
+// ---------- Path-param resolution (happy-path guard) ----------
+
+// Names of path params in a route: /users/{id}/pets/:petId → ["id", "petId"].
+function extractPathParams(path) {
+  const out = [];
+  const p = String(path || "");
+  for (const m of p.matchAll(/\{([\w.-]+)\}/g)) out.push(m[1]);
+  for (const m of p.matchAll(/:([\w]+)/g)) out.push(m[1]);
+  return out;
+}
+
+// True when the endpoint needs a path param (e.g. an :id) but we have NO real
+// value to fill it — neither a matching project variable nor any discovered
+// data. In that case the happy path runs with an invented ID, so its 400/404
+// failures are NOT API bugs; they mean "we couldn't test the happy path".
+function detectUnresolvedId({ doc, variables = {}, context = {} }) {
+  const params = extractPathParams(doc.path);
+  if (params.length === 0) return null;
+  const hasVar = params.some((name) =>
+    Object.prototype.hasOwnProperty.call(variables, name),
+  );
+  const hasDiscovery = context && Object.keys(context).length > 0;
+  if (hasVar || hasDiscovery) return null;
+  return { params };
+}
+
+// A happy-path case that got a client-rejection status (400/404/422) while we
+// had no real ID is a false positive, not a bug. A 500 still counts — the
+// server shouldn't crash even on a bogus id.
+function isMissingDataFalsePositive(testCase, status) {
+  const isHappy =
+    testCase.group === "happy" || testCase.category === "happy_path";
+  return isHappy && [400, 404, 422].includes(Number(status));
+}
+
 // ---------- Discovery phase (context store) ----------
 
 // Only list-GET endpoints (no path params) are safe to run during discovery.
@@ -704,6 +742,46 @@ ${json}
 For sad/boundary/security cases, start from this body and mutate only the field under test.`;
 }
 
+// Pull the case names/rationales already tried in recent runs of this endpoint,
+// so a re-run can explore NEW angles instead of repeating the same suite. Reads
+// from TestRun.executions (already persisted) — no extra storage needed.
+async function fetchPriorCases({ docId, companyId, limit = 40 }) {
+  const runs = await TestRun.find({ docId, companyId })
+    .sort({ createdAt: -1 })
+    .limit(3)
+    .select("executions")
+    .lean();
+
+  const seen = new Set();
+  const prior = [];
+  for (const run of runs) {
+    for (const e of run.executions || []) {
+      const key = (e.name || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      prior.push({
+        name: e.name,
+        category: e.category || null,
+        rationale: e.rationale || "",
+      });
+      if (prior.length >= limit) return prior;
+    }
+  }
+  return prior;
+}
+
+// Feed the previously-tried cases into the prompt so the model doesn't just
+// regenerate the same suite — it covers NEW scenarios on each re-run.
+function buildPriorCasesNote(priorCases) {
+  if (!priorCases || priorCases.length === 0) return "";
+  const lines = priorCases.map(
+    (c) => `- [${c.category || "?"}] ${c.name}${c.rationale ? ` — ${c.rationale}` : ""}`,
+  );
+  return `\n\nALREADY TESTED IN PREVIOUS RUNS (do NOT just repeat these):
+${lines.join("\n")}
+Keep essential happy-path coverage, but for sad/boundary/security PRIORITIZE NEW angles, fields, and edge cases not listed above. Avoid duplicating a scenario that is already covered.`;
+}
+
 // ---------- Orchestrator ----------
 
 async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
@@ -756,6 +834,8 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
       err.statusCode = 400;
       throw err;
     }
+    // Path/template variables (e.g. a real :id) so the runner can fill routes.
+    variables = buildVarMap(config.variables);
   }
 
   const runId = crypto.randomUUID();
@@ -767,12 +847,23 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     ? await runDiscoveryGets(doc.projectId, companyId, config, variables)
     : {};
 
-  // 1) generate test cases
+  // 1) generate test cases — feeding in what earlier runs already tried so this
+  // run explores NEW scenarios instead of regenerating the same suite.
+  const priorCases = await fetchPriorCases({ docId: doc._id, companyId });
+  console.log(
+    `[dedup][api] ${doc.method} ${doc.path} priorCases=${priorCases.length}`,
+    priorCases.map((c) => c.name)
+  );
   const { cases, usage: genUsage } = await generateTestCases(doc, {
     anthropicClient,
     variables,
     context,
+    priorCases,
   });
+  console.log(
+    `[dedup][api] generated ${cases.length} cases`,
+    cases.map((c) => c.name)
+  );
   if (cases.length === 0) {
     return { runId, executions: [], bugs: [], usage: { genUsage } };
   }
@@ -785,11 +876,44 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
   }
 
   // 3) analyze for bugs
-  const { bugs, usage: analyzeUsage } = await analyzeForBugs({
+  const { bugs: rawBugs, usage: analyzeUsage } = await analyzeForBugs({
     doc,
     executions,
     anthropicClient,
   });
+
+  // 3b) Happy-path guard: if this endpoint needs a path param (e.g. an :id) and
+  // we had NO real value for it, the happy path ran with an invented id. Its
+  // 400/404 failures are NOT API bugs — reclassify them as a "needs data"
+  // warning so we don't pollute the bug list with false positives.
+  const unresolvedId = detectUnresolvedId({ doc, variables, context });
+  const warnings = [];
+  const needsDataNames = new Set();
+  let bugs = rawBugs;
+  if (unresolvedId) {
+    bugs = rawBugs.filter((b) => {
+      const exec = executions.find((e) => e.testCase.name === b.testCaseName);
+      const status = exec?.result?.response?.status;
+      if (exec && isMissingDataFalsePositive(exec.testCase, status)) {
+        needsDataNames.add(exec.testCase.name);
+        return false; // drop from bugs
+      }
+      return true;
+    });
+    // Warn whenever a happy-path case ran blind (client-rejected), even if the
+    // analyzer hadn't flagged it — the user still couldn't verify success.
+    const happyBlind = executions.some((e) =>
+      isMissingDataFalsePositive(e.testCase, e.result?.response?.status),
+    );
+    if (happyBlind) {
+      const p = unresolvedId.params;
+      warnings.push({
+        type: "missing_data",
+        params: p,
+        message: `Couldn't verify the happy path for ${doc.method} ${doc.path} — no real value was available for {${p.join(", ")}}, so it ran with an invented id and got a client error. Add a project variable named "${p[0]}" (a real id), or a list endpoint so discovery can pull one automatically.`,
+      });
+    }
+  }
 
   // Map bugs back onto their executions so the UI can render every test
   // (passing or failing) with bug info inline.
@@ -809,6 +933,8 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
       request: e.result.request,
       response: e.result.response,
       isBug: Boolean(bug),
+      // Happy path we couldn't verify for lack of a real id — not a pass, not a bug.
+      needsData: needsDataNames.has(e.testCase.name),
       bugTitle: bug?.title || null,
       bugDescription: bug?.description || null,
       bugSeverity: bug?.severity || null,
@@ -842,6 +968,10 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     await Bug.insertMany(docs);
   }
 
+  // Build the Postman collection once and persist it, so QA history can
+  // re-download it later without re-running the suite.
+  const postmanCollection = buildPostmanCollection({ doc, config, testCases: cases });
+
   // 5) persist the full run so the user can re-open it later
   const savedRun = await TestRun.create({
     userId,
@@ -853,6 +983,8 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     totalTests: fullExecutions.length,
     bugCount: bugs.length,
     executions: fullExecutions,
+    warnings,
+    postmanCollection,
   });
 
   return {
@@ -861,12 +993,9 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     totalTests: fullExecutions.length,
     bugCount: bugs.length,
     executions: fullExecutions,
+    warnings,
     usage: { genUsage, analyzeUsage },
-    postmanCollection: buildPostmanCollection({
-      doc,
-      config,
-      testCases: cases,
-    }),
+    postmanCollection,
   };
 }
 
