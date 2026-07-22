@@ -88,6 +88,11 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new Error("Please enter a valid email address.");
   }
 
+  if (!normalizedTerms) {
+    res.status(400);
+    throw new Error("You must accept the Privacy Policy to create an account.");
+  }
+
   const passwordError = validatePasswordStrength(password);
   if (passwordError) {
     res.status(400);

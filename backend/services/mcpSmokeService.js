@@ -38,12 +38,20 @@ function fallbackSmokeCases({ tools, docByName }) {
       name: `${tool.name} smoke`,
       toolName: tool.name,
       args: doc?.sampleArgs || {},
-      expectedBehavior: "Tool responds successfully with the verified sample arguments.",
+      expectedBehavior:
+        "Tool responds successfully with the verified sample arguments.",
     };
   });
 }
 
-async function generateSmokeSuite({ projectId, userId, companyId, provider = "anthropic", model, anthropicClient = null }) {
+async function generateSmokeSuite({
+  projectId,
+  userId,
+  companyId,
+  provider = "anthropic",
+  model,
+  anthropicClient = null,
+}) {
   const projectQuery = { _id: projectId };
   if (companyId) projectQuery.companyId = companyId;
   const project = await McpProject.findOne(projectQuery);
@@ -87,7 +95,9 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
     });
     const toolNames = new Set(tools.map((tool) => tool.name));
     const generated = Array.isArray(parsed?.cases) ? parsed.cases : [];
-    const valid = generated.filter((c) => c.toolName && toolNames.has(c.toolName));
+    const valid = generated.filter(
+      (c) => c.toolName && toolNames.has(c.toolName),
+    );
     if (valid.length) {
       const seen = new Set();
       cases = [];
@@ -103,7 +113,8 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
             name: `${tool.name} smoke`,
             toolName: tool.name,
             args: doc?.sampleArgs || {},
-            expectedBehavior: "Tool responds successfully with the verified sample arguments.",
+            expectedBehavior:
+              "Tool responds successfully with the verified sample arguments.",
           });
         }
       }
@@ -145,7 +156,7 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
         companyId,
       },
     },
-    { new: true, upsert: true }
+    { new: true, upsert: true },
   );
 
   return { suite, generatedBy: { provider: usedProvider, model: usedModel } };
@@ -153,7 +164,6 @@ async function generateSmokeSuite({ projectId, userId, companyId, provider = "an
 
 const SMOKE_REFINE_SYSTEM = `You are editing ONE smoke test case for an MCP tool based on a user instruction.
 You receive the tool schema, the current case (args, assertions) and a natural-language instruction describing how to change it.
-
 Your job is ADDITIVE by default: the user is usually asking to ALSO check something, not to throw away what the case already verifies. NEVER drop an existing assertion unless the instruction EXPLICITLY says to remove, replace, or stop checking it.
 
 Return STRICT JSON describing the DELTA to apply:
@@ -227,14 +237,17 @@ async function refineSmokeCase({
 
   if (!parsed || typeof parsed !== "object") {
     throw new Error(
-      "Could not refine the case — the model returned no usable output."
+      "Could not refine the case — the model returned no usable output.",
     );
   }
 
   // Additive merge (mirrors the regression refiner): keep existing checks, drop
   // only what the user explicitly asked to remove, then append the new ones —
   // so "add my check" never wipes a validation that was already there.
-  const norm = (s) => String(s || "").trim().toLowerCase();
+  const norm = (s) =>
+    String(s || "")
+      .trim()
+      .toLowerCase();
   const cleanList = (v) =>
     Array.isArray(v) ? v.filter((s) => typeof s === "string" && s.trim()) : [];
   const toAdd = cleanList(parsed.assertionsToAdd);
