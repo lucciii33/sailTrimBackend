@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const Installation = require("../model/Installation");
 const BackfillJob = require("../model/BackfillJob");
 const Doc = require("../model/DocModel");
@@ -92,9 +93,57 @@ async function fetchInstallationRepos(octokit) {
   return repos;
 }
 
+// `state` used to be the raw user id, sitting in plain view in the
+// "Connect GitHub" URL — anyone could hand-craft that URL with someone
+// else's id and our callback would trust it blindly. Instead we sign it as
+// a short-lived, purpose-scoped token: only our server can mint one (via
+// getConnectLink, behind `protect`), and the callback verifies it instead
+// of trusting it. 15 minutes is plenty for "click connect -> pick org on
+// GitHub -> come back"; reuse within that window is allowed (stateless
+// JWT, no single-use tracking) since the blast radius of a leaked link is
+// already capped by the short expiry.
+const CONNECT_STATE_PURPOSE = "github_connect";
+const CONNECT_STATE_TTL = "15m";
+
+function signConnectState(userId) {
+  return jwt.sign(
+    { sub: String(userId), purpose: CONNECT_STATE_PURPOSE },
+    process.env.JWT_SECRET_NODE,
+    { expiresIn: CONNECT_STATE_TTL }
+  );
+}
+
+// Returns the user id encoded in `state` only if it's a real, unexpired
+// token we issued for this exact purpose — null for anything else
+// (missing, malformed, expired, or a token issued for something else).
+// Callers treat null the same as "no state" rather than throwing, so a
+// bad/expired state degrades to an unlinked installation instead of a hard
+// failure.
+function resolveStateUserId(state) {
+  if (!state) return null;
+  try {
+    const decoded = jwt.verify(state, process.env.JWT_SECRET_NODE);
+    if (decoded.purpose !== CONNECT_STATE_PURPOSE) return null;
+    return decoded.sub;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Authenticated endpoint the frontend calls right before sending the user
+// to GitHub, instead of building the install URL itself with a raw id.
+async function getConnectLink(req, res) {
+  const state = signConnectState(req.user._id);
+  const slug = process.env.GITHUB_APP_SLUG || "OliviaTools";
+  res.json({
+    url: `https://github.com/apps/${slug}/installations/new?state=${state}`,
+  });
+}
+
 async function githubCallback(req, res) {
-  const { installation_id, state, setup_action } = req.query;
+  const { installation_id, state: rawState, setup_action } = req.query;
   const frontendUrl = process.env.FRONTEND_URL;
+  const state = resolveStateUserId(rawState);
 
   // GitHub sends the user here with setup_action=request (and NO
   // installation_id) when they tried to install on an org where they're not
@@ -506,4 +555,4 @@ async function getBackfillJob(req, res) {
   res.status(200).json(job);
 }
 
-module.exports = { githubCallback, startBackfill, getBackfillJob };
+module.exports = { githubCallback, getConnectLink, startBackfill, getBackfillJob };
