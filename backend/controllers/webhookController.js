@@ -36,6 +36,8 @@ async function handleWebhook(req, res) {
 
     if (event === "installation" && payload.action === "created") {
       await handleInstallation(payload);
+    } else if (event === "installation" && payload.action === "deleted") {
+      await handleInstallationDeleted(payload);
     } else if (
       event === "pull_request" &&
       (payload.action === "opened" || payload.action === "synchronize")
@@ -132,6 +134,19 @@ async function handleInstallation(payload) {
     );
   } catch (err) {
     console.error("Error saving installation:", err);
+  }
+}
+
+// Covers the case where the app is uninstalled directly from GitHub
+// (Settings → Applications) instead of via our disconnect button — keeps
+// the local Installation record in sync either way. Docs/bugs already
+// generated are left untouched, same as the button-driven disconnect.
+async function handleInstallationDeleted(payload) {
+  try {
+    const { installation } = payload;
+    await Installation.deleteOne({ installationId: installation.id });
+  } catch (err) {
+    console.error("Error removing installation:", err);
   }
 }
 

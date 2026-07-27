@@ -42,6 +42,18 @@ async function getOctokit(installationId) {
   return app.getInstallationOctokit(installationId);
 }
 
+// Revokes the GitHub App's access for real (app-level auth, not
+// installation-level) — this is what actually removes the installation on
+// GitHub's side, same as uninstalling from GitHub Settings would. A 404
+// means it's already gone (e.g. the user uninstalled from GitHub directly);
+// callers should treat that as success.
+async function uninstallApp(installationId) {
+  const app = await getApp();
+  await app.octokit.request("DELETE /app/installations/{installation_id}", {
+    installation_id: installationId,
+  });
+}
+
 async function getPRDiff(octokit, owner, repo, prNumber) {
   const { data: files } = await octokit.request(
     "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
@@ -887,6 +899,7 @@ async function fetchMountContextAtRef(octokit, owner, repo, ref) {
 module.exports = {
   getApp,
   getOctokit,
+  uninstallApp,
   getPRDiff,
   commentOnPR,
   fetchSchemaContext,
