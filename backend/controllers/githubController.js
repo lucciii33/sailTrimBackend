@@ -145,6 +145,26 @@ async function githubCallback(req, res) {
   const frontendUrl = process.env.FRONTEND_URL;
   const state = resolveStateUserId(rawState);
 
+  // rawState present but state resolved to null = a real token was sent but
+  // it's invalid/expired/tampered — show a clear error instead of silently
+  // proceeding unlinked. (No rawState at all is a different, allowed case —
+  // handled further down, same as before.)
+  if (rawState && !state) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        renderGithubResultPage({
+          variant: "error",
+          title: "This link expired",
+          message:
+            "This connection link is invalid or expired (links last 15 minutes). Go back to OliviaTools and click \"Connect GitHub\" again to get a fresh one.",
+          ctaHref: frontendUrl || undefined,
+          ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+        })
+      );
+  }
+
   // GitHub sends the user here with setup_action=request (and NO
   // installation_id) when they tried to install on an org where they're not
   // an admin: instead of installing, GitHub sends an approval request to the
