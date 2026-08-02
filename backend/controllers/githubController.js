@@ -130,6 +130,40 @@ function resolveStateUserId(state) {
   }
 }
 
+// Exchange the OAuth `code` GitHub sends when "Request user authorization
+// (OAuth) during installation" is enabled, for the GitHub identity of the
+// person doing the install/request. This is what lets us link an org approval
+// (which arrives later, via webhook, with only `requester.id`) back to the
+// exact user who asked — no guessing.
+async function githubUserFromCode(code) {
+  if (!code) return null;
+  try {
+    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) return null;
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    const user = await userRes.json();
+    if (!user?.id) return null;
+    return { id: String(user.id), login: user.login };
+  } catch (err) {
+    console.error("githubUserFromCode failed:", err.message);
+    return null;
+  }
+}
+
 // Authenticated endpoint the frontend calls right before sending the user
 // to GitHub, instead of building the install URL itself with a raw id.
 async function getConnectLink(req, res) {
@@ -141,7 +175,7 @@ async function getConnectLink(req, res) {
 }
 
 async function githubCallback(req, res) {
-  const { installation_id, state: rawState, setup_action } = req.query;
+  const { installation_id, state: rawState, setup_action, code } = req.query;
   const frontendUrl = process.env.FRONTEND_URL;
   const state = resolveStateUserId(rawState);
 
@@ -175,11 +209,19 @@ async function githubCallback(req, res) {
     // `state`) can link the installation back to this user. See PendingInstall.
     if (state) {
       try {
-        const user = await User.findById(state).select("companyId");
+        const [user, ghUser] = await Promise.all([
+          User.findById(state).select("companyId"),
+          githubUserFromCode(code),
+        ]);
         await PendingInstall.create({
           userId: state,
           companyId: user?.companyId || undefined,
+          githubRequesterId: ghUser?.id || undefined,
+          githubRequesterLogin: ghUser?.login || undefined,
         });
+        console.log(
+          `[github] pending recorded user=${state} ghRequester=${ghUser?.login || "?"} (${ghUser?.id || "no-oauth"})`
+        );
       } catch (err) {
         console.error("Failed to record pending install:", err.message);
       }

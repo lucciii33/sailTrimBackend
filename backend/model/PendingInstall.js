@@ -20,6 +20,11 @@ const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
 const pendingInstallSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
+  // The GitHub identity of the person who requested the install, captured via
+  // OAuth-during-install. The approval webhook carries `requester.id`; matching
+  // it to this is an EXACT link (no "most recent" guessing → no mislink).
+  githubRequesterId: { type: String, default: "", index: true },
+  githubRequesterLogin: { type: String, default: "" },
   createdAt: { type: Date, default: Date.now, expires: THIRTY_DAYS_SECONDS },
 });
 

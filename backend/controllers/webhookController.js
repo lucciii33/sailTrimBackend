@@ -106,14 +106,30 @@ async function handleInstallation(payload) {
     //
     // Gate on `requester`: GitHub only populates it when this install came
     // from an admin APPROVING a request. Direct self-installs have it null
-    // and are linked by the /callback instead, so we must NOT let them
-    // consume another user's pending record.
-    if (!userId && requester) {
-      const pending = await PendingInstall.findOne().sort({ createdAt: -1 });
+    // and are linked by the /callback instead.
+    //
+    // EXACT match by GitHub identity: the pending record stored the requester's
+    // GitHub id (captured via OAuth-during-install at request time), and this
+    // webhook carries `requester.id`. Matching those two is unambiguous — no
+    // "most recent" guessing, so two customers requesting in the same window
+    // can never be linked to the wrong workspace. If OAuth wasn't captured (no
+    // githubRequesterId) or nothing matches, we leave it UNLINKED rather than
+    // guess; an admin re-connecting through Olivia links it cleanly later.
+    if (!userId && requester?.id) {
+      const pending = await PendingInstall.findOne({
+        githubRequesterId: String(requester.id),
+      }).sort({ createdAt: -1 });
       if (pending) {
         userId = pending.userId;
         companyId = pending.companyId || null;
         await PendingInstall.deleteOne({ _id: pending._id });
+        console.log(
+          `[github webhook] linked org install to user=${userId} via requester=${requester.login} (${requester.id})`
+        );
+      } else {
+        console.log(
+          `[github webhook] no pending match for requester=${requester.login} (${requester.id}) — left unlinked`
+        );
       }
     }
 
