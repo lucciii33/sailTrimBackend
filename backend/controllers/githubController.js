@@ -334,20 +334,44 @@ async function githubCallback(req, res) {
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
-    const frontendUrl = process.env.FRONTEND_URL;
-    if (frontendUrl) {
+    // With `state` this is the connecting user finishing their own install —
+    // they're logged in, so send them back into the app. WITHOUT `state` it's
+    // an org owner completing/approving someone else's request: they have no
+    // Olivia session, so redirecting to the app just dumps them on a login.
+    // Show a clear success page instead.
+    if (state && frontendUrl) {
       return res.redirect(`${frontendUrl}/docs?installed=1`);
     }
-    return res.status(200).json({
-      message: "Installation linked to user",
-      installationId,
-      repos,
-    });
+    const orgName = accountLogin || "the organization";
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        renderGithubResultPage({
+          variant: "success",
+          title: "All set — connection active",
+          message: state
+            ? `OliviaTools is now connected. You can head back to OliviaTools.`
+            : `OliviaTools is now connected for ${orgName}. The person who requested it will see the repositories in their OliviaTools automatically — you can close this tab.`,
+          ctaHref: frontendUrl || undefined,
+          ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+        })
+      );
   } catch (err) {
     console.error("githubCallback failed:", err);
     return res
       .status(500)
-      .json({ message: "Failed to sync installation", error: err.message });
+      .type("html")
+      .send(
+        renderGithubResultPage({
+          variant: "error",
+          title: "Something went wrong",
+          message:
+            "We couldn't finish connecting the installation. Please try again from OliviaTools, or contact us if it keeps happening.",
+          ctaHref: frontendUrl || undefined,
+          ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+        })
+      );
   }
 }
 
