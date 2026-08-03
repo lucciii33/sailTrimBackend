@@ -168,9 +168,15 @@ async function githubUserFromCode(code) {
 // to GitHub, instead of building the install URL itself with a raw id.
 async function getConnectLink(req, res) {
   const state = signConnectState(req.user._id);
-  const slug = process.env.GITHUB_APP_SLUG || "OliviaTools";
+  // Send the user through GitHub OAuth FIRST (not straight to the install
+  // screen). GitHub does NOT return an OAuth `code` on a pending org "request"
+  // — only on a completed install — so the install flow alone can't tell us who
+  // requested. By authorizing first we capture their GitHub identity up front;
+  // the callback then bounces them to the real install screen. GitHub uses the
+  // app's registered Callback URL, so no redirect_uri is needed here.
+  const clientId = process.env.GITHUB_CLIENT_ID;
   res.json({
-    url: `https://github.com/apps/${slug}/installations/new?state=${state}`,
+    url: `https://github.com/login/oauth/authorize?client_id=${clientId}&state=${state}`,
   });
 }
 
@@ -199,6 +205,31 @@ async function githubCallback(req, res) {
       );
   }
 
+  // STEP 1 of connect: the pure OAuth return (we routed them through
+  // /login/oauth/authorize first). No install yet — just a `code`. Exchange it
+  // for their GitHub identity, persist it on their User, then bounce them to
+  // the real install screen. Capturing identity HERE (not from the install) is
+  // what makes org-request linking reliable, since GitHub omits the code on a
+  // pending request.
+  if (code && !installation_id && setup_action !== "request") {
+    if (state) {
+      const ghUser = await githubUserFromCode(code);
+      if (ghUser?.id) {
+        await User.findByIdAndUpdate(state, {
+          githubUserId: ghUser.id,
+          githubUsername: ghUser.login,
+        }).catch((e) => console.error("store githubUserId failed:", e.message));
+        console.log(
+          `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`
+        );
+      }
+    }
+    const slug = process.env.GITHUB_APP_SLUG || "OliviaTools";
+    return res.redirect(
+      `https://github.com/apps/${slug}/installations/new?state=${encodeURIComponent(rawState || "")}`
+    );
+  }
+
   // GitHub sends the user here with setup_action=request (and NO
   // installation_id) when they tried to install on an org where they're not
   // an admin: instead of installing, GitHub sends an approval request to the
@@ -209,18 +240,20 @@ async function githubCallback(req, res) {
     // `state`) can link the installation back to this user. See PendingInstall.
     if (state) {
       try {
-        const [user, ghUser] = await Promise.all([
-          User.findById(state).select("companyId"),
-          githubUserFromCode(code),
-        ]);
+        // The GitHub identity was captured in STEP 1 (the OAuth hop) and saved
+        // on the User — read it here, since GitHub gives us no `code` on a
+        // request. This id is what the approval webhook matches on.
+        const user = await User.findById(state).select(
+          "companyId githubUserId githubUsername"
+        );
         await PendingInstall.create({
           userId: state,
           companyId: user?.companyId || undefined,
-          githubRequesterId: ghUser?.id || undefined,
-          githubRequesterLogin: ghUser?.login || undefined,
+          githubRequesterId: user?.githubUserId || undefined,
+          githubRequesterLogin: user?.githubUsername || undefined,
         });
         console.log(
-          `[github] pending recorded user=${state} ghRequester=${ghUser?.login || "?"} (${ghUser?.id || "no-oauth"})`
+          `[github] pending recorded user=${state} ghRequester=${user?.githubUsername || "?"} (${user?.githubUserId || "no-oauth"})`
         );
       } catch (err) {
         console.error("Failed to record pending install:", err.message);

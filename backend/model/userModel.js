@@ -79,6 +79,11 @@ const userSchema = mongoose.Schema(
       enum: ["owner", "member"],
       default: "owner",
     },
+    // GitHub identity captured when the user connects GitHub (OAuth hop). Used
+    // to link an org-approval install back to this user via the webhook's
+    // requester.id, since GitHub doesn't return an OAuth code on a request.
+    githubUserId: { type: String, default: "", index: true },
+    githubUsername: { type: String, default: "" },
     anthropicKeyEncrypted: {
       type: String,
       required: false,
