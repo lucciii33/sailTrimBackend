@@ -1,9 +1,13 @@
 {
-  "watch": ["."],
+  "watch": [
+    "."
+  ],
   "ext": "js,json",
   "ignore": [
     "node_modules/*",
     "test/*",
-    ".e2e-auth/*"
+    ".e2e-auth/*",
+    "e2e-runner/specs/*",
+    "test-results/*"
   ]
 }

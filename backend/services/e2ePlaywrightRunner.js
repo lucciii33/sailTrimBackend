@@ -4,18 +4,34 @@ const path = require("path");
 const crypto = require("crypto");
 
 // Runs ONE generated spec with Playwright and reports whether it passed plus the
-// failure output (fed back to Claude in the heal loop). Same cwd convention as
-// the recorder: E2E_RECORDER_CWD or the sibling oliviatools repo, which has
-// @playwright/test + playwright.config installed. The app under test is reached
-// via E2E_BASE_URL (we set it from the project's baseUrl).
+// failure output (fed back to Claude in the heal loop). The app under test is
+// reached via E2E_BASE_URL (set from the project's baseUrl).
 //
-// This is the local-dev runner: the browser/test process runs on the backend
-// host. (Productized: run in an isolated container / CI.)
-function resolveCwd() {
-  return (
-    process.env.E2E_RECORDER_CWD ||
-    path.resolve(__dirname, "../../../oliviatools")
-  );
+// The browser runs HEADLESS ON THIS HOST — deliberately not in Browserbase.
+// Browserbase exists so a *human* can see and drive a browser (the login capture
+// and the flow recorder); the heal loop has no human, it just executes a spec
+// and reads the result. Routing it through Browserbase would burn a scarce
+// cloud session per attempt (plan limit: 3 concurrent, 5 creations/minute) —
+// four attempts from one user would starve everyone else. A local headless
+// Chromium has no such ceiling and no per-session cost.
+//
+// This used to shell out into the sibling `oliviatools` checkout for
+// @playwright/test and a config. Both now live in the backend (see
+// e2e-runner/playwright.config.js), so the loop behaves identically on a laptop
+// and on a deployed instance. Requires the browser binary:
+//     npx playwright install chromium
+// which must be part of the deploy's build step.
+const RUNNER_DIR = path.resolve(__dirname, "../e2e-runner");
+const CONFIG_PATH = path.join(RUNNER_DIR, "playwright.config.js");
+// Specs are written here and deleted after the run. Kept out of the watched
+// source tree so writing one can't restart a dev server mid-loop.
+const SPEC_DIR = path.join(RUNNER_DIR, "specs");
+
+// Prefer the locally installed binary over `npx`, which can wander off to the
+// network on a cold deploy.
+function playwrightBin() {
+  const local = path.resolve(__dirname, "../node_modules/.bin/playwright");
+  return fs.existsSync(local) ? local : "npx";
 }
 
 function safeParse(txt) {
@@ -75,12 +91,11 @@ function summarizeFailures(json) {
 
 function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
   return new Promise((resolve) => {
-    const cwd = resolveCwd();
-    const dir = path.join(cwd, "tests", "e2e");
+    const cwd = path.resolve(__dirname, "..");
     let file;
     try {
-      fs.mkdirSync(dir, { recursive: true });
-      file = path.join(dir, `_heal-${crypto.randomUUID()}.spec.ts`);
+      fs.mkdirSync(SPEC_DIR, { recursive: true });
+      file = path.join(SPEC_DIR, `_heal-${crypto.randomUUID()}.spec.ts`);
       fs.writeFileSync(file, injectStorageState(specCode, storagePath), "utf8");
     } catch (e) {
       return resolve({ passed: false, error: `Could not write spec: ${e.message}` });
@@ -92,9 +107,11 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
 
     // --reporter=json prints the report to stdout (overrides the config reporters
     // so we don't fight over test-results/results.json across concurrent runs).
+    const bin = playwrightBin();
+    const args = bin === "npx" ? ["playwright"] : [];
     const cp = spawn(
-      "npx",
-      ["playwright", "test", file, "--reporter=json", "--workers=1"],
+      bin,
+      [...args, "test", file, "-c", CONFIG_PATH, "--reporter=json", "--workers=1"],
       { cwd, env }
     );
 
@@ -114,7 +131,9 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
       cleanup();
       resolve({
         passed: false,
-        error: `Could not launch Playwright (is it installed in ${cwd}?): ${e.message}`,
+        error:
+          `Could not launch Playwright: ${e.message}. ` +
+          `The deploy needs "npx playwright install chromium" in its build step.`,
       });
     });
 
