@@ -1,10 +1,14 @@
 const mongoose = require("mongoose");
 
-// One cloud-recording session: the customer opened the embedded browser and is
-// (or was) recording a flow for a specific test. Events stream in from the
-// injected recorder via /ingest; on finish they're converted to a Playwright
-// spec and saved onto the test. tokenHash ties incoming events to this row
-// without exposing the raw token in the DB.
+// One cloud-browser session the customer is driving from the embedded live
+// view. Two kinds share this row (see `kind`):
+//   recording — a flow for a specific test. Events stream in from the injected
+//               recorder via /ingest; on finish they become a Playwright spec.
+//   login     — a one-time login capture for the project. No recorder is
+//               injected and no events arrive; on finish we read the browser's
+//               storageState and save it as the project's session.
+// tokenHash ties incoming events to this row without exposing the raw token in
+// the DB (a login row carries an unused one, since the column is unique).
 const recordedEventSchema = new mongoose.Schema(
   {
     type: { type: String }, // navigate | click | fill
@@ -25,7 +29,20 @@ const e2eRecordingSessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
   projectId: { type: mongoose.Schema.Types.ObjectId, ref: "E2eProject", required: true, index: true },
-  testId: { type: mongoose.Schema.Types.ObjectId, ref: "E2eTest", required: true, index: true },
+  // "recording" = grabbing a flow for one test (has testId, streams events).
+  // "login"     = capturing the project's authenticated session in the same
+  //               embedded browser; project-level, so no testId and no events.
+  kind: { type: String, enum: ["recording", "login"], default: "recording", index: true },
+  // Required for kind "recording" only — a login capture belongs to the
+  // project, not to any single test.
+  testId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "E2eTest",
+    index: true,
+    required: function () {
+      return this.kind !== "login";
+    },
+  },
   envName: { type: String, default: "" },
 
   tokenHash: { type: String, required: true, unique: true },

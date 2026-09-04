@@ -10,6 +10,7 @@ const ffmpegPath = require("ffmpeg-static");
 const E2eProject = require("../model/E2eProject");
 const E2eTest = require("../model/E2eTest");
 const { uploadEvidence } = require("./aws");
+const { gherkinToText } = require("./gherkinText");
 
 let _openai = null;
 function getOpenAI() {
@@ -238,6 +239,7 @@ async function generateFromVideo({
       when: c.when || [],
       then: c.then || [],
     },
+    gherkinText: gherkinToText(c),
     transcript,
     videoUrl: uploaded.url,
     videoKey: uploaded.key,

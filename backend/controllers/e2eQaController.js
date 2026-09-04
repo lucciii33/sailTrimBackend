@@ -15,6 +15,7 @@ const { resolveOctokit } = require("../services/repoContextService");
 const { commitFileToBranch, getDefaultBranch } = require("../services/githubService");
 const { encrypt, decrypt, maskSecret } = require("../services/secretCrypto");
 const { getUserAnthropicClient } = require("../services/userKeyService");
+const { parseGherkinText } = require("../services/gherkinText");
 
 // Where the per-project authenticated Playwright session lives. Gitignored —
 // it holds live session cookies. (Productized: encrypt + store in S3.)
@@ -26,15 +27,19 @@ function authPathFor(projectId, env) {
   return path.join(AUTH_DIR, `${projectId}${suffix}.json`);
 }
 
+// Save a captured session onto the project (or one environment). The encrypted
+// copy is the source of truth; the file is just a local cache the Playwright
+// runner reads (ensureStorageStateFile restores it from the encrypted copy when
+// it's missing, e.g. on a fresh dyno).
+function persistStorageStateJson(target, json, filePath) {
+  if (filePath) fs.writeFileSync(filePath, json, "utf8");
+  const slot = target.env ? target.env : target.project.login;
+  if (filePath) slot.storageStatePath = filePath;
+  slot.storageStateEncrypted = encrypt(json);
+}
+
 function persistStorageState(target, filePath) {
-  const json = fs.readFileSync(filePath, "utf8");
-  if (target.env) {
-    target.env.storageStatePath = filePath;
-    target.env.storageStateEncrypted = encrypt(json);
-  } else {
-    target.project.login.storageStatePath = filePath;
-    target.project.login.storageStateEncrypted = encrypt(json);
-  }
+  persistStorageStateJson(target, fs.readFileSync(filePath, "utf8"), filePath);
 }
 
 function ensureStorageStateFile(project, target) {
@@ -89,6 +94,35 @@ function resolveTarget(project, envName) {
     storageStatePath: project.login?.storageStatePath || "",
     authReady: Boolean(project.login?.authSavedAt),
   };
+}
+
+// The cloud browser runs in Browserbase's datacenter, so "localhost" there
+// resolves to Browserbase's own container — not the machine the customer is
+// sitting at. A local URL doesn't fail in some subtle way, it just shows
+// ERR_CONNECTION_REFUSED inside the iframe, which reads like our bug. Catch it
+// up front and say what to do instead.
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
+function unreachableFromCloud(rawUrl) {
+  let host;
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase();
+  } catch (_) {
+    return ""; // not parseable — let the navigation fail on its own
+  }
+  const isLocal =
+    LOCAL_HOSTNAMES.has(host) ||
+    host.endsWith(".local") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  if (!isLocal) return "";
+  return (
+    `The cloud browser can't reach ${host} — it runs in the cloud, so "${host}" ` +
+    `points at itself, not at your machine. Use a URL that's reachable from the ` +
+    `internet (staging or production), or expose your local app with a tunnel ` +
+    `(ngrok, cloudflared) and set that URL as the base URL.`
+  );
 }
 
 // Turn a test name into a safe file slug for the spec path on commit.
@@ -450,6 +484,94 @@ async function getTest(req, res) {
   res.json(test);
 }
 
+// Gherkin is edited as ONE block of text, not as three lists: a real scenario
+// interleaves its steps (When → Then → And → When …) and the given/when/then
+// arrays can't hold that order. So the raw text is what we store and what the
+// heal prompt reads; parseGherkinText keeps the structured view in sync for the
+// readers that still want it.
+const MAX_GHERKIN_LEN = 20000;
+const TEST_KINDS = ["smoke", "regression", "bughunt"];
+
+// Returns the { gherkinText, gherkin } pair to write for a submitted block of
+// text. `fallbackFeature` names the Olivia feature, used only when the pasted
+// text has no "Feature:" line of its own.
+function gherkinFromText(text, fallbackFeature = "") {
+  const gherkinText = String(text == null ? "" : text)
+    .replace(/\r\n/g, "\n")
+    .trim()
+    .slice(0, MAX_GHERKIN_LEN);
+  const gherkin = parseGherkinText(gherkinText);
+  if (!gherkin.feature) gherkin.feature = fallbackFeature;
+  return { gherkinText, gherkin };
+}
+
+// Write a test case by hand instead of getting it from a video. Same shape as a
+// generated one (status "draft"), so it flows into record → improve → commit
+// with no special-casing anywhere downstream.
+async function createTest(req, res) {
+  if (!requireCompany(req, res)) return;
+  const feature = await E2eFeature.findOne({
+    _id: req.params.featureId,
+    companyId: req.user.companyId,
+  });
+  if (!feature) return res.status(404).json({ message: "Feature not found" });
+
+  const { name, kind, gherkinText } = req.body;
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ message: "Test name is required" });
+  }
+
+  const test = await E2eTest.create({
+    userId: req.user._id,
+    companyId: req.user.companyId,
+    projectId: feature.projectId,
+    featureId: feature._id,
+    name: String(name).trim().slice(0, 200),
+    source: "manual",
+    kind: TEST_KINDS.includes(kind) ? kind : "regression",
+    ...gherkinFromText(gherkinText, feature.name),
+    status: "draft",
+  });
+  res.status(201).json(test);
+}
+
+// Edit a case's name/kind/scenario — whether Claude wrote it from the video or
+// the user did. Only those fields are touched: specCode, heal log, commit and
+// status belong to the record/improve pipeline and are never overwritten from
+// here (editing the steps after a spec exists just means the next Improve run
+// has better instructions).
+async function updateTest(req, res) {
+  if (!requireCompany(req, res)) return;
+  const test = await E2eTest.findOne({
+    _id: req.params.testId,
+    companyId: req.user.companyId,
+  });
+  if (!test) return res.status(404).json({ message: "Test not found" });
+
+  const { name, kind, gherkinText } = req.body;
+  if (name != null) {
+    const trimmed = String(name).trim();
+    if (!trimmed) return res.status(400).json({ message: "Test name is required" });
+    test.name = trimmed.slice(0, 200);
+  }
+  if (kind != null) {
+    if (!TEST_KINDS.includes(kind)) {
+      return res.status(400).json({ message: `kind must be one of ${TEST_KINDS.join(", ")}` });
+    }
+    test.kind = kind;
+  }
+  if (gherkinText != null) {
+    const parsed = gherkinFromText(gherkinText, test.gherkin?.feature || "");
+    test.gherkinText = parsed.gherkinText;
+    // Keep the scenario title the video gave it when the text has no header.
+    if (!parsed.gherkin.scenario) parsed.gherkin.scenario = test.gherkin?.scenario || "";
+    test.gherkin = parsed.gherkin;
+  }
+  test.updatedAt = new Date();
+  await test.save();
+  res.json(test);
+}
+
 // Feature 2 — one-time login capture. Launches the recorder at the login page;
 // the user logs in by hand (handles SSO/2FA/whatever), and on close we save the
 // authenticated session (storageState) for the project. Done ONCE — every test
@@ -801,6 +923,11 @@ async function startClientRecording(req, res) {
     });
   }
 
+  const unreachable = unreachableFromCloud(startUrl);
+  if (unreachable) {
+    return res.status(400).json({ code: "URL_NOT_PUBLIC", message: unreachable });
+  }
+
   const token = crypto.randomBytes(24).toString("hex");
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   const ingestEndpoint = `${ingestBaseUrl(req)}/api/e2e/recordings/ingest`;
@@ -857,7 +984,7 @@ async function ingestClientRecording(req, res) {
     const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
     const now = new Date();
     const result = await E2eRecordingSession.updateOne(
-      { tokenHash, status: "recording" },
+      { tokenHash, status: "recording", kind: "recording" },
       {
         $push: {
           events: {
@@ -882,6 +1009,168 @@ async function ingestClientRecording(req, res) {
     console.error("e2e ingestClientRecording error:", err.message);
     return res.status(204).end(); // never break the recorder
   }
+}
+
+// How long the login browser stays alive waiting for the human. Generous on
+// purpose: an abandoned session costs one idle cloud browser until it expires,
+// while a session that dies mid-login costs the customer the whole capture.
+const LOGIN_SESSION_TIMEOUT_SECONDS = 15 * 60;
+
+// --- Cloud login capture -----------------------------------------------------
+// Same embedded browser as the cloud recorder, used to capture the project's
+// authenticated session instead of a flow. This replaces recordLogin() for
+// production: recordLogin spawns Playwright's codegen on the SERVER, so it can
+// only ever open a window when the backend runs on the user's own machine —
+// on Render there's no display and nothing opens. Here the browser lives in
+// Browserbase and the customer drives it from the iframe, so it works the same
+// locally and in production.
+//
+// Two deliberate differences from startClientRecording:
+//   - no recorder injected: we are not streaming keystrokes off a password field
+//   - no seeded session: a fresh login is the entire point
+async function startCloudLogin(req, res) {
+  if (!requireCompany(req, res)) return;
+  const project = await E2eProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  const envName = req.body?.env;
+  const target = resolveTarget(project, envName);
+  if (envName && !target.env) {
+    return res
+      .status(400)
+      .json({ message: `Environment "${envName}" not found on this project.` });
+  }
+
+  const base = (target.baseUrl || "").replace(/\/+$/, "");
+  const startUrl = target.loginUrl || (base ? `${base}/login` : "");
+  if (!startUrl) {
+    return res.status(400).json({
+      message: `Set a base URL (or login URL) for ${
+        target.name || "this project"
+      } first.`,
+    });
+  }
+
+  const unreachable = unreachableFromCloud(startUrl);
+  if (unreachable) {
+    return res.status(400).json({ code: "URL_NOT_PUBLIC", message: unreachable });
+  }
+
+  console.log(`[e2e cloud-login] start project=${project._id} env=${target.name || "-"} url=${startUrl}`);
+
+  try {
+    const { browserbaseSessionId, liveViewUrl } = await browserbase.startSession({
+      startUrl,
+      injectRecorder: false,
+      storageStateJson: "",
+      // A person has to type credentials here, maybe through SSO and 2FA. The
+      // 5-minute project default kills the browser mid-login.
+      timeoutSeconds: LOGIN_SESSION_TIMEOUT_SECONDS,
+    });
+
+    const session = await E2eRecordingSession.create({
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      projectId: project._id,
+      kind: "login",
+      envName: target.name || "",
+      // Unused for a login (nothing posts to /ingest), but the column is
+      // unique+required, so give it a value that can never collide.
+      tokenHash: crypto.randomBytes(32).toString("hex"),
+      browserbaseSessionId,
+      liveViewUrl,
+      status: "recording",
+    });
+
+    res.status(201).json({
+      recordingId: session._id,
+      liveViewUrl,
+      startUrl,
+      env: target.name || null,
+    });
+  } catch (err) {
+    console.error("e2e startCloudLogin error:", err);
+    res
+      .status(500)
+      .json({ message: err.message || "Could not start the cloud login" });
+  }
+}
+
+// Read the session out of the cloud browser and save it as the project's (or
+// environment's) login. From here on every recording and run starts already
+// logged in — the customer does this ONCE.
+async function finishCloudLogin(req, res) {
+  if (!requireCompany(req, res)) return;
+  const session = await E2eRecordingSession.findOne({
+    _id: req.params.recordingId,
+    companyId: req.user.companyId,
+    kind: "login",
+  });
+  if (!session) return res.status(404).json({ message: "Login session not found" });
+
+  const project = await E2eProject.findOne({
+    _id: session.projectId,
+    companyId: req.user.companyId,
+  });
+
+  // Capture BEFORE teardown — finishSession closes the CDP connection and the
+  // session becomes unreadable. Teardown still runs either way so we never
+  // strand a paid cloud browser.
+  const json = await browserbase.captureStorageState(session.browserbaseSessionId);
+  await browserbase.finishSession(session.browserbaseSessionId).catch((err) =>
+    console.error("e2e cloud-login teardown error:", err.message)
+  );
+
+  session.status = json ? "finished" : "error";
+  session.finishedAt = new Date();
+  await session.save();
+
+  if (!project) return res.status(404).json({ message: "Project not found" });
+
+  if (!json) {
+    return res.status(422).json({
+      message:
+        "We lost the connection to the login browser before the session could be saved. Please try again.",
+    });
+  }
+
+  // A browser that was never logged into still returns a well-formed but empty
+  // storageState. Saving that would leave the project looking authenticated
+  // while every run silently lands on the login page — reject it instead.
+  let parsed = null;
+  try {
+    parsed = JSON.parse(json);
+  } catch (_) {}
+  const hasCookies = (parsed?.cookies || []).length > 0;
+  const hasLocalStorage = (parsed?.origins || []).some(
+    (o) => (o.localStorage || []).length > 0
+  );
+  if (!hasCookies && !hasLocalStorage) {
+    return res.status(422).json({
+      message:
+        "No session was captured — log in inside the browser window before clicking Finish.",
+    });
+  }
+
+  const target = resolveTarget(project, session.envName);
+  const savedAt = new Date();
+  const authFile = authPathFor(project._id, target.env ? target.name : undefined);
+  persistStorageStateJson({ project, env: target.env }, json, authFile);
+  if (target.env) {
+    target.env.authSavedAt = savedAt;
+    project.markModified("environments");
+  } else {
+    project.login.authSavedAt = savedAt;
+  }
+  project.updatedAt = new Date();
+  await project.save();
+
+  console.log(`[e2e cloud-login] saved project=${project._id} env=${target.name || "-"} cookies=${(parsed?.cookies || []).length}`);
+
+  res.json({ authReady: true, authSavedAt: savedAt, env: target.name || null });
 }
 
 async function finishClientRecording(req, res) {
@@ -942,6 +1231,8 @@ module.exports = {
   generateFromVideo,
   listTests,
   getTest,
+  createTest,
+  updateTest,
   recordLogin,
   recordTest,
   improveTest,
@@ -950,4 +1241,6 @@ module.exports = {
   startClientRecording,
   ingestClientRecording,
   finishClientRecording,
+  startCloudLogin,
+  finishCloudLogin,
 };

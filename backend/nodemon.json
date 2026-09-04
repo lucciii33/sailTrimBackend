@@ -1,0 +1,9 @@
+{
+  "watch": ["."],
+  "ext": "js,json",
+  "ignore": [
+    "node_modules/*",
+    "test/*",
+    ".e2e-auth/*"
+  ]
+}

@@ -55,7 +55,11 @@ function extractCode(text) {
   return m ? m[1].trim() : "";
 }
 
-function renderGherkin(g = {}) {
+// `text` is the user's raw scenario when present — pass it through untouched so
+// Claude sees the real step order (interleaved When/Then, And/But), which
+// rebuilding from the three arrays would flatten.
+function renderGherkin(g = {}, text = "") {
+  if (text && text.trim()) return text.trim();
   const lines = [];
   if (g.feature) lines.push(`Feature: ${g.feature}`);
   if (g.scenario) lines.push(`Scenario: ${g.scenario}`);
@@ -106,7 +110,7 @@ async function improveAndHeal({ test, project, storagePath, env = null, anthropi
 
   const task = [
     "INTENDED BEHAVIOR (Gherkin):",
-    renderGherkin(test.gherkin),
+    renderGherkin(test.gherkin, test.gherkinText),
     "",
     "AVAILABLE TEST DATA (you may use these values):",
     renderVariables(project.variables),

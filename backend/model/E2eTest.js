@@ -69,7 +69,9 @@ const e2eTestSchema = new mongoose.Schema({
   name: { type: String, required: true },
   source: {
     type: String,
-    enum: ["video", "recording", "cloud-recording"],
+    // "manual" = the user wrote the Gherkin by hand in the UI instead of
+    // getting it from a demo video.
+    enum: ["video", "recording", "cloud-recording", "manual"],
     default: "video",
   },
   kind: {
@@ -78,6 +80,11 @@ const e2eTestSchema = new mongoose.Schema({
     default: "regression",
   },
   gherkin: { type: gherkinSchema, default: () => ({}) },
+  // The scenario exactly as written/pasted by the user. Real Gherkin interleaves
+  // steps (When → Then → And → When …), which the three arrays above cannot
+  // represent, so THIS is the source of truth once it's set — the arrays are
+  // kept in sync as a derived, order-losing view for older readers.
+  gherkinText: { type: String, default: "" },
 
   // Video-source provenance.
   transcript: { type: String, default: "" },

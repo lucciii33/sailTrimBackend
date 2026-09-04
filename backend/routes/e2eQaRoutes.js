@@ -17,6 +17,8 @@ const {
   generateFromVideo,
   listTests,
   getTest,
+  createTest,
+  updateTest,
   recordLogin,
   recordTest,
   improveTest,
@@ -25,6 +27,8 @@ const {
   startClientRecording,
   ingestClientRecording,
   finishClientRecording,
+  startCloudLogin,
+  finishCloudLogin,
 } = require("../controllers/e2eQaController");
 
 // The injected recorder POSTs events as text/plain (CORS-simple, no preflight).
@@ -53,13 +57,22 @@ router.post(
 );
 // Tests of a feature.
 router.get("/features/:featureId/tests", protect, listTests);
+// Write a case by hand (no video) — same shape as a generated one.
+router.post("/features/:featureId/tests", protect, createTest);
 
 // Feature 2: capture the login session ONCE for the project.
+// record-login spawns Playwright codegen on the SERVER — local dev only (a
+// deployed backend has no display). The cloud pair below is the one that works
+// in production; both write to the same project session.
 router.post("/projects/:id/record-login", protect, recordLogin);
+router.post("/projects/:id/cloud-login/start", protect, startCloudLogin);
+router.post("/cloud-login/:recordingId/finish", protect, finishCloudLogin);
 
 // Tests
 router.get("/projects/:id/tests", protect, listTests);
 router.get("/tests/:testId", protect, getTest);
+// Edit the name/kind/Gherkin of any case, generated or hand-written.
+router.put("/tests/:testId", protect, updateTest);
 // Feature 2: record the flow with Playwright → saves the spec on the test.
 router.post("/tests/:testId/record", protect, recordTest);
 
