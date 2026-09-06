@@ -133,9 +133,22 @@ async function handleInstallation(payload) {
       installationId: installation.id,
       accountLogin: installation.account.login,
       accountType: installation.account.type,
-      repos,
       installedAt: new Date(),
     };
+
+    // Same protection as the repositories handler: `payload.repositories` is
+    // absent on an "all repositories" install, and treating that as "no repos"
+    // erases a working installation.
+    if (repos.length > 0) {
+      set.repos = repos;
+    } else if ((existing?.repos || []).length > 0) {
+      console.error(
+        `[github webhook] REFUSING to wipe ${existing.repos.length} repo(s) for ` +
+          `install=${installation.id} (${installation.account.login}): payload carried no repositories.`
+      );
+    } else {
+      set.repos = repos;
+    }
     if (userId) set.userId = userId;
     if (companyId) set.companyId = companyId;
 
@@ -237,8 +250,27 @@ async function handleInstallationRepositories(payload) {
       installationId: installation.id,
       accountLogin: installation.account.login,
       accountType: installation.account.type,
-      repos,
     };
+
+    // NEVER replace a non-empty repo list with an empty one.
+    //
+    // GitHub can answer this call with nothing even when the installation is
+    // healthy — the token is issued moments after the approval and the new
+    // grant has not always propagated. Trusting that answer wipes every repo
+    // the customer had, which is far worse than being briefly out of date.
+    // Skipping the write leaves the previous list intact; the next event, or
+    // the Refresh button, corrects it.
+    if (repos.length > 0) {
+      set.repos = repos;
+    } else if ((existing?.repos || []).length > 0) {
+      console.error(
+        `[github webhook] REFUSING to wipe ${existing.repos.length} repo(s) for ` +
+          `install=${installation.id} (${installation.account.login}): GitHub returned an ` +
+          `empty list. Keeping the existing list.`
+      );
+    } else {
+      set.repos = repos;
+    }
     if (userId) set.userId = userId;
     if (companyId) set.companyId = companyId;
 
