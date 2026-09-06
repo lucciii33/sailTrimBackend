@@ -59,20 +59,7 @@ async function syncInstallations(req, res) {
   await Promise.all(
     installations.map(async (inst) => {
       try {
-        const fresh = await fetchInstallationReposForModel(inst.installationId);
-        // Refuse to turn a working install into an empty one. GitHub answering
-        // with nothing is far more likely to be a transient token/propagation
-        // problem than the customer genuinely having zero repos, and the cost
-        // of believing it is wiping their whole list.
-        if (fresh.length === 0 && (inst.repos || []).length > 0) {
-          console.error(
-            `[installations] refusing to wipe ${inst.repos.length} repo(s) for ` +
-              `install=${inst.installationId}: GitHub returned an empty list`
-          );
-          failed.push(inst.installationId);
-          return;
-        }
-        inst.repos = fresh;
+        inst.repos = await fetchInstallationReposForModel(inst.installationId);
         await inst.save();
       } catch (err) {
         // One dead installation (revoked on GitHub, suspended) must not sink
