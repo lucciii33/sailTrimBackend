@@ -8,6 +8,7 @@ const connectDB = require("./config/db");
 
 // const sessionDeleteCronJob = require("./jobs/deleteSession.js");
 const cors = require("cors");
+const helmet = require("helmet");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 // const Mailjet = require("node-mailjet"); // Para enviar correos
 const User = require("./model/userModel.js");
@@ -21,6 +22,9 @@ const bodyParser = require("body-parser");
 connectDB();
 
 const app = express();
+app.get("/", (req, res) => {
+  res.status(200).send("ok");
+});
 
 // app.post(
 //   "/webhookFailPayments",
@@ -229,25 +233,41 @@ const app = express();
 //   }
 // );
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(
+  "/webhook",
+  express.raw({ type: "application/json" }),
+  require("./routes/webhook"),
+);
+
+app.use(helmet());
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 app.use(cors());
 
 const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
 app.use("/api/user", require("./routes/userRoutes"));
+app.use("/api/company", require("./routes/companyRoutes"));
 app.use("/api/checkout", require("./routes/checkoutRoutes"));
-app.use("/api/fridge", require("./routes/fridgeRoutes"));
-app.use("/api/recipe", require("./routes/recipeRoutes"));
 app.use("/api/inventory", require("./routes/inventoryRoutes"));
+app.use("/api/order", require("./routes/orderRoutes"));
+app.use("/api/docs", require("./routes/docRoutes"));
+app.use("/api/github", require("./routes/githubRoutes"));
+app.use("/api/mcp-lab", require("./routes/mcpLabRoutes"));
+app.use("/api/qa", require("./routes/apiQARoutes"));
+app.use("/api/e2e", require("./routes/e2eQaRoutes"));
+app.use("/api/installations", require("./routes/installationsRoutes"));
+app.use("/api/example", require("./routes/exampleRoutes"));
 
+app.use((req, res) => res.status(404).json({ message: 'Route not found' }))
 app.use(errorHandler);
 
 // app.listen(port, () => console.log(`Server started on port ${port}`));
 if (process.env.NODE_ENV !== "test") {
-  app.listen(port, () => console.log(`Server started on port ${port}`));
+  app.listen(port, "0.0.0.0", () =>
+    console.log(`Server started on port ${port}`),
+  );
 }
-
 // resetLoginDaysJob();
 // scrapMarinasApify();
 module.exports = app;

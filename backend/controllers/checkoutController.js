@@ -1,8 +1,6 @@
 const asyncHanlder = require("express-async-handler");
 const express = require("express");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-console.log("stripe", stripe);
-console.log("process.env.STRIPE_SECRET_KEY", process.env.STRIPE_SECRET_KEY);
 const User = require("../model/userModel");
 const Mailjet = require("node-mailjet");
 
