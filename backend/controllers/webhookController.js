@@ -83,6 +83,20 @@ function verifySignature(body, signature) {
   return crypto.timingSafeEqual(sigBuffer, digestBuffer);
 }
 
+// The workspace an installation belongs to, resolved from its owner.
+//
+// Visibility is company-scoped, so an installation carrying a userId but no
+// companyId is visible to exactly one person and invisible to their teammates —
+// which is indistinguishable, from the UI, from the repo never arriving. Older
+// installations predate the field, so resolve it from the owner rather than
+// assuming whatever is already stored is complete.
+async function resolveCompanyId(userId, knownCompanyId) {
+  if (knownCompanyId) return knownCompanyId;
+  if (!userId) return null;
+  const user = await User.findById(userId).select("companyId");
+  return user?.companyId || null;
+}
+
 async function handleInstallation(payload) {
   try {
     const { installation, repositories, requester } = payload;
@@ -128,6 +142,8 @@ async function handleInstallation(payload) {
         unlinkedRequester = String(requester.id);
       }
     }
+
+    companyId = await resolveCompanyId(userId, companyId);
 
     const set = {
       installationId: installation.id,
@@ -243,6 +259,8 @@ async function handleInstallationRepositories(payload) {
         unlinkedRequester = String(requester.id);
       }
     }
+
+    companyId = await resolveCompanyId(userId, companyId);
 
     const repos = await fetchInstallationReposForModel(installation.id);
 
