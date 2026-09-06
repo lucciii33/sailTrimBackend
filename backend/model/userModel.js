@@ -84,12 +84,6 @@ const userSchema = mongoose.Schema(
     // requester.id, since GitHub doesn't return an OAuth code on a request.
     githubUserId: { type: String, default: "", index: true },
     githubUsername: { type: String, default: "" },
-    // Organisations this account belongs to on GitHub, captured from their own
-    // OAuth token when they connect. This is the only trustworthy answer to
-    // "is this person allowed to claim that installation?" — without it we
-    // would either hide every unclaimed install (the repo stays invisible) or
-    // let anyone claim any org (they steal someone else's repos).
-    githubOrgs: { type: [String], default: [], index: true },
     anthropicKeyEncrypted: {
       type: String,
       required: false,
