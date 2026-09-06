@@ -5,7 +5,19 @@ const authSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["none", "apiKey", "bearer", "basic", "custom"],
+      // oauth2_client_credentials is resolved at run time by
+      // resolveRuntimeAuth (it fetches a token from token_url using the
+      // client_id/client_secret variables). It was missing here, so picking it
+      // in the UI failed schema validation on save and only worked by
+      // accident, via the auto-detect path.
+      enum: [
+        "none",
+        "apiKey",
+        "bearer",
+        "basic",
+        "custom",
+        "oauth2_client_credentials",
+      ],
       default: "none",
     },
     headerName: { type: String, default: "" },
@@ -13,7 +25,7 @@ const authSchema = new mongoose.Schema(
     username: { type: String, default: "" },
     passwordEncrypted: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // Environment variable: used to fill {{key}} / path params ({key}) in requests
@@ -25,7 +37,7 @@ const variableSchema = new mongoose.Schema(
     value: { type: String, default: "" }, // encrypted when secret=true
     secret: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // Optional link to a GitHub repo, so a manually-pasted spec can later be
@@ -41,7 +53,7 @@ const githubSchema = new mongoose.Schema(
     defaultBranch: { type: String, default: "" },
     lastSyncedAt: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // An imported API spec lives as its own project — decoupled from any GitHub

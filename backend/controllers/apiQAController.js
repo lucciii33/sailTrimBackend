@@ -42,7 +42,13 @@ function serializeConfig(cfg) {
     defaultHeaders: cfg.defaultHeaders
       ? Object.fromEntries(cfg.defaultHeaders)
       : {},
-    variables: (cfg.variables || []).map((v) => ({ key: v.key, value: v.value })),
+    variables: (cfg.variables || []).map((v) => ({
+      key: v.key,
+      // Secrets go out masked — the value on the wire is ciphertext and the UI
+      // has no use for it. Saving a masked value back means "unchanged".
+      value: v.secret ? maskSecret(decrypt(v.value)) : v.value,
+      secret: Boolean(v.secret),
+    })),
     updatedAt: cfg.updatedAt,
   };
 }
@@ -68,18 +74,35 @@ async function upsertConfig(req, res) {
     return res.status(400).json({ message: "baseUrl is required" });
   }
 
-  const cleanVariables = (Array.isArray(variables) ? variables : [])
-    .filter((v) => v && typeof v.key === "string" && v.key.trim())
-    .map((v) => ({ key: v.key.trim(), value: String(v.value ?? "").trim() }));
-
-  // The dialog only ever shows a MASKED token, so an empty value on save means
-  // "unchanged", NOT "clear it". Preserve the existing secret when no new value
-  // is sent (same auth type) — otherwise re-saving the config wipes the token.
   const existing = await ApiQaConfig.findOne({
     companyId: req.user.companyId,
     owner,
     repo,
   });
+
+  // Variables marked secret are encrypted at rest, same as an ApiProject's.
+  // A blank or masked incoming value means "unchanged" (the UI never echoes a
+  // secret back), so editing another field can't silently wipe a token.
+  const prevVars = new Map((existing?.variables || []).map((v) => [v.key, v]));
+  const cleanVariables = (Array.isArray(variables) ? variables : [])
+    .filter((v) => v && typeof v.key === "string" && v.key.trim())
+    .map((v) => {
+      const key = v.key.trim();
+      if (!v.secret) {
+        return { key, value: String(v.value ?? "").trim(), secret: false };
+      }
+      const incoming = String(v.value ?? "");
+      const looksMasked = !incoming.trim() || /\*/.test(incoming);
+      return {
+        key,
+        value: looksMasked ? prevVars.get(key)?.value || "" : encrypt(incoming),
+        secret: true,
+      };
+    });
+
+  // The dialog only ever shows a MASKED token, so an empty value on save means
+  // "unchanged", NOT "clear it". Preserve the existing secret when no new value
+  // is sent (same auth type) — otherwise re-saving the config wipes the token.
   const prevAuth = existing?.auth || {};
   const nextType = auth.type || "none";
   const keepPrev = nextType !== "none" && prevAuth.type === nextType;
@@ -699,6 +722,106 @@ async function deleteSuite(req, res) {
   res.json({ success: true });
 }
 
+
+// Per-endpoint variables. Same encryption + "blank means unchanged" rules as
+// the global ones, so a token pasted here is never stored in the clear and is
+// never wiped by editing a neighbouring field.
+async function setDocVariables(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { docId } = req.params;
+  const { variables } = req.body;
+
+  const doc = await Doc.findOne({ _id: docId, companyId: req.user.companyId });
+  if (!doc) return res.status(404).json({ message: "Endpoint not found" });
+
+  if (Array.isArray(variables)) {
+    const prev = new Map((doc.variables || []).map((v) => [v.key, v]));
+    doc.variables = variables
+      .filter((v) => v && typeof v.key === "string" && v.key.trim())
+      .map((v) => {
+        const key = v.key.trim();
+        if (!v.secret) {
+          return { key, value: String(v.value ?? ""), secret: false };
+        }
+        const incoming = String(v.value ?? "");
+        const looksMasked = !incoming.trim() || /\*/.test(incoming);
+        return {
+          key,
+          value: looksMasked ? prev.get(key)?.value || "" : encrypt(incoming),
+          secret: true,
+        };
+      });
+    await doc.save();
+  }
+
+  res.json({
+    variables: (doc.variables || []).map((v) => ({
+      key: v.key,
+      value: v.secret ? maskSecret(decrypt(v.value)) : v.value,
+      secret: Boolean(v.secret),
+    })),
+  });
+}
+
+// What a test run will actually resolve for this endpoint: the global set, the
+// endpoint's own overrides, and which of the two each key ends up coming from.
+// This is the "why am I still getting a 401" answer, in one call.
+async function getDocVariables(req, res) {
+  if (!requireCompany(req, res)) return;
+  const doc = await Doc.findOne({
+    _id: req.params.docId,
+    companyId: req.user.companyId,
+  });
+  if (!doc) return res.status(404).json({ message: "Endpoint not found" });
+
+  let globalVars = [];
+  let authType = "none";
+  let baseUrl = "";
+  if (doc.projectId) {
+    const project = await ApiProject.findOne({
+      _id: doc.projectId,
+      companyId: req.user.companyId,
+    });
+    globalVars = project?.variables || [];
+    authType = project?.auth?.type || "none";
+    baseUrl = project?.baseUrl || "";
+  } else {
+    const cfg = await ApiQaConfig.findOne({
+      companyId: req.user.companyId,
+      owner: doc.owner,
+      repo: doc.repo,
+    });
+    globalVars = cfg?.variables || [];
+    authType = cfg?.auth?.type || "none";
+    baseUrl = cfg?.baseUrl || "";
+  }
+
+  const docKeys = new Set((doc.variables || []).map((v) => v.key));
+  const mask = (v) => (v.secret ? maskSecret(decrypt(v.value)) : v.value);
+
+  res.json({
+    scope: doc.projectId ? "project" : "repo",
+    baseUrl,
+    authType,
+    // The endpoint itself, so one call is enough to render the whole
+    // per-endpoint config block (variables + request body) anywhere.
+    method: doc.method,
+    path: doc.path,
+    exampleBody: doc.exampleBody ?? null,
+    global: globalVars.map((v) => ({
+      key: v.key,
+      value: mask(v),
+      secret: Boolean(v.secret),
+      overridden: docKeys.has(v.key),
+    })),
+    endpoint: (doc.variables || []).map((v) => ({
+      key: v.key,
+      value: mask(v),
+      secret: Boolean(v.secret),
+    })),
+  });
+}
+
 module.exports = {
   getConfig,
   upsertConfig,
@@ -728,4 +851,6 @@ module.exports = {
   runSuite,
   refineSuiteCase,
   deleteSuite,
+  getDocVariables,
+  setDocVariables,
 };

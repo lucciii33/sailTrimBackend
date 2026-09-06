@@ -5,18 +5,16 @@ const {
 } = require("../services/githubService");
 const { logEvent } = require("../services/auditLogger");
 
-// Which installations this user is allowed to see.
+// Which installations a user is allowed to see.
 //
-// A GitHub App installs on an ORG, not on a person, but `Installation.userId`
-// records only whoever connected it first. Scoping the list to that one id made
-// an org install invisible to every teammate — the approver connects it and the
-// person who actually asked for it sees nothing. Docs are already company-wide
-// (docController scopes by companyId), so the repo list matching that is what
-// makes the two consistent.
+// An installation is stored against the person who connected it, but a GitHub
+// App installed on an ORG belongs to the whole workspace — a teammate who never
+// clicked "Connect" still has to see those repos. Filtering on userId alone is
+// what made a member see nothing while their colleague saw everything, and it
+// made the same database look different depending on who was logged in.
 //
-// companyId is only added to the filter when the user actually has one:
-// `{ companyId: undefined }` is not an empty match in Mongo, it matches every
-// document with no companyId — i.e. it would leak unlinked installs to anyone.
+// userId is kept (and matched as both ObjectId and string, since older rows
+// stored it either way) so a personal install with no company still resolves.
 function visibilityFilter(user) {
   const uid = user._id;
   const clauses = [{ userId: uid }, { userId: String(uid) }];
@@ -37,21 +35,17 @@ function toRepoRows(installations) {
 }
 
 async function listInstallations(req, res) {
-  const installations = await Installation.find(visibilityFilter(req.user)).sort(
-    { installedAt: -1 }
-  );
+  const installations = await Installation.find(
+    visibilityFilter(req.user)
+  ).sort({ installedAt: -1 });
 
   res.json(toRepoRows(installations));
 }
 
-// Manual "Refresh repositories" — re-reads every installation this user can see
-// straight from GitHub and rewrites the stored repo list.
-//
-// The `installation_repositories` webhook keeps this current on its own, but a
-// webhook that was never delivered (the event wasn't subscribed yet, the server
-// was down, the signature failed) leaves a repo list that is wrong forever with
-// no way for the user to fix it. This is that way out — and it's safe to spam,
-// since it only ever replaces the list with what GitHub reports right now.
+// Re-read the repo list from GitHub for every install the user can see. The
+// stored `repos` array is a snapshot taken when the app was connected, so a repo
+// added later never appears until something refreshes it — this is the manual
+// escape hatch for when a webhook never arrived.
 async function syncInstallations(req, res) {
   const installations = await Installation.find(visibilityFilter(req.user));
 
@@ -123,4 +117,8 @@ async function disconnectInstallation(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { listInstallations, syncInstallations, disconnectInstallation };
+module.exports = {
+  listInstallations,
+  syncInstallations,
+  disconnectInstallation,
+};

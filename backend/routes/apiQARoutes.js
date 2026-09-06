@@ -30,6 +30,8 @@ const {
   runSuite,
   refineSuiteCase,
   deleteSuite,
+  getDocVariables,
+  setDocVariables,
 } = require("../controllers/apiQAController");
 
 router.get("/config/:owner/:repo", protect, getConfig);
@@ -76,5 +78,10 @@ router.get("/repos/:owner/:repo/suites", protect, listSuites);
 router.post("/suites/:suiteId/run", protect, runSuite);
 router.post("/suites/:suiteId/cases/:caseId/refine", protect, refineSuiteCase);
 router.delete("/suites/:suiteId", protect, deleteSuite);
+
+// Per-endpoint variables (tokens / api keys / ids a single test needs). GET
+// also reports the global set and which keys this endpoint overrides.
+router.get("/docs/:docId/variables", protect, getDocVariables);
+router.put("/docs/:docId/variables", protect, setDocVariables);
 
 module.exports = router;

@@ -122,6 +122,38 @@ async function resolveRuntimeAuth(auth, variables) {
   return auth;
 }
 
+// A saved bearer token is usually a JWT, and JWTs expire. When one does, every
+// authenticated case comes back 401 and the report blames the API — the run
+// looks like a wall of real failures when the only problem is a stale token.
+// Read `exp` (no verification: we're not validating the token, just reading the
+// claim it advertises) and refuse to run, saying exactly what to do.
+function jwtExpiry(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return null; // opaque token, nothing to read
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString()
+    );
+    return payload.exp ? new Date(payload.exp * 1000) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function assertTokenNotExpired(runtimeAuth) {
+  if (runtimeAuth?.type !== "bearer") return; // oauth2 tokens are fetched fresh
+  const exp = jwtExpiry(decrypt(runtimeAuth.valueEncrypted));
+  if (exp && exp < new Date()) {
+    const err = new Error(
+      `The saved bearer token expired on ${exp.toISOString().slice(0, 16).replace("T", " ")} UTC. ` +
+        `Every authenticated test will come back 401 until it's replaced — open "Target & auth" and paste a fresh token.`
+    );
+    err.statusCode = 400;
+    err.code = "TOKEN_EXPIRED";
+    throw err;
+  }
+}
+
 function assertAuthConfigured(runtimeAuth) {
   if (!runtimeAuth || runtimeAuth.type === "none") return;
   const headers = buildAuthHeaders(runtimeAuth);
@@ -807,6 +839,8 @@ async function loadDocForCompany(docId, companyId) {
 async function resolveDocRunConfig(doc, companyId) {
   let config;
   let variables = {};
+  // Filled at the end: the endpoint's own variables override the global ones.
+  const docVars = buildVarMap(doc.variables);
   if (doc.projectId) {
     const project = await ApiProject.findOne({
       _id: doc.projectId,
@@ -822,6 +856,7 @@ async function resolveDocRunConfig(doc, companyId) {
     variables = buildVarMap(project.variables);
     const runtimeAuth = await resolveRuntimeAuth(project.auth, variables);
     assertAuthConfigured(runtimeAuth);
+    assertTokenNotExpired(runtimeAuth);
     config = {
       baseUrl: project.baseUrl,
       auth: runtimeAuth,
@@ -842,8 +877,22 @@ async function resolveDocRunConfig(doc, companyId) {
     }
     // Path/template variables (e.g. a real :id) so the runner can fill routes.
     variables = buildVarMap(config.variables);
+    // Repos went straight to the runner with their stored auth — so an expired
+    // token produced six 401s and no explanation. Same checks as the project
+    // path now.
+    const runtimeAuth = await resolveRuntimeAuth(config.auth, variables);
+    assertAuthConfigured(runtimeAuth);
+    assertTokenNotExpired(runtimeAuth);
+    config = {
+      baseUrl: config.baseUrl,
+      auth: runtimeAuth,
+      defaultHeaders: config.defaultHeaders,
+    };
   }
-  return { config, variables };
+  // Endpoint-level values win over the global ones. Both Run QA and a saved
+  // suite run go through here, so they resolve identically — an id or token you
+  // set on one endpoint applies to every way of calling it.
+  return { config, variables: { ...variables, ...docVars } };
 }
 
 async function findBugs({ docId, userId, companyId, anthropicClient = null }) {

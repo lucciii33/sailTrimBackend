@@ -23,6 +23,25 @@ const docSchema = new mongoose.Schema({
   method: { type: String, required: true },
   path: { type: String, required: true },
   section: { type: String, default: "default" },
+  // Per-endpoint overrides for {{key}} / {id} substitution. The global set
+  // (ApiQaConfig.variables for a repo, ApiProject.variables for a spec) applies
+  // to every endpoint; these win for THIS one — so a test that needs its own
+  // id, or a token with different scope, doesn't force you to change the value
+  // every other endpoint depends on. Secrets are encrypted at rest, same rule
+  // as the global ones.
+  variables: {
+    type: [
+      new mongoose.Schema(
+        {
+          key: { type: String, required: true },
+          value: { type: String, default: "" },
+          secret: { type: Boolean, default: false },
+        },
+        { _id: false }
+      ),
+    ],
+    default: [],
+  },
   description: { type: String, required: true },
   requestBody: [paramSchema],
   queryParams: [paramSchema],
