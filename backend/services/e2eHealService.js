@@ -150,12 +150,14 @@ async function improveAndHeal({ test, project, storagePath, env = null, anthropi
     const run = await runSpec(spec, {
       baseUrl: runBaseUrl,
       storagePath,
+      testId: test._id,
     });
     heal.push({
       attempt,
       passed: run.passed,
       error: run.error || "",
       durationMs: Date.now() - t0,
+      traceUrl: run.traceUrl || "",
     });
 
     dbg(`attempt ${attempt} run: passed=${run.passed} durationMs=${Date.now() - t0}`);

@@ -15,6 +15,7 @@ const {
   extractMountedModulePaths,
   extractMountPrefixes,
   isOrphanRouteFile,
+  fetchInstallationRepos,
   MAX_FILE_BYTES,
 } = require("../services/githubService");
 const {
@@ -76,21 +77,6 @@ function isExcludedPath(p) {
 }
 function hasSourceExtension(p) {
   return SOURCE_EXTENSIONS.some((ext) => p.endsWith(ext));
-}
-
-async function fetchInstallationRepos(octokit) {
-  const repos = [];
-  let page = 1;
-  while (true) {
-    const { data } = await octokit.request("GET /installation/repositories", {
-      per_page: 100,
-      page,
-    });
-    repos.push(...data.repositories);
-    if (data.repositories.length < 100) break;
-    page += 1;
-  }
-  return repos;
 }
 
 // `state` used to be the raw user id, sitting in plain view in the
@@ -164,6 +150,46 @@ async function githubUserFromCode(code) {
   }
 }
 
+// Attach installations that were approved for this person BEFORE we knew who
+// they were on GitHub.
+//
+// The link between "an org owner approved a request" and "this Olivia account"
+// is the requester's GitHub id, and that id only exists for us once the user
+// has been through the OAuth hop below. Someone who never did — the common case
+// for a teammate who was invited into a workspace and went straight to
+// requesting a repo — got approved on GitHub and saw nothing in Olivia, with no
+// self-service way out. The webhook parks those requester ids on the
+// installation; this runs the moment we learn the id and claims them.
+//
+// Only installations that are still UNLINKED are claimed, so this can never
+// steal an installation that already belongs to someone.
+async function reconcileInstallationsForGithubUser(userId, githubUserId) {
+  if (!githubUserId) return 0;
+
+  const orphans = await Installation.find({
+    pendingRequesterIds: String(githubUserId),
+    userId: null,
+  });
+
+  if (orphans.length === 0) return 0;
+
+  const user = await User.findById(userId).select("companyId");
+
+  for (const inst of orphans) {
+    inst.userId = userId;
+    if (user?.companyId) inst.companyId = user.companyId;
+    inst.pendingRequesterIds = inst.pendingRequesterIds.filter(
+      (id) => id !== String(githubUserId)
+    );
+    await inst.save();
+    console.log(
+      `[github] reconciled installation ${inst.installationId} (${inst.accountLogin}) -> user=${userId}`
+    );
+  }
+
+  return orphans.length;
+}
+
 // Authenticated endpoint the frontend calls right before sending the user
 // to GitHub, instead of building the install URL itself with a raw id.
 async function getConnectLink(req, res) {
@@ -222,6 +248,20 @@ async function githubCallback(req, res) {
         console.log(
           `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`
         );
+        // Now that we know who they are on GitHub, pick up anything that was
+        // already approved for them while they were still anonymous to us.
+        const linked = await reconcileInstallationsForGithubUser(
+          state,
+          ghUser.id
+        ).catch((e) => {
+          console.error("reconcile installations failed:", e.message);
+          return 0;
+        });
+        if (linked) {
+          console.log(
+            `[github] reconciled ${linked} previously-approved installation(s) for user=${state}`
+          );
+        }
       }
     }
     const slug = process.env.GITHUB_APP_SLUG || "OliviaTools";

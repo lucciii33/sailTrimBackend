@@ -24,6 +24,12 @@ const {
   getRun,
   listSuiteRuns,
   getSuiteRun,
+  generateSuite,
+  generateSectionSuites,
+  listSuites,
+  runSuite,
+  refineSuiteCase,
+  deleteSuite,
 } = require("../controllers/apiQAController");
 
 router.get("/config/:owner/:repo", protect, getConfig);
@@ -56,5 +62,19 @@ router.get("/run/:id", protect, getRun);
 router.post("/projects/:id/suite/:section", protect, findBugsForSection);
 router.get("/projects/:id/suite-runs", protect, listSuiteRuns);
 router.get("/suite-run/:id", protect, getSuiteRun);
+
+// Saved test suites (smoke / regression) — generated per endpoint, kept, re-run
+// later to catch behaviour that changed. Distinct from find-bugs above, which
+// generates throwaway cases for a single hunt.
+router.post("/docs/:docId/suites", protect, generateSuite);
+router.post("/projects/:id/sections/:section/suites", protect, generateSectionSuites);
+router.get("/projects/:id/suites", protect, listSuites);
+// Same two, for endpoints that came from a connected GitHub repo instead of a
+// pasted spec — those have owner/repo and no projectId.
+router.post("/repos/:owner/:repo/sections/:section/suites", protect, generateSectionSuites);
+router.get("/repos/:owner/:repo/suites", protect, listSuites);
+router.post("/suites/:suiteId/run", protect, runSuite);
+router.post("/suites/:suiteId/cases/:caseId/refine", protect, refineSuiteCase);
+router.delete("/suites/:suiteId", protect, deleteSuite);
 
 module.exports = router;

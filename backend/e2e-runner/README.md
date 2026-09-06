@@ -19,14 +19,33 @@ Chromium on this host has no such ceiling and no per-session cost.
 
 ## Deploy requirement
 
-The browser binary is NOT installed by `npm install`. The build step must run:
+Two things, and the second one is the one that bites.
+
+**1. Build command** — `npm install` does not fetch the browser binary:
 
     npm install && npx playwright install chromium
 
-Without it, Improve fails with a message saying exactly this. Login and cloud
-recording are unaffected — those use Browserbase and need no local browser.
+**2. Environment variable — `PLAYWRIGHT_BROWSERS_PATH=0`**
 
-If the platform's image is missing Chromium's shared libraries, either add
+By default Playwright installs browsers into `$HOME/.cache/ms-playwright`, which
+on Render is OUTSIDE the project directory. The build writes it there and the
+runtime container never sees it, so the install "succeeds" and then every launch
+fails with:
+
+    browserType.launch: Executable doesn't exist at
+    /opt/render/.cache/ms-playwright/chromium_headless_shell-1228/...
+
+`PLAYWRIGHT_BROWSERS_PATH=0` redirects the install into
+`node_modules/playwright-core/.local-browsers/`, which lives in the project
+directory and therefore survives into the runtime. Set it in the platform's
+environment settings so it applies to BOTH the build and the running service —
+setting it on only one of the two reproduces the same mismatch.
+
+Login and cloud recording are unaffected by all of this — they use Browserbase
+and need no local browser.
+
+If the platform's image is missing Chromium's shared libraries, the failure looks
+different (`libnss3.so: cannot open shared object file`). Then either add
 `--with-deps` (needs root) or deploy from a container based on
 `mcr.microsoft.com/playwright`.
 

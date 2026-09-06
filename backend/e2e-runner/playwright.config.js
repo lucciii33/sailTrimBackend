@@ -25,9 +25,19 @@ module.exports = defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["json"]],
+  // Written next to the specs, read by the runner and deleted after each attempt
+  // (the trace is uploaded to S3 first — this host's disk is ephemeral).
+  outputDir: path.join(__dirname, "artifacts"),
   use: {
     baseURL: process.env.E2E_BASE_URL,
-    // Traces cost disk and time; the loop feeds Claude the error text, not a trace.
+    // PAUSED. Traces are a DOM snapshot of the customer's app in a LOGGED-IN
+    // session — real data, and whatever tokens the network log captured — and
+    // they were being uploaded to a publicly-readable S3 bucket. Turned off
+    // until that's behind signed, expiring URLs.
+    // To re-enable, swap the two lines below back and uncomment the upload in
+    // e2ePlaywrightRunner.js (search: PAUSED).
+    // trace: "retain-on-failure",
+    // screenshot: "only-on-failure",
     trace: "off",
     screenshot: "off",
     video: "off",

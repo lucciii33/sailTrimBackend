@@ -37,6 +37,10 @@ const healIterationSchema = new mongoose.Schema(
     passed: { type: Boolean, default: false },
     error: { type: String, default: "" },
     durationMs: { type: Number },
+    // S3 link to the Playwright trace for a FAILED attempt (DOM snapshots,
+    // per-step screenshots, network). Empty when the attempt passed, or when
+    // the upload failed — a missing trace never blocks the result.
+    traceUrl: { type: String, default: "" },
   },
   { _id: false }
 );

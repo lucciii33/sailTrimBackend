@@ -1,14 +1,31 @@
 const Installation = require("../model/Installation");
-const { uninstallApp } = require("../services/githubService");
+const {
+  uninstallApp,
+  fetchInstallationReposForModel,
+} = require("../services/githubService");
 const { logEvent } = require("../services/auditLogger");
 
-async function listInstallations(req, res) {
-  const uid = req.user._id;
-  const installations = await Installation.find({
-    $or: [{ userId: uid }, { userId: String(uid) }],
-  }).sort({ installedAt: -1 });
+// Which installations this user is allowed to see.
+//
+// A GitHub App installs on an ORG, not on a person, but `Installation.userId`
+// records only whoever connected it first. Scoping the list to that one id made
+// an org install invisible to every teammate — the approver connects it and the
+// person who actually asked for it sees nothing. Docs are already company-wide
+// (docController scopes by companyId), so the repo list matching that is what
+// makes the two consistent.
+//
+// companyId is only added to the filter when the user actually has one:
+// `{ companyId: undefined }` is not an empty match in Mongo, it matches every
+// document with no companyId — i.e. it would leak unlinked installs to anyone.
+function visibilityFilter(user) {
+  const uid = user._id;
+  const clauses = [{ userId: uid }, { userId: String(uid) }];
+  if (user.companyId) clauses.push({ companyId: user.companyId });
+  return { $or: clauses };
+}
 
-  const repos = installations.flatMap((inst) =>
+function toRepoRows(installations) {
+  return installations.flatMap((inst) =>
     (inst.repos || []).map((r) => ({
       installationId: inst.installationId,
       owner: inst.accountLogin,
@@ -17,8 +34,50 @@ async function listInstallations(req, res) {
       fullName: r.repoFullName,
     }))
   );
+}
 
-  res.json(repos);
+async function listInstallations(req, res) {
+  const installations = await Installation.find(visibilityFilter(req.user)).sort(
+    { installedAt: -1 }
+  );
+
+  res.json(toRepoRows(installations));
+}
+
+// Manual "Refresh repositories" — re-reads every installation this user can see
+// straight from GitHub and rewrites the stored repo list.
+//
+// The `installation_repositories` webhook keeps this current on its own, but a
+// webhook that was never delivered (the event wasn't subscribed yet, the server
+// was down, the signature failed) leaves a repo list that is wrong forever with
+// no way for the user to fix it. This is that way out — and it's safe to spam,
+// since it only ever replaces the list with what GitHub reports right now.
+async function syncInstallations(req, res) {
+  const installations = await Installation.find(visibilityFilter(req.user));
+
+  const failed = [];
+  await Promise.all(
+    installations.map(async (inst) => {
+      try {
+        inst.repos = await fetchInstallationReposForModel(inst.installationId);
+        await inst.save();
+      } catch (err) {
+        // One dead installation (revoked on GitHub, suspended) must not sink
+        // the refresh for the others — report it and keep the rest.
+        console.error(
+          `[installations] sync failed for ${inst.installationId}:`,
+          err.message
+        );
+        failed.push(inst.installationId);
+      }
+    })
+  );
+
+  const fresh = await Installation.find(visibilityFilter(req.user)).sort({
+    installedAt: -1,
+  });
+
+  res.json({ repos: toRepoRows(fresh), synced: installations.length, failed });
 }
 
 // Hard disconnect: actually revokes the GitHub App's access (not just a
@@ -27,12 +86,11 @@ async function listInstallations(req, res) {
 // user wants these repos back later, they go through Connect GitHub again
 // and get a new installationId, same as a first-time setup.
 async function disconnectInstallation(req, res) {
-  const uid = req.user._id;
   const { installationId } = req.params;
 
   const installation = await Installation.findOne({
     installationId,
-    $or: [{ userId: uid }, { userId: String(uid) }],
+    ...visibilityFilter(req.user),
   });
 
   if (!installation) {
@@ -65,4 +123,4 @@ async function disconnectInstallation(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { listInstallations, disconnectInstallation };
+module.exports = { listInstallations, syncInstallations, disconnectInstallation };

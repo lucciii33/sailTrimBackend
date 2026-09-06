@@ -2,6 +2,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { uploadEvidence } = require("./aws");
 
 // Runs ONE generated spec with Playwright and reports whether it passed plus the
 // failure output (fed back to Claude in the heal loop). The app under test is
@@ -26,6 +27,8 @@ const CONFIG_PATH = path.join(RUNNER_DIR, "playwright.config.js");
 // Specs are written here and deleted after the run. Kept out of the watched
 // source tree so writing one can't restart a dev server mid-loop.
 const SPEC_DIR = path.join(RUNNER_DIR, "specs");
+// Playwright's outputDir (traces/screenshots), mirrored from playwright.config.js.
+const ARTIFACT_DIR = path.join(RUNNER_DIR, "artifacts");
 
 // Prefer the locally installed binary over `npx`, which can wander off to the
 // network on a cold deploy.
@@ -69,6 +72,17 @@ function injectStorageState(spec, storagePath) {
 // Walk the Playwright JSON report and collect "<title>: <error message>" lines.
 function summarizeFailures(json) {
   const lines = [];
+
+  // Top-level errors first. A spec that fails to COMPILE (TypeScript error, a
+  // bad import, a syntax slip) is reported HERE, with zero suites — so walking
+  // only `suites` returned an empty string and the heal loop handed Claude a
+  // blank error to fix. It then had to guess at the next attempt, which is what
+  // made attempt 1 look like a wasted round every time.
+  for (const e of json.errors || []) {
+    const msg = (e.message || e.value || "").trim();
+    if (msg) lines.push(`\u2717 the spec never ran\n${msg}`);
+  }
+
   const visitSuite = (suite) => {
     (suite.suites || []).forEach(visitSuite);
     (suite.specs || []).forEach((spec) => {
@@ -89,7 +103,57 @@ function summarizeFailures(json) {
   return lines.join("\n\n");
 }
 
-function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
+// Playwright records the trace as an attachment on the failing result. Pull the
+// first one out of the report so we can ship it somewhere durable.
+function findTracePath(json) {
+  let found = "";
+  const visitSuite = (suite) => {
+    (suite.suites || []).forEach(visitSuite);
+    (suite.specs || []).forEach((spec) => {
+      (spec.tests || []).forEach((t) => {
+        (t.results || []).forEach((r) => {
+          for (const a of r.attachments || []) {
+            if (!found && a.name === "trace" && a.path) found = a.path;
+          }
+        });
+      });
+    });
+  };
+  (json.suites || []).forEach(visitSuite);
+  return found;
+}
+
+// This host's disk is ephemeral (a deploy wipes it), so a trace left on disk is
+// worthless a day later. Push it to S3 and hand back a URL the heal log can
+// keep. Best-effort on purpose: losing the trace must never turn a real test
+// result into a failure.
+async function uploadTrace(tracePath, { testId }) {
+  if (!tracePath) return "";
+  try {
+    const buf = await fs.promises.readFile(tracePath);
+    const name = `heal-${testId || "run"}-${Date.now()}.zip`;
+    const { url } = await uploadEvidence(buf, name, "application/zip");
+    return url || "";
+  } catch (err) {
+    console.error("[e2e] trace upload failed:", err.message);
+    return "";
+  }
+}
+
+// Playwright reported no failing test AND no error, yet nothing passed — most
+// often the file produced zero tests. Say that plainly rather than sending an
+// empty string down the loop.
+function describeSilentFailure(stats) {
+  if (!stats.expected && !stats.unexpected) {
+    return (
+      "Playwright ran but found NO tests in the file. The spec must define at " +
+      "least one `test(...)` at the top level and import from '@playwright/test'."
+    );
+  }
+  return "The run did not pass, but Playwright reported no error output.";
+}
+
+function runSpec(specCode, { baseUrl, storagePath, testId, timeoutMs = 120000 } = {}) {
   return new Promise((resolve) => {
     const cwd = path.resolve(__dirname, "..");
     let file;
@@ -101,7 +165,13 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
       return resolve({ passed: false, error: `Could not write spec: ${e.message}` });
     }
 
-    const cleanup = () => fs.promises.unlink(file).catch(() => {});
+    // Remove the spec AND the run's artifacts: the trace has already been
+    // uploaded by then, and leaving them behind fills the disk one run at a time.
+    const cleanup = () =>
+      Promise.all([
+        fs.promises.unlink(file).catch(() => {}),
+        fs.promises.rm(ARTIFACT_DIR, { recursive: true, force: true }).catch(() => {}),
+      ]);
     const env = { ...process.env };
     if (baseUrl) env.E2E_BASE_URL = baseUrl;
 
@@ -137,10 +207,10 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
       });
     });
 
-    cp.on("close", () => {
+    cp.on("close", async () => {
       clearTimeout(timer);
-      cleanup();
       if (timedOut) {
+        await cleanup();
         return resolve({
           passed: false,
           error: `Test run timed out after ${timeoutMs / 1000}s.`,
@@ -148,6 +218,7 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
       }
       const json = safeParse(out);
       if (!json) {
+        await cleanup();
         return resolve({
           passed: false,
           error: (err || out || "No output from Playwright.").slice(-4000),
@@ -155,9 +226,18 @@ function runSpec(specCode, { baseUrl, storagePath, timeoutMs = 120000 } = {}) {
       }
       const stats = json.stats || {};
       const passed = (stats.unexpected || 0) === 0 && (stats.expected || 0) > 0;
+      // PAUSED alongside trace capture in playwright.config.js — see the note
+      // there. Uncomment this line (and re-enable trace there) to restore it;
+      // findTracePath/uploadTrace below are left intact for that.
+      // const traceUrl = passed ? "" : await uploadTrace(findTracePath(json), { testId });
+      const traceUrl = "";
+      await cleanup();
       resolve({
         passed,
-        error: passed ? "" : summarizeFailures(json).slice(-4000),
+        // Never resolve a failure with an empty error: that's the one thing the
+        // heal loop cannot work with.
+        error: passed ? "" : (summarizeFailures(json) || describeSilentFailure(stats)).slice(-4000),
+        traceUrl,
       });
     });
   });

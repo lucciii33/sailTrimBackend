@@ -784,7 +784,9 @@ Keep essential happy-path coverage, but for sad/boundary/security PRIORITIZE NEW
 
 // ---------- Orchestrator ----------
 
-async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
+// Load an endpoint the caller is allowed to touch. Shared by the bug hunter and
+// the suite runner so the 404/403 rules can't drift apart.
+async function loadDocForCompany(docId, companyId) {
   const doc = await Doc.findById(docId);
   if (!doc) {
     const err = new Error("Doc not found");
@@ -796,9 +798,13 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     err.statusCode = 403;
     throw err;
   }
+  return doc;
+}
 
-  // Spec-import docs carry their baseUrl + auth on their ApiProject; classic
-  // GitHub docs use the per-repo ApiQaConfig. Both expose { baseUrl, auth }.
+// Resolve the { config, variables } an endpoint needs to actually be called.
+// Spec-import docs carry baseUrl + auth on their ApiProject; classic GitHub docs
+// use the per-repo ApiQaConfig. Both end up exposing { baseUrl, auth }.
+async function resolveDocRunConfig(doc, companyId) {
   let config;
   let variables = {};
   if (doc.projectId) {
@@ -837,6 +843,12 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     // Path/template variables (e.g. a real :id) so the runner can fill routes.
     variables = buildVarMap(config.variables);
   }
+  return { config, variables };
+}
+
+async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
+  const doc = await loadDocForCompany(docId, companyId);
+  const { config, variables } = await resolveDocRunConfig(doc, companyId);
 
   const runId = crypto.randomUUID();
 
@@ -1327,6 +1339,9 @@ async function findBugsForSection({
 
 module.exports = {
   findBugs,
+  loadDocForCompany,
+  resolveDocRunConfig,
+  buildVarMap,
   findBugsForSection,
   generateTestCases,
   generateSuiteTestCases,

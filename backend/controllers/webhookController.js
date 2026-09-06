@@ -3,6 +3,7 @@ const Installation = require("../model/Installation");
 const PendingInstall = require("../model/PendingInstall");
 const {
   getOctokit,
+  fetchInstallationReposForModel,
   getPRDiff,
   commentOnPR,
   getPRFiles,
@@ -38,6 +39,8 @@ async function handleWebhook(req, res) {
       await handleInstallation(payload);
     } else if (event === "installation" && payload.action === "deleted") {
       await handleInstallationDeleted(payload);
+    } else if (event === "installation_repositories") {
+      await handleInstallationRepositories(payload);
     } else if (
       event === "pull_request" &&
       (payload.action === "opened" || payload.action === "synchronize")
@@ -115,33 +118,31 @@ async function handleInstallation(payload) {
     // can never be linked to the wrong workspace. If OAuth wasn't captured (no
     // githubRequesterId) or nothing matches, we leave it UNLINKED rather than
     // guess; an admin re-connecting through Olivia links it cleanly later.
-    if (!userId && requester?.id) {
-      const pending = await PendingInstall.findOne({
-        githubRequesterId: String(requester.id),
-      }).sort({ createdAt: -1 });
-      if (pending) {
-        userId = pending.userId;
-        companyId = pending.companyId || null;
-        await PendingInstall.deleteOne({ _id: pending._id });
-        console.log(
-          `[github webhook] linked org install to user=${userId} via requester=${requester.login} (${requester.id})`
-        );
-      } else {
-        console.log(
-          `[github webhook] no pending match for requester=${requester.login} (${requester.id}) — left unlinked`
-        );
+    let unlinkedRequester = null;
+    if (!userId) {
+      const claimed = await claimPendingInstall(requester);
+      if (claimed) {
+        userId = claimed.userId;
+        companyId = claimed.companyId;
+      } else if (requester?.id) {
+        unlinkedRequester = String(requester.id);
       }
     }
 
-    const update = {
+    const set = {
       installationId: installation.id,
       accountLogin: installation.account.login,
       accountType: installation.account.type,
       repos,
       installedAt: new Date(),
     };
-    if (userId) update.userId = userId;
-    if (companyId) update.companyId = companyId;
+    if (userId) set.userId = userId;
+    if (companyId) set.companyId = companyId;
+
+    const update = { $set: set };
+    if (unlinkedRequester) {
+      update.$addToSet = { pendingRequesterIds: unlinkedRequester };
+    }
 
     await Installation.findOneAndUpdate(
       { installationId: installation.id },
@@ -150,6 +151,114 @@ async function handleInstallation(payload) {
     );
   } catch (err) {
     console.error("Error saving installation:", err);
+  }
+}
+
+// Links an org-approved installation back to the customer who asked for it.
+//
+// `requester` is only populated when an admin APPROVED someone's request, which
+// is exactly the case where no callback `state` told us whose install this is.
+// The match is EXACT (the requester's GitHub id, captured via OAuth at request
+// time) — never "most recent" — so two customers requesting in the same window
+// can't be linked to the wrong workspace. No match means we leave the install
+// unlinked rather than guess; a re-connect through Olivia links it cleanly.
+async function claimPendingInstall(requester) {
+  if (!requester?.id) return null;
+
+  const pending = await PendingInstall.findOne({
+    githubRequesterId: String(requester.id),
+  }).sort({ createdAt: -1 });
+
+  if (!pending) {
+    console.log(
+      `[github webhook] no pending match for requester=${requester.login} (${requester.id}) — ` +
+        `parked as pendingRequesterId; it links itself once they connect GitHub in Olivia`
+    );
+    return null;
+  }
+
+  await PendingInstall.deleteOne({ _id: pending._id });
+
+  // Fall back to the user's current company when the pending record predates
+  // them having one. companyId is what makes the install visible to the rest of
+  // the workspace, so leaving it null would link the install to one person and
+  // hide it from their team.
+  let companyId = pending.companyId || null;
+  if (!companyId) {
+    const user = await User.findById(pending.userId).select("companyId");
+    companyId = user?.companyId || null;
+  }
+
+  console.log(
+    `[github webhook] linked org install to user=${pending.userId} via requester=${requester.login} (${requester.id})`
+  );
+  return { userId: pending.userId, companyId };
+}
+
+// Repos added to / removed from an installation that ALREADY EXISTS.
+//
+// This is the event behind "the owner approved my repo but I still see the old
+// one". When the org already has the app installed, approving a member's
+// request for another repo does NOT fire `installation.created` — GitHub fires
+// this event instead. Without a handler the local `repos` array stayed frozen
+// at whatever the first install saw, so the newly approved repo never showed up
+// in the UI and the stale one never went away.
+//
+// The repo list is re-read from GitHub rather than applied as a delta, so a
+// dropped or replayed delivery still converges on the truth.
+async function handleInstallationRepositories(payload) {
+  try {
+    const { installation, requester, action } = payload;
+
+    const existing = await Installation.findOne({
+      installationId: installation.id,
+    });
+    let userId = existing?.userId || null;
+    let companyId = existing?.companyId || null;
+
+    // An org member can request a SINGLE repo on an already-installed app; the
+    // approval lands here, not on `installation.created`. So this event needs
+    // the same pending-claim as a first-time org install, or the requester ends
+    // up approved on GitHub and invisible in Olivia.
+    let unlinkedRequester = null;
+    if (!userId) {
+      const claimed = await claimPendingInstall(requester);
+      if (claimed) {
+        userId = claimed.userId;
+        companyId = claimed.companyId;
+      } else if (requester?.id) {
+        unlinkedRequester = String(requester.id);
+      }
+    }
+
+    const repos = await fetchInstallationReposForModel(installation.id);
+
+    const set = {
+      installationId: installation.id,
+      accountLogin: installation.account.login,
+      accountType: installation.account.type,
+      repos,
+    };
+    if (userId) set.userId = userId;
+    if (companyId) set.companyId = companyId;
+
+    const update = { $set: set };
+    if (unlinkedRequester) {
+      update.$addToSet = { pendingRequesterIds: unlinkedRequester };
+    }
+
+    await Installation.findOneAndUpdate(
+      { installationId: installation.id },
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    console.log(
+      `[github webhook] installation_repositories/${action} install=${installation.id} ` +
+        `account=${installation.account.login} repos=${repos.length} user=${userId || "unlinked"}`
+    );
+  } catch (err) {
+    console.error("Error syncing installation repositories:", err);
   }
 }
 

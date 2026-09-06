@@ -42,6 +42,34 @@ async function getOctokit(installationId) {
   return app.getInstallationOctokit(installationId);
 }
 
+// The repos an installation can currently see, straight from GitHub.
+//
+// Always ask GitHub rather than trusting a webhook's `repositories_added`
+// delta: a delta only tells us what changed in THAT event, so a missed or
+// out-of-order delivery leaves our copy permanently wrong. Re-reading the
+// full list makes every sync idempotent and self-healing.
+async function fetchInstallationRepos(octokit) {
+  const repos = [];
+  let page = 1;
+  while (true) {
+    const { data } = await octokit.request("GET /installation/repositories", {
+      per_page: 100,
+      page,
+    });
+    repos.push(...data.repositories);
+    if (data.repositories.length < 100) break;
+    page += 1;
+  }
+  return repos;
+}
+
+// Same list, in the shape the Installation model stores.
+async function fetchInstallationReposForModel(installationId) {
+  const octokit = await getOctokit(installationId);
+  const ghRepos = await fetchInstallationRepos(octokit);
+  return ghRepos.map((r) => ({ repoName: r.name, repoFullName: r.full_name }));
+}
+
 // Revokes the GitHub App's access for real (app-level auth, not
 // installation-level) — this is what actually removes the installation on
 // GitHub's side, same as uninstalling from GitHub Settings would. A 404
@@ -899,6 +927,8 @@ async function fetchMountContextAtRef(octokit, owner, repo, ref) {
 module.exports = {
   getApp,
   getOctokit,
+  fetchInstallationRepos,
+  fetchInstallationReposForModel,
   uninstallApp,
   getPRDiff,
   commentOnPR,

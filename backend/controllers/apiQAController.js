@@ -5,6 +5,7 @@ const Doc = require("../model/DocModel");
 const TestRun = require("../model/TestRunModel");
 const { encrypt, maskSecret, decrypt } = require("../services/secretCrypto");
 const apiQAService = require("../services/apiQAService");
+const apiSuiteService = require("../services/apiSuiteService");
 const SuiteRun = require("../model/SuiteRunModel");
 const openApiService = require("../services/openApiService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
@@ -563,6 +564,141 @@ async function syncGithubSpec(req, res) {
   }
 }
 
+
+// ---------- Saved test suites (smoke / regression) per endpoint ----------
+
+// Create (or regenerate) one kind of suite for ONE endpoint. This is the
+// "Create test" button on the endpoint row.
+async function generateSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { docId } = req.params;
+  const kind = req.body?.kind;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    // No kind given → generate both, which is what the button does.
+    const kinds = kind ? [kind] : ["smoke", "regression"];
+    const suites = [];
+    for (const k of kinds) {
+      suites.push(
+        await apiSuiteService.generateSuite({
+          docId,
+          kind: k,
+          userId: req.user._id,
+          companyId: req.user.companyId,
+          anthropicClient,
+        })
+      );
+    }
+    res.status(201).json({ suites });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("generateSuite error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+// Same thing for every endpoint in a section. Slow by nature (one model call
+// per endpoint per kind), so it reports what succeeded AND what didn't rather
+// than failing the whole batch on one bad endpoint.
+async function generateSectionSuites(req, res) {
+  if (!requireCompany(req, res)) return;
+  // Two shapes of URL reach here: an imported spec (:id) and a connected GitHub
+  // repo (:owner/:repo). The service takes whichever scope is present.
+  const { id, owner, repo, section } = req.params;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await apiSuiteService.generateSectionSuites({
+      projectId: id || null,
+      owner,
+      repo,
+      section,
+      kinds: req.body?.kind ? [req.body.kind] : ["smoke", "regression"],
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("generateSectionSuites error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+// Every suite of a project — what the tests page renders, grouped
+// section -> endpoint -> tests by the client.
+async function listSuites(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    const suites = await apiSuiteService.listProjectSuites({
+      projectId: req.params.id || null,
+      owner: req.params.owner,
+      repo: req.params.repo,
+      companyId: req.user.companyId,
+    });
+    res.json(suites);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("listSuites error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function runSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await apiSuiteService.runSuite({
+      suiteId: req.params.suiteId,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.json({ summary: result.summary, results: result.results });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("runSuite error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+// Change what one test covers, from a plain-language instruction.
+async function refineSuiteCase(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { suiteId, caseId } = req.params;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await apiSuiteService.refineCase({
+      suiteId,
+      caseId,
+      instruction: req.body?.instruction,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.json({
+      case: result.case,
+      added: result.added,
+      removed: result.removed,
+    });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("refineSuiteCase error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function deleteSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  const ApiSuite = require("../model/ApiSuiteModel");
+  const del = await ApiSuite.deleteOne({
+    _id: req.params.suiteId,
+    companyId: req.user.companyId,
+  });
+  if (!del.deletedCount) {
+    return res.status(404).json({ message: "Suite not found" });
+  }
+  res.json({ success: true });
+}
+
 module.exports = {
   getConfig,
   upsertConfig,
@@ -586,4 +722,10 @@ module.exports = {
   getRun,
   listSuiteRuns,
   getSuiteRun,
+  generateSuite,
+  generateSectionSuites,
+  listSuites,
+  runSuite,
+  refineSuiteCase,
+  deleteSuite,
 };
