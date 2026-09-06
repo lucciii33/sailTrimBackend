@@ -16,7 +16,9 @@ const protect = asyncHandler(async (req, res, next) => {
                 throw new Error("Two-factor authentication required")
             }
 
-            req.user = await User.findById(decoded.id).select('_id email role company companyId')
+            // githubUserId/Username/Orgs are needed to decide which GitHub
+            // installations this person may see and claim.
+            req.user = await User.findById(decoded.id).select('_id email role company companyId githubUserId githubUsername githubOrgs')
 
             if (!req.user) {
                 res.status(401)

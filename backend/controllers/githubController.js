@@ -143,7 +143,29 @@ async function githubUserFromCode(code) {
     });
     const user = await userRes.json();
     if (!user?.id) return null;
-    return { id: String(user.id), login: user.login };
+
+    // Their org memberships, read with THEIR token — the app's own token cannot
+    // see this, and it is what later lets us prove someone belongs to an org
+    // before handing them its installation.
+    let orgs = [];
+    try {
+      const orgRes = await fetch("https://api.github.com/user/orgs?per_page=100", {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          Accept: "application/vnd.github+json",
+        },
+      });
+      if (orgRes.ok) {
+        const list = await orgRes.json();
+        if (Array.isArray(list)) orgs = list.map((o) => o.login).filter(Boolean);
+      }
+    } catch (err) {
+      // Not fatal: they just won't be offered unclaimed installs until their
+      // next connect.
+      console.error("fetch user orgs failed:", err.message);
+    }
+
+    return { id: String(user.id), login: user.login, orgs };
   } catch (err) {
     console.error("githubUserFromCode failed:", err.message);
     return null;
@@ -244,6 +266,7 @@ async function githubCallback(req, res) {
         await User.findByIdAndUpdate(state, {
           githubUserId: ghUser.id,
           githubUsername: ghUser.login,
+          githubOrgs: ghUser.orgs || [],
         }).catch((e) => console.error("store githubUserId failed:", e.message));
         console.log(
           `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`

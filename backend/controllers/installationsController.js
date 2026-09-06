@@ -64,6 +64,90 @@ async function listPendingRequests(req, res) {
   );
 }
 
+// Can this person legitimately take ownership of this installation?
+//
+// The only acceptable proof is GitHub's own answer to "which orgs are you in",
+// captured from the user's OAuth token at connect time. Anything weaker — the
+// org name looking familiar, a matching email domain — would let one customer
+// claim another's repositories.
+function canClaim(user, installation) {
+  const account = installation.accountLogin || "";
+  if (!account) return false;
+  if (installation.accountType === "User") {
+    return Boolean(user.githubUsername) && account === user.githubUsername;
+  }
+  return (user.githubOrgs || []).includes(account);
+}
+
+// Installations nobody owns that belong to an org THIS user is a member of.
+//
+// These are the installs that arrive with no way to identify the requester —
+// someone installing straight from GitHub rather than through Connect GitHub.
+// They used to sit invisible forever, with the repo live on GitHub and absent
+// from every workspace, recoverable only by editing the database by hand.
+async function listUnclaimedInstallations(req, res) {
+  if (!req.user.githubUserId) {
+    // No GitHub identity captured yet, so there is nothing to check them
+    // against. Say so rather than returning an empty list, which would read as
+    // "there is nothing to claim".
+    return res.json({ needsGithubConnect: true, installations: [] });
+  }
+
+  const orphans = await Installation.find({ userId: null });
+  const claimable = orphans.filter((i) => canClaim(req.user, i));
+
+  res.json({
+    needsGithubConnect: false,
+    installations: claimable.map((i) => ({
+      installationId: i.installationId,
+      owner: i.accountLogin,
+      accountType: i.accountType,
+      repos: (i.repos || []).map((r) => r.repoFullName),
+    })),
+  });
+}
+
+// Take ownership of an unclaimed installation, into the claimer's workspace.
+async function claimInstallation(req, res) {
+  const { installationId } = req.params;
+
+  const installation = await Installation.findOne({
+    installationId: Number(installationId),
+  });
+  if (!installation) {
+    return res.status(404).json({ message: "Installation not found" });
+  }
+  // Re-check ownership at claim time, not just at list time: the list is a
+  // suggestion, this is the decision.
+  if (installation.userId) {
+    return res
+      .status(409)
+      .json({ message: "This installation already belongs to a workspace." });
+  }
+  if (!canClaim(req.user, installation)) {
+    return res.status(403).json({
+      message:
+        "You are not a member of this GitHub account, so you cannot claim it.",
+    });
+  }
+
+  installation.userId = req.user._id;
+  if (req.user.companyId) installation.companyId = req.user.companyId;
+  installation.pendingRequesterIds = [];
+  await installation.save();
+
+  await logEvent({
+    event: "github_installation_claimed",
+    req,
+    user: req.user,
+    targetType: "Installation",
+    targetId: String(installation.installationId),
+    metadata: { accountLogin: installation.accountLogin },
+  });
+
+  res.json({ success: true, owner: installation.accountLogin });
+}
+
 async function listInstallations(req, res) {
   const installations = await Installation.find(visibilityFilter(req.user)).sort(
     { installedAt: -1 }
@@ -167,6 +251,8 @@ async function disconnectInstallation(req, res) {
 module.exports = {
   listInstallations,
   listPendingRequests,
+  listUnclaimedInstallations,
+  claimInstallation,
   syncInstallations,
   disconnectInstallation,
 };
