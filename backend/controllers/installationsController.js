@@ -1,5 +1,4 @@
 const Installation = require("../model/Installation");
-const PendingInstall = require("../model/PendingInstall");
 const {
   uninstallApp,
   fetchInstallationReposForModel,
@@ -33,33 +32,6 @@ function toRepoRows(installations) {
       accountType: inst.accountType,
       repo: r.repoName,
       fullName: r.repoFullName,
-    }))
-  );
-}
-
-// Install requests this user has sent that nobody has approved yet.
-//
-// Until now a request vanished the moment it was made: GitHub showed a "sent to
-// the owner" page and Olivia showed an empty repo list, identical to never
-// having asked. People re-requested, assumed it was broken, or gave up. Showing
-// the outstanding request is what turns silence into a status.
-//
-// GitHub does not tell us which organisation was picked on a pending request
-// (the callback carries no account), so a request is reported by when it was
-// made, not by org.
-async function listPendingRequests(req, res) {
-  const pending = await PendingInstall.find({ userId: req.user._id })
-    .sort({ createdAt: -1 })
-    .lean();
-
-  res.json(
-    pending.map((p) => ({
-      id: String(p._id),
-      requestedAt: p.createdAt,
-      githubUsername: p.githubRequesterLogin || "",
-      // A request with no captured GitHub id can never be matched to its
-      // approval, so it needs a different message than "just wait".
-      linkable: Boolean(p.githubRequesterId),
     }))
   );
 }
@@ -164,9 +136,4 @@ async function disconnectInstallation(req, res) {
   res.json({ success: true });
 }
 
-module.exports = {
-  listInstallations,
-  listPendingRequests,
-  syncInstallations,
-  disconnectInstallation,
-};
+module.exports = { listInstallations, syncInstallations, disconnectInstallation };
