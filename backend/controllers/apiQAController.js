@@ -152,6 +152,7 @@ async function findBugs(req, res) {
       userId: req.user._id,
       companyId: req.user.companyId,
       anthropicClient,
+      authSchemeName: req.body?.authSchemeName || "",
     });
     res.json(result);
   } catch (err) {
@@ -261,6 +262,17 @@ function serializeProject(p) {
       valueMasked: maskSecret(decrypt(auth.valueEncrypted)),
       passwordMasked: maskSecret(decrypt(auth.passwordEncrypted)),
     },
+    // Every scheme the API accepts, so the UI can offer "test with this one".
+    // Secrets go out masked; saving a masked value back means "unchanged".
+    authSchemes: (p.authSchemes || []).map((sc) => ({
+      name: sc.name,
+      type: sc.type || "none",
+      headerName: sc.headerName || "",
+      username: sc.username || "",
+      valueMasked: maskSecret(decrypt(sc.valueEncrypted)),
+      passwordMasked: maskSecret(decrypt(sc.passwordEncrypted)),
+      configured: Boolean(sc.valueEncrypted || sc.passwordEncrypted),
+    })),
     // Non-secret vars show their value; secret ones are masked.
     variables: (p.variables || []).map((v) => ({
       key: v.key,
@@ -379,6 +391,33 @@ async function setProjectAuth(req, res) {
           ? prev.get(v.key)?.value || ""
           : encrypt(incoming);
         return { key: v.key, value, secret: true };
+      });
+  }
+
+  // Per-scheme credentials. Same "blank or masked means unchanged" rule as
+  // everywhere else, so filling in one scheme never wipes another's token.
+  if (Array.isArray(req.body?.authSchemes)) {
+    const prev = new Map((project.authSchemes || []).map((sc) => [sc.name, sc]));
+    project.authSchemes = req.body.authSchemes
+      .filter((sc) => sc && sc.name)
+      .map((sc) => {
+        const before = prev.get(sc.name) || {};
+        const incoming = String(sc.value ?? "");
+        const looksMasked = !incoming.trim() || /\*/.test(incoming);
+        const incomingPw = String(sc.password ?? "");
+        const pwMasked = !incomingPw.trim() || /\*/.test(incomingPw);
+        return {
+          name: sc.name,
+          type: sc.type || before.type || "none",
+          headerName: sc.headerName ?? before.headerName ?? "",
+          username: sc.username ?? before.username ?? "",
+          valueEncrypted: looksMasked
+            ? before.valueEncrypted || ""
+            : encrypt(incoming),
+          passwordEncrypted: pwMasked
+            ? before.passwordEncrypted || ""
+            : encrypt(incomingPw),
+        };
       });
   }
 
@@ -675,6 +714,7 @@ async function runSuite(req, res) {
       suiteId: req.params.suiteId,
       companyId: req.user.companyId,
       anthropicClient,
+      authSchemeName: req.body?.authSchemeName || "",
     });
     res.json({ summary: result.summary, results: result.results });
   } catch (err) {

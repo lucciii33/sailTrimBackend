@@ -1,7 +1,14 @@
 const mongoose = require("mongoose");
 
 const requestSchema = new mongoose.Schema(
-  { method: String, url: String, headers: { type: Map, of: String }, body: mongoose.Schema.Types.Mixed },
+  {
+    method: String,
+    // Includes the query string — see TestRunModel for why.
+    url: String,
+    headers: { type: Map, of: String },
+    query: mongoose.Schema.Types.Mixed,
+    body: mongoose.Schema.Types.Mixed,
+  },
   { _id: false }
 );
 

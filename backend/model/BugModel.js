@@ -3,8 +3,12 @@ const mongoose = require("mongoose");
 const requestSchema = new mongoose.Schema(
   {
     method: String,
+    // Includes the query string, so a bug ticket carries the exact request that
+    // produced it — the customer reading the ticket has to be able to reproduce
+    // it without guessing which params were sent.
     url: String,
     headers: { type: Map, of: String },
+    query: mongoose.Schema.Types.Mixed,
     body: mongoose.Schema.Types.Mixed,
   },
   { _id: false }

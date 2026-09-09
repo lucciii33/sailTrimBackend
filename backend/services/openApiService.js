@@ -291,13 +291,8 @@ function extractTokenUrl(scheme) {
 // Read what KIND of auth the spec declares (never the secret value — that's
 // never in a spec) and map it to our auth config shape.
 // Also returns tokenUrl (for OAuth2) and requiredVariables the user must still provide.
-function detectAuth(spec) {
-  // OpenAPI 3: components.securitySchemes ; Swagger 2: securityDefinitions
-  const schemes =
-    spec.components?.securitySchemes || spec.securityDefinitions || {};
-  const first = Object.values(schemes)[0];
-  if (!first) return { type: "none", headerName: "", tokenUrl: null, requiredVariables: [] };
-
+// Translate ONE securityScheme entry into the shape the runner understands.
+function schemeToAuth(first) {
   const t = (first.type || "").toLowerCase();
   // OpenAPI 3 http+bearer
   if (t === "http") {
@@ -317,6 +312,37 @@ function detectAuth(spec) {
     return { type: "bearer", headerName: "", tokenUrl, requiredVariables: ["client_id", "client_secret"] };
   }
   return { type: "none", headerName: "", tokenUrl: null, requiredVariables: [] };
+}
+
+// Every auth method the spec declares — not just the first one.
+//
+// An API commonly accepts more than one (an API key AND a bearer token). Keeping
+// only `Object.values(schemes)[0]` meant the others were invisible: the runner
+// injected one credential while a test tried to send a bogus one through the
+// other, the request authenticated anyway, and a correct endpoint was reported
+// as a critical auth bypass. It also made it impossible to test each path
+// separately — which is exactly where a real hole hides (an endpoint that
+// validates the key properly but accepts any bearer token).
+function detectAuthSchemes(spec) {
+  const schemes =
+    spec.components?.securitySchemes || spec.securityDefinitions || {};
+  return Object.entries(schemes)
+    .map(([name, def]) => ({ name, ...schemeToAuth(def) }))
+    .filter((a) => a.type !== "none");
+}
+
+// The single scheme used as the default (the happy path's credential). Kept
+// for every caller that still expects one.
+function detectAuth(spec) {
+  const all = detectAuthSchemes(spec);
+  return (
+    all[0] || {
+      type: "none",
+      headerName: "",
+      tokenUrl: null,
+      requiredVariables: [],
+    }
+  );
 }
 
 // ---------- public: import ----------
@@ -348,6 +374,7 @@ async function importSpec({ specText, userId, companyId, projectId, github }) {
   const name = slugify(title) || "api";
   const baseUrl = extractBaseUrl(spec);
   let detectedAuth = detectAuth(spec);
+  const detectedSchemes = detectAuthSchemes(spec);
 
   // If securitySchemes didn't give us a tokenUrl (e.g. spec uses http bearer),
   // scan paths for a POST token endpoint and derive it.
@@ -418,6 +445,12 @@ async function importSpec({ specText, userId, companyId, projectId, github }) {
       source: githubLink ? "github" : "manual",
       baseUrl: baseUrl || "",
       auth: { type: detectedAuth.type, headerName: detectedAuth.headerName },
+      // Every scheme the spec declares, so the user can test them one at a time.
+      authSchemes: detectedSchemes.map((sc) => ({
+        name: sc.name,
+        type: sc.type,
+        headerName: sc.headerName,
+      })),
       variables: buildSpecVariables([]),
       github: githubLink || undefined,
     });
@@ -429,6 +462,19 @@ async function importSpec({ specText, userId, companyId, projectId, github }) {
     if (project.auth?.type === "none" && detectedAuth.type !== "none") {
       project.auth.type = detectedAuth.type;
       project.auth.headerName = detectedAuth.headerName;
+    }
+    // Re-importing refreshes WHICH schemes exist, but never the credentials the
+    // user typed for them — match on name and carry the saved secret over.
+    if (detectedSchemes.length) {
+      const saved = new Map((project.authSchemes || []).map((sc) => [sc.name, sc]));
+      project.authSchemes = detectedSchemes.map((sc) => ({
+        name: sc.name,
+        type: sc.type,
+        headerName: sc.headerName,
+        valueEncrypted: saved.get(sc.name)?.valueEncrypted || "",
+        username: saved.get(sc.name)?.username || "",
+        passwordEncrypted: saved.get(sc.name)?.passwordEncrypted || "",
+      }));
     }
     project.variables = buildSpecVariables(project.variables || []);
     if (githubLink) {
@@ -464,6 +510,7 @@ async function importSpec({ specText, userId, companyId, projectId, github }) {
     title,
     version: project.version,
     detectedAuth, // { type, headerName, tokenUrl, requiredVariables }
+    detectedSchemes,
     totalEndpoints: endpoints.length,
     created: result.upsertedCount || 0,
     updated: result.modifiedCount || 0,
@@ -501,6 +548,20 @@ function exampleBodyFromParams(params) {
   return Object.keys(body).length ? body : null;
 }
 
+// Query params of a Doc → Postman's url.query. Required ones go enabled (so a
+// plain Run exercises the filter); optional ones go disabled, visible as
+// checkboxes the user ticks instead of having to re-type them from the docs.
+function queryEntriesFromParams(params) {
+  return (params || [])
+    .filter((p) => p && p.name)
+    .map((p) => ({
+      key: p.name,
+      value: String(PLACEHOLDER_BY_TYPE[p.type] ?? "string"),
+      description: p.description || "",
+      disabled: !p.required,
+    }));
+}
+
 function joinUrl(baseUrl, path) {
   const b = String(baseUrl || "{{baseUrl}}").replace(/\/+$/, "");
   const p = String(path || "").replace(/^\/+/, "");
@@ -514,6 +575,13 @@ function joinUrl(baseUrl, path) {
 function buildSectionCollection({ section, docs, baseUrl }) {
   const items = docs.map((doc) => {
     const url = joinUrl(baseUrl, doc.path);
+    const query = queryEntriesFromParams(doc.queryParams);
+    // The raw URL only carries the enabled (required) params — Postman keeps
+    // the disabled ones in the query array and re-writes raw when you tick one.
+    const enabled = query.filter((q) => !q.disabled);
+    const rawUrl = enabled.length
+      ? `${url}?${enabled.map((q) => `${q.key}=${q.value}`).join("&")}`
+      : url;
     const body = exampleBodyFromParams(doc.requestBody);
     return {
       name: `${doc.method} ${doc.path}`,
@@ -533,7 +601,7 @@ function buildSectionCollection({ section, docs, baseUrl }) {
       request: {
         method: doc.method,
         header: [{ key: "Content-Type", value: "application/json" }],
-        url: { raw: url },
+        url: query.length ? { raw: rawUrl, query } : { raw: rawUrl },
         body: body
           ? {
               mode: "raw",
@@ -561,6 +629,7 @@ module.exports = {
   extractBaseUrl,
   importSpec,
   detectAuth,
+  detectAuthSchemes,
   buildSectionCollection,
   // exported for tests
   schemaToParams,

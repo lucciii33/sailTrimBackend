@@ -167,6 +167,29 @@ function assertAuthConfigured(runtimeAuth) {
   }
 }
 
+// The header names this project's auth actually uses, so the analyzer can tell
+// an authenticated request from an unauthenticated one without guessing.
+//
+// Covers EVERY scheme the API accepts, not just the active one: an endpoint that
+// takes both an API key and a bearer token has two headers that authenticate,
+// and a test meaning "no credentials" has to clear both or it isn't testing
+// anything.
+function authHeaderNamesFor(authConfig, authSchemes = []) {
+  const names = new Set(Object.keys(buildAuthHeaders(authConfig) || {}));
+  for (const scheme of authSchemes || []) {
+    for (const k of Object.keys(buildAuthHeaders(scheme) || {})) names.add(k);
+    // A scheme with no credential saved yet still occupies a header name, and
+    // that name is what has to be stripped.
+    if (scheme?.type === "apiKey" || scheme?.type === "custom") {
+      names.add(scheme.headerName || "X-API-Key");
+    }
+    if (scheme?.type === "bearer" || scheme?.type === "basic") {
+      names.add("Authorization");
+    }
+  }
+  return [...names];
+}
+
 function buildAuthHeaders(authConfig) {
   if (!authConfig || authConfig.type === "none") return {};
   const headers = {};
@@ -380,7 +403,7 @@ You MUST generate exactly ${MAX_CASES} cases distributed across these 4 GROUPS:
    - injection_command: "; ls -la", "$(whoami)" in fields that might hit a shell
    - path_traversal: "../../etc/passwd" in any path-like field
    - oversized_payload: set body to the LITERAL marker string "__QA_OVERSIZED__" (the runner expands it to a massive array). NEVER write the huge array out.
-   - unauthorized: clear auth → set headers to { "Authorization": "" }
+   - unauthorized: set category to "unauthorized" and headers to { "Authorization": "" }. The runner strips whatever auth header this project actually uses (it may be X-API-Key or a custom one), so you do not need to know its name.
    - invalid_auth: send a clearly bogus token → headers: { "Authorization": "Bearer invalid-token-xyz" }
 
 Rules:
@@ -490,7 +513,42 @@ async function executeTestCase({ testCase, doc, config, variables = {} }) {
   const tcHeaders = testCase.headers || {};
   const headers = { ...defaultHeaders, ...authHeaders, ...tcHeaders };
 
-  // If the case explicitly set Authorization to "", drop it entirely.
+  // A case that means "send no credentials" cannot know WHICH header carries
+  // them: the generator is told to blank "Authorization", but this project may
+  // authenticate with X-API-Key, or basic, or a custom header. Clearing by name
+  // left the real credential in place, so the request went out authenticated,
+  // came back 200, and was then reported as a critical auth bypass that never
+  // happened. Strip whatever buildAuthHeaders actually produced instead.
+  // "unauthorized" means send NOTHING; "invalid_auth" means send a BOGUS
+  // credential and nothing else. Both were undermined the same way: an API that
+  // accepts more than one scheme (say X-API-Key and a bearer token) still got
+  // the project's real key alongside, authenticated on it, returned 200, and
+  // was filed as a critical auth bypass. The bogus credential was never
+  // actually tested.
+  //
+  // Headers the CASE set itself are kept — that's the bogus credential it wants
+  // to send. Only the credentials the runner added are dropped.
+  const authIntent =
+    testCase.category === "unauthorized" ||
+    testCase.category === "invalid_auth" ||
+    Object.entries(tcHeaders).some(
+      ([k, v]) => v === "" && /^(authorization|x-api-key|api-key)$/i.test(k)
+    );
+  if (authIntent) {
+    const caseOwned = new Set(Object.keys(tcHeaders).map((k) => k.toLowerCase()));
+    const known = new Set(
+      authHeaderNamesFor(config.auth, config.authSchemes).map((n) =>
+        n.toLowerCase()
+      )
+    );
+    for (const k of Object.keys(headers)) {
+      if (known.has(k.toLowerCase()) && !caseOwned.has(k.toLowerCase())) {
+        delete headers[k];
+      }
+    }
+  }
+
+  // If the case explicitly set a header to "", drop it entirely.
   Object.keys(headers).forEach((k) => {
     if (headers[k] === "" || headers[k] == null) delete headers[k];
     else headers[k] = fillTemplate(headers[k], variables);
@@ -507,11 +565,22 @@ async function executeTestCase({ testCase, doc, config, variables = {} }) {
   }
   const sendBody = body != null ? expandMarkers(body) : null;
 
+  // Query params are sent via axios `params`, but the record kept only the bare
+  // URL — so a boundary case like offset=-1 was reported as evidence against
+  // ".../orders" with nothing negative visible anywhere, and the finding looked
+  // made up. Record what was actually sent.
+  const query = testCase.query || undefined;
+  const queryString = query
+    ? new URLSearchParams(
+        Object.entries(query).map(([k, v]) => [k, String(fillTemplate(String(v), variables))])
+      ).toString()
+    : "";
   const requestRecord = {
     method,
-    url,
+    url: queryString ? `${url}?${queryString}` : url,
     headers,
     body,
+    query: query || null,
   };
 
   const start = Date.now();
@@ -589,7 +658,29 @@ Rules:
 - Severity guide: critical = auth bypass / data leak; high = 500 on validation, secrets in body; medium = wrong status code; low = inconsistent shape.
 - Return {"bugs": []} if no bugs found.`;
 
-async function analyzeForBugs({ doc, executions, anthropicClient = null }) {
+// Did this request actually carry credentials?
+//
+// This used to test for an "Authorization" header only. A project that
+// authenticates with X-API-Key (or any custom header) therefore reported
+// hasAuthHeader:false on EVERY case — including the happy path that did send
+// the key — and the analyzer, seeing "no credentials yet 200", filed a critical
+// auth bypass on a perfectly correct endpoint.
+//
+// `authHeaderNames` is the set the runner actually built for this project, so
+// the check follows the configuration instead of guessing a name.
+function requestHadAuth(requestHeaders, authHeaderNames) {
+  if (!requestHeaders) return false;
+  const present = Object.keys(requestHeaders).map((k) => k.toLowerCase());
+  const looked = new Set([
+    "authorization",
+    ...(authHeaderNames || []).map((n) => String(n).toLowerCase()),
+  ]);
+  return present.some((k) => looked.has(k) && requestHeaders[
+    Object.keys(requestHeaders).find((o) => o.toLowerCase() === k)
+  ]);
+}
+
+async function analyzeForBugs({ doc, executions, anthropicClient = null, authHeaderNames = [] }) {
   const slim = executions.map((ex) => ({
     name: ex.testCase.name,
     category: ex.testCase.category,
@@ -598,9 +689,7 @@ async function analyzeForBugs({ doc, executions, anthropicClient = null }) {
     request: {
       method: ex.result.request.method,
       url: ex.result.request.url,
-      hasAuthHeader: Boolean(
-        ex.result.request.headers && ex.result.request.headers.Authorization,
-      ),
+      hasAuthHeader: requestHadAuth(ex.result.request.headers, authHeaderNames),
       body: ex.result.request.body,
     },
     response: {
@@ -836,7 +925,26 @@ async function loadDocForCompany(docId, companyId) {
 // Resolve the { config, variables } an endpoint needs to actually be called.
 // Spec-import docs carry baseUrl + auth on their ApiProject; classic GitHub docs
 // use the per-repo ApiQaConfig. Both end up exposing { baseUrl, auth }.
-async function resolveDocRunConfig(doc, companyId) {
+// Pick which declared scheme a run should authenticate with. Defaults to the
+// project's active `auth`. Naming one lets a run target a single path — the API
+// key alone, then the bearer alone — which is how you catch an endpoint that
+// validates one properly and accepts anything through the other.
+function selectAuthScheme(base, authSchemes, schemeName) {
+  if (!schemeName) return base;
+  const found = (authSchemes || []).find((sc) => sc.name === schemeName);
+  if (!found) {
+    const err = new Error(
+      `This API has no auth scheme called "${schemeName}". Available: ${
+        (authSchemes || []).map((sc) => sc.name).join(", ") || "none"
+      }.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  return found;
+}
+
+async function resolveDocRunConfig(doc, companyId, { authSchemeName } = {}) {
   let config;
   let variables = {};
   // Filled at the end: the endpoint's own variables override the global ones.
@@ -854,12 +962,20 @@ async function resolveDocRunConfig(doc, companyId) {
       throw err;
     }
     variables = buildVarMap(project.variables);
-    const runtimeAuth = await resolveRuntimeAuth(project.auth, variables);
+    const chosen = selectAuthScheme(
+      project.auth,
+      project.authSchemes,
+      authSchemeName
+    );
+    const runtimeAuth = await resolveRuntimeAuth(chosen, variables);
     assertAuthConfigured(runtimeAuth);
     assertTokenNotExpired(runtimeAuth);
     config = {
       baseUrl: project.baseUrl,
       auth: runtimeAuth,
+      // Every scheme the API accepts, so a "no credentials" case can clear all
+      // of them and not just the one this run happens to use.
+      authSchemes: project.authSchemes || [],
       defaultHeaders: null,
     };
   } else {
@@ -880,12 +996,18 @@ async function resolveDocRunConfig(doc, companyId) {
     // Repos went straight to the runner with their stored auth — so an expired
     // token produced six 401s and no explanation. Same checks as the project
     // path now.
-    const runtimeAuth = await resolveRuntimeAuth(config.auth, variables);
+    const chosen = selectAuthScheme(
+      config.auth,
+      config.authSchemes,
+      authSchemeName
+    );
+    const runtimeAuth = await resolveRuntimeAuth(chosen, variables);
     assertAuthConfigured(runtimeAuth);
     assertTokenNotExpired(runtimeAuth);
     config = {
       baseUrl: config.baseUrl,
       auth: runtimeAuth,
+      authSchemes: config.authSchemes || [],
       defaultHeaders: config.defaultHeaders,
     };
   }
@@ -895,9 +1017,19 @@ async function resolveDocRunConfig(doc, companyId) {
   return { config, variables: { ...variables, ...docVars } };
 }
 
-async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
+async function findBugs({
+  docId,
+  userId,
+  companyId,
+  anthropicClient = null,
+  // Which declared auth scheme this run should authenticate with. Omitted →
+  // the project's active one.
+  authSchemeName = "",
+}) {
   const doc = await loadDocForCompany(docId, companyId);
-  const { config, variables } = await resolveDocRunConfig(doc, companyId);
+  const { config, variables } = await resolveDocRunConfig(doc, companyId, {
+    authSchemeName,
+  });
 
   const runId = crypto.randomUUID();
 
@@ -941,6 +1073,7 @@ async function findBugs({ docId, userId, companyId, anthropicClient = null }) {
     doc,
     executions,
     anthropicClient,
+    authHeaderNames: authHeaderNamesFor(config.auth, config.authSchemes),
   });
 
   // 3b) Happy-path guard: if this endpoint needs a path param (e.g. an :id) and
@@ -1338,6 +1471,7 @@ async function findBugsForSection({
     doc: sectionDoc,
     executions,
     anthropicClient,
+    authHeaderNames: authHeaderNamesFor(config.auth, config.authSchemes),
   });
 
   // 5) Map bugs onto executions.
@@ -1388,6 +1522,8 @@ async function findBugsForSection({
 
 module.exports = {
   findBugs,
+  selectAuthScheme,
+  authHeaderNamesFor,
   loadDocForCompany,
   resolveDocRunConfig,
   buildVarMap,

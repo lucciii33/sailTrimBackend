@@ -42,6 +42,35 @@ const apiQaConfigSchema = new mongoose.Schema({
   repo: { type: String, required: true },
   baseUrl: { type: String, required: true },
   auth: { type: authSchema, default: () => ({ type: "none" }) },
+  // Every scheme this API accepts — see ApiProject.authSchemes. Empty means
+  // "just `auth`", which is how every pre-existing config behaves.
+  authSchemes: {
+    type: [
+      new mongoose.Schema(
+        {
+          name: { type: String, required: true },
+          type: {
+            type: String,
+            enum: [
+              "none",
+              "apiKey",
+              "bearer",
+              "basic",
+              "custom",
+              "oauth2_client_credentials",
+            ],
+            default: "none",
+          },
+          headerName: { type: String, default: "" },
+          valueEncrypted: { type: String, default: "" },
+          username: { type: String, default: "" },
+          passwordEncrypted: { type: String, default: "" },
+        },
+        { _id: false }
+      ),
+    ],
+    default: [],
+  },
   defaultHeaders: { type: Map, of: String, default: {} },
   // Path/template variables: fill {id} / :id in the route and {{key}} tokens.
   // `secret` marks a value that is encrypted at rest (tokens, api keys) —

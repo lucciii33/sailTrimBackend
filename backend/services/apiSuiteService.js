@@ -366,7 +366,12 @@ function truncate(body, max = 4000) {
  * exists and the status or the response's top-level keys moved away from it —
  * that's the difference between "this test is red" and "this used to work".
  */
-async function runSuite({ suiteId, companyId, anthropicClient = null }) {
+async function runSuite({
+  suiteId,
+  companyId,
+  anthropicClient = null,
+  authSchemeName = "",
+}) {
   const suite = await ApiSuite.findOne({ _id: suiteId, companyId });
   if (!suite) {
     const err = new Error("Suite not found");
@@ -374,7 +379,9 @@ async function runSuite({ suiteId, companyId, anthropicClient = null }) {
     throw err;
   }
   const doc = await loadDocForCompany(suite.docId, companyId);
-  const { config, variables } = await resolveDocRunConfig(doc, companyId);
+  const { config, variables } = await resolveDocRunConfig(doc, companyId, {
+    authSchemeName,
+  });
   const client = anthropicClient || getAnthropic();
 
   const results = [];
@@ -385,6 +392,9 @@ async function runSuite({ suiteId, companyId, anthropicClient = null }) {
         path: c.path,
         headers: c.headers,
         body: c.body,
+        // executeTestCase uses this to strip the project's real auth header on
+        // an unauthorized case, whatever that header is called.
+        category: c.category,
       },
       doc,
       config,

@@ -70,7 +70,43 @@ const apiProjectSchema = new mongoose.Schema({
   version: { type: String, default: "" },
   source: { type: String, enum: ["manual", "github"], default: "manual" },
   baseUrl: { type: String, default: "" },
+  // The scheme used for authenticated requests (the happy path's credential).
   auth: { type: authSchema, default: () => ({ type: "none" }) },
+  // EVERY scheme the API accepts. An API commonly takes more than one (an API
+  // key AND a bearer token); knowing all of them is what lets a run target one
+  // at a time, and what lets an "invalid credential" case strip the others
+  // instead of authenticating through them by accident.
+  //
+  // Empty on projects imported before this existed — callers fall back to
+  // `auth`, so nothing needs migrating.
+  authSchemes: {
+    type: [
+      new mongoose.Schema(
+        {
+          // The key from the spec's securitySchemes, shown in the picker.
+          name: { type: String, required: true },
+          type: {
+            type: String,
+            enum: [
+              "none",
+              "apiKey",
+              "bearer",
+              "basic",
+              "custom",
+              "oauth2_client_credentials",
+            ],
+            default: "none",
+          },
+          headerName: { type: String, default: "" },
+          valueEncrypted: { type: String, default: "" },
+          username: { type: String, default: "" },
+          passwordEncrypted: { type: String, default: "" },
+        },
+        { _id: false }
+      ),
+    ],
+    default: [],
+  },
   variables: { type: [variableSchema], default: [] },
   github: { type: githubSchema, default: () => ({}) },
   createdAt: { type: Date, default: Date.now },

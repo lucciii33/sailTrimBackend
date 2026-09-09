@@ -3,8 +3,13 @@ const mongoose = require("mongoose");
 const requestSchema = new mongoose.Schema(
   {
     method: String,
+    // Includes the query string, so the evidence shows exactly what was sent —
+    // a boundary case like offset=-1 used to be reported against a bare
+    // "/orders" with nothing negative visible, which read as a made-up finding.
     url: String,
     headers: { type: Map, of: String },
+    // Kept separately too, so the params can be read without parsing the URL.
+    query: mongoose.Schema.Types.Mixed,
     body: mongoose.Schema.Types.Mixed,
   },
   { _id: false }
