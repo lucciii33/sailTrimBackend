@@ -92,4 +92,15 @@ router.get("/suites/:id", protect, c.getSuite);
 router.delete("/suites/:id", protect, c.deleteSuite);
 router.post("/suites/:id/run", protect, c.runSuite);
 
+// --- Per-tool saved suites (smoke / regression) ---
+// One model call per tool, so a server with hundreds of tools works. The
+// project-level smoke/regression routes above keep the old all-at-once
+// behaviour for projects small enough that it still fits.
+router.post("/projects/:projectId/tools/:toolName/suites", protect, c.generateToolSuite);
+router.post("/projects/:id/tool-suites", protect, c.generateProjectToolSuites);
+router.get("/projects/:id/tool-suites", protect, c.listToolSuites);
+router.post("/tool-suites/:suiteId/run", protect, c.runToolSuite);
+router.post("/tool-suites/:suiteId/cases/:caseId/refine", protect, c.refineToolSuiteCase);
+router.delete("/tool-suites/:suiteId", protect, c.deleteToolSuite);
+
 module.exports = router;

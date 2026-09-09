@@ -18,6 +18,7 @@ const McpSecurityRun = require("../model/McpSecurityRunModel.js");
 const McpProject = require("../model/McpProjectModel.js");
 const McpUsageEvent = require("../model/McpUsageEventModel.js");
 const { getUserAnthropicClient } = require("../services/userKeyService.js");
+const mcpToolSuites = require("../services/mcpToolSuiteService.js");
 
 const FREE_LIMITS = {
   projects: 2,
@@ -976,7 +977,129 @@ const deleteSecurityRun = asyncHandler(async (req, res) => {
   res.json({ ok: true, deletedBugCount: bugs.deletedCount || 0 });
 });
 
+
+// ---------- Per-tool saved suites (smoke / regression) ----------
+//
+// The project-level generators above build every tool's cases in one model call
+// capped at 4096 output tokens — it truncates well before a large server's tool
+// count. These generate one tool at a time, mirroring the API side.
+
+async function generateToolSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { projectId, toolName } = req.params;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const kinds = req.body?.kind ? [req.body.kind] : ["smoke", "regression"];
+    const suites = [];
+    for (const kind of kinds) {
+      suites.push(
+        await mcpToolSuites.generateSuite({
+          projectId,
+          toolName,
+          kind,
+          userId: req.user._id,
+          companyId: req.user.companyId,
+          anthropicClient,
+        })
+      );
+    }
+    res.status(201).json({ suites });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("generateToolSuite error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function generateProjectToolSuites(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await mcpToolSuites.generateProjectSuites({
+      projectId: req.params.id,
+      toolNames: Array.isArray(req.body?.toolNames) ? req.body.toolNames : null,
+      kinds: req.body?.kind ? [req.body.kind] : ["smoke", "regression"],
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("generateProjectToolSuites error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function listToolSuites(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    res.json(
+      await mcpToolSuites.listProjectSuites({
+        projectId: req.params.id,
+        companyId: req.user.companyId,
+      })
+    );
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("listToolSuites error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function runToolSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    const anthropicClient = await getUserAnthropicClient(req.user._id);
+    const result = await mcpToolSuites.runSuite({
+      suiteId: req.params.suiteId,
+      companyId: req.user.companyId,
+      anthropicClient,
+    });
+    res.json({ summary: result.summary, results: result.results });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("runToolSuite error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function refineToolSuiteCase(req, res) {
+  if (!requireCompany(req, res)) return;
+  try {
+    const result = await mcpToolSuites.refineCase({
+      suiteId: req.params.suiteId,
+      caseId: req.params.caseId,
+      instruction: req.body?.instruction,
+      companyId: req.user.companyId,
+      anthropicClient: await getUserAnthropicClient(req.user._id),
+    });
+    res.json({ case: result.case, added: result.added, removed: result.removed });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    console.error("refineToolSuiteCase error:", err);
+    res.status(status).json({ message: err.message || "Internal error" });
+  }
+}
+
+async function deleteToolSuite(req, res) {
+  if (!requireCompany(req, res)) return;
+  const McpToolSuite = require("../model/McpToolSuiteModel.js");
+  const del = await McpToolSuite.deleteOne({
+    _id: req.params.suiteId,
+    companyId: req.user.companyId,
+  });
+  if (!del.deletedCount) return res.status(404).json({ message: "Suite not found" });
+  res.json({ success: true });
+}
+
 module.exports = {
+  generateToolSuite,
+  generateProjectToolSuites,
+  listToolSuites,
+  runToolSuite,
+  refineToolSuiteCase,
+  deleteToolSuite,
   connectServer,
   getTools,
   saveProject,
