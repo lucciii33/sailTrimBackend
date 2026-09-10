@@ -27,6 +27,11 @@ const apiWatcherSchema = new mongoose.Schema(
       // not just that it exists. Off by default: it makes real calls, and a
       // project with no baseUrl or auth configured can't run anything.
       runTests: { type: Boolean, default: false },
+      // The bug hunter — a DIFFERENT thing from the suites above. Those are
+      // saved regression/smoke checks; this generates throwaway cases and
+      // reports actual bugs in the endpoint that just shipped. That report is
+      // the thing worth reading the morning after a merge.
+      runQa: { type: Boolean, default: true },
     },
 
     lastRun: {
@@ -36,6 +41,7 @@ const apiWatcherSchema = new mongoose.Schema(
       testsCreated: { type: Number, default: 0 },
       testsPassed: { type: Number, default: 0 },
       testsFailed: { type: Number, default: 0 },
+      bugsFound: { type: Number, default: 0 },
     },
 
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

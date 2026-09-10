@@ -47,6 +47,10 @@ const watcherRunSchema = new mongoose.Schema(
             testsFailed: { type: Number, default: 0 },
             runError: { type: String, default: "" },
             testError: { type: String, default: "" },
+            // Bug hunter results for this endpoint — separate from the suites.
+            bugsFound: { type: Number, default: 0 },
+            qaRunId: { type: String, default: "" },
+            qaError: { type: String, default: "" },
           },
           { _id: false }
         ),

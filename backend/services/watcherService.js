@@ -3,6 +3,7 @@ const ApiWatcher = require("../model/ApiWatcherModel");
 const WatcherRun = require("../model/WatcherRunModel");
 const BackfillJob = require("../model/BackfillJob");
 const apiSuiteService = require("./apiSuiteService");
+const apiQAService = require("./apiQAService");
 const { getUserAnthropicClient } = require("./userKeyService");
 
 // The watcher agent.
@@ -130,6 +131,7 @@ async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
     let testsCreated = 0;
     let testsPassed = 0;
     let testsFailed = 0;
+    let bugsFound = 0;
     const rows = [];
     for (const d of fresh) {
       const row = {
@@ -162,11 +164,11 @@ async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
           row.testError = err.message;
         }
 
-        // Execute what was just generated, so the morning after a merge you
-        // know whether the new endpoint WORKS, not only that it exists.
-        // Reported separately from generation: a project with no baseUrl or
-        // auth can't run anything, and that must not look like the tests
-        // failed to be written.
+        // Execute the SAVED suites, so the morning after a merge you know
+        // whether the new endpoint works, not only that it exists. Reported
+        // separately from generation: a project with no baseUrl or auth can't
+        // run anything, and that must not look like the tests failed to be
+        // written.
         if (watcher.actions?.runTests === true && suites.length) {
           for (const suite of suites) {
             try {
@@ -189,6 +191,33 @@ async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
           }
         }
       }
+
+      // The bug hunter. Deliberately separate from the suites above: those are
+      // saved checks that must keep passing, this generates throwaway cases and
+      // reports what is actually WRONG with the endpoint that just shipped.
+      // Conflating the two was the gap — an endpoint could arrive with a full
+      // suite written for it and nobody had looked for bugs in it.
+      if (watcher.actions?.runQa !== false) {
+        try {
+          const qa = await apiQAService.findBugs({
+            docId: d._id,
+            userId: watcher.userId,
+            companyId: watcher.companyId,
+            anthropicClient,
+          });
+          row.bugsFound = qa.bugCount || 0;
+          row.qaRunId = String(qa.testRunId || qa.runId || "");
+          bugsFound += row.bugsFound;
+        } catch (err) {
+          // Usually "no base URL set" — real, but not a reason to lose the rest
+          // of the run's findings.
+          console.error(
+            `[watcher] QA failed for ${d.method} ${d.path}:`,
+            err.message
+          );
+          row.qaError = err.message;
+        }
+      }
       rows.push(row);
     }
 
@@ -206,12 +235,14 @@ async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
       testsCreated,
       testsPassed,
       testsFailed,
+      bugsFound,
     };
     await watcher.save();
 
     console.log(
       `[watcher] ${watcher.owner}/${watcher.repo}: ${fresh.length} new endpoint(s), ${testsCreated} test(s)` +
-        (watcher.actions?.runTests ? `, ${testsPassed} passed / ${testsFailed} failed` : "")
+        (watcher.actions?.runTests ? `, ${testsPassed} passed / ${testsFailed} failed` : "") +
+        (watcher.actions?.runQa !== false ? `, ${bugsFound} bug(s)` : "")
     );
     return run;
   } catch (err) {
