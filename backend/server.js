@@ -265,9 +265,22 @@ app.use(errorHandler);
 
 // app.listen(port, () => console.log(`Server started on port ${port}`));
 if (process.env.NODE_ENV !== "test") {
-  app.listen(port, "0.0.0.0", () =>
-    console.log(`Server started on port ${port}`),
-  );
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Server started on port ${port}`);
+
+    // Pick up watcher runs that a previous process recorded but never finished.
+    // A merge that lands while this service is redeploying gets its trigger
+    // written to the database and its work killed a second later; without this
+    // the run is lost with no trace beyond a 200 in GitHub's delivery log.
+    // Delayed so it never competes with the first real requests after a boot.
+    setTimeout(() => {
+      require("./services/watcherService")
+        .drainPendingRuns()
+        .catch((err) =>
+          console.error("[watcher] could not resume pending runs:", err.message),
+        );
+    }, 10000);
+  });
 }
 // resetLoginDaysJob();
 // scrapMarinasApify();

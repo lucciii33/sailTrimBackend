@@ -26,12 +26,20 @@ const watcherRunSchema = new mongoose.Schema(
       branch: { type: String, default: "" },
     },
 
+    // "pending" exists so a trigger survives the process that received it.
+    // The webhook writes the row and returns; the work is picked up after. A
+    // fire-and-forget run held only in memory is lost whenever the server
+    // restarts — which is exactly what happens during a deploy, and a merge
+    // landing mid-deploy is not a rare event.
     status: {
       type: String,
-      enum: ["running", "success", "failed"],
-      default: "running",
+      enum: ["pending", "running", "success", "failed"],
+      default: "pending",
       index: true,
     },
+    // Guards against re-running the same merge if the trigger is delivered
+    // twice (GitHub retries) or picked up by two instances.
+    attempts: { type: Number, default: 0 },
 
     // Endpoints present after the run that weren't there before it.
     newEndpoints: {

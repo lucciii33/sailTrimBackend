@@ -60,19 +60,26 @@ async function diffAndFlagNewEndpoints({ scope, beforeKeys, prNumber = null }) {
  * an exception and a crash would leave the run row stuck at "running". Failures
  * are recorded on the run instead.
  */
-async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
-  const watcher = await ApiWatcher.findById(watcherId);
-  if (!watcher) return null;
+async function runPendingRun(runId) {
+  // Claim the row atomically: two instances draining the same backlog, or a
+  // GitHub retry arriving while the first attempt is live, must not both start
+  // the same regeneration. Whoever flips it out of pending owns it.
+  const run = await WatcherRun.findOneAndUpdate(
+    { _id: runId, status: { $in: ["pending", "running"] } },
+    { $set: { status: "running", startedAt: new Date() }, $inc: { attempts: 1 } },
+    { new: true }
+  );
+  if (!run) return null; // already claimed or already finished
 
-  const run = await WatcherRun.create({
-    watcherId: watcher._id,
-    owner: watcher.owner,
-    repo: watcher.repo,
-    trigger: { ...trigger, branch: trigger.branch || watcher.branch },
-    status: "running",
-    userId: watcher.userId,
-    companyId: watcher.companyId,
-  });
+  const watcher = await ApiWatcher.findById(run.watcherId);
+  if (!watcher) {
+    run.status = "failed";
+    run.error = "The watcher was deleted before this run started.";
+    run.finishedAt = new Date();
+    await run.save();
+    return run;
+  }
+  const trigger = run.trigger || { kind: "manual" };
 
   watcher.lastRun = {
     at: new Date(),
@@ -267,6 +274,58 @@ async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
  * must answer GitHub immediately — a full regeneration takes minutes, so the
  * runs are started and deliberately NOT awaited.
  */
+/**
+ * Record a trigger as a pending run and start working on it.
+ *
+ * The row is written BEFORE the work begins and awaited, so the trigger is
+ * durable: if the process dies mid-run — a deploy, a crash, a dyno restart —
+ * the row is still there and drainPendingRuns() picks it up on the next boot.
+ * The previous version started the work in memory and returned, which meant a
+ * merge landing during a deploy was silently lost.
+ */
+async function enqueueRun({ watcher, trigger }) {
+  const run = await WatcherRun.create({
+    watcherId: watcher._id,
+    owner: watcher.owner,
+    repo: watcher.repo,
+    trigger: { ...trigger, branch: trigger.branch || watcher.branch },
+    status: "pending",
+    userId: watcher.userId,
+    companyId: watcher.companyId,
+  });
+  // Not awaited on purpose — the webhook has to answer GitHub now. Losing this
+  // is survivable precisely because the row above is already committed.
+  runPendingRun(run._id).catch((err) =>
+    console.error("[watcher] run failed:", err.message)
+  );
+  return run;
+}
+
+/**
+ * Pick up runs that were recorded but never finished — the ones orphaned by a
+ * restart. Called once at boot.
+ */
+async function drainPendingRuns() {
+  // "running" rows are included: a row left in that state means the process
+  // that owned it is gone, since a live run always reaches success or failed.
+  const orphans = await WatcherRun.find({
+    status: { $in: ["pending", "running"] },
+    attempts: { $lt: 3 },
+  })
+    .sort({ createdAt: 1 })
+    .limit(20);
+
+  if (orphans.length) {
+    console.log(`[watcher] resuming ${orphans.length} interrupted run(s)`);
+  }
+  for (const run of orphans) {
+    await runPendingRun(run._id).catch((err) =>
+      console.error("[watcher] resume failed:", err.message)
+    );
+  }
+  return orphans.length;
+}
+
 async function onBranchUpdated({ owner, repo, branch, trigger }) {
   const watchers = await ApiWatcher.find({ owner, repo, branch, enabled: true });
   if (!watchers.length) return 0;
@@ -288,15 +347,36 @@ async function onBranchUpdated({ owner, repo, branch, trigger }) {
   if (!allowed.length) return 0;
 
   for (const w of allowed) {
-    runWatcher({ watcherId: w._id, trigger }).catch((err) =>
-      console.error("[watcher] background run failed:", err.message)
-    );
+    await enqueueRun({ watcher: w, trigger });
   }
   return allowed.length;
 }
 
+/**
+ * Record a run and execute it now. Used by "run this watcher" callers that want
+ * the work to start immediately; the durability comes from enqueueRun writing
+ * the row first either way.
+ */
+async function runWatcher({ watcherId, trigger = { kind: "manual" } }) {
+  const watcher = await ApiWatcher.findById(watcherId);
+  if (!watcher) return null;
+  const run = await WatcherRun.create({
+    watcherId: watcher._id,
+    owner: watcher.owner,
+    repo: watcher.repo,
+    trigger: { ...trigger, branch: trigger.branch || watcher.branch },
+    status: "pending",
+    userId: watcher.userId,
+    companyId: watcher.companyId,
+  });
+  return runPendingRun(run._id);
+}
+
 module.exports = {
   runWatcher,
+  runPendingRun,
+  enqueueRun,
+  drainPendingRuns,
   onBranchUpdated,
   endpointKey,
   diffAndFlagNewEndpoints,
