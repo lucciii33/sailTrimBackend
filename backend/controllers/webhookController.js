@@ -19,6 +19,7 @@ const { generateDocsFromFile } = require("../services/docService");
 const Doc = require("../model/DocModel");
 const User = require("../model/userModel");
 const Company = require("../model/companyModel");
+const watchers = require("../services/watcherService");
 const { decrypt } = require("../services/secretCrypto");
 
 const SLACK_NOTIFY_BRANCHES = new Set(["main", "master", "dev"]);
@@ -617,6 +618,41 @@ async function handlePullRequestMerged(payload) {
     await sendPRSlackNotification(payload, "merged");
   } catch (err) {
     console.error("Error handling merged pull_request event:", err);
+  }
+
+  // Watchers: something landed on a branch someone is watching, so regenerate
+  // that repo's docs, flag whatever endpoint is new, and generate QA for it.
+  //
+  // Deliberately not awaited — a regeneration takes minutes and GitHub expects
+  // this webhook to answer immediately. Wrapped separately from the Slack call
+  // so one failing never suppresses the other.
+  try {
+    const pr = payload.pull_request || {};
+    const branch = pr.base?.ref;
+    const owner = payload.repository?.owner?.login;
+    const repo = payload.repository?.name;
+    if (owner && repo && branch) {
+      const started = await watchers.onBranchUpdated({
+        owner,
+        repo,
+        branch,
+        trigger: {
+          kind: "merge",
+          prNumber: pr.number || null,
+          prTitle: pr.title || "",
+          author: pr.user?.login || "",
+          sha: pr.merge_commit_sha || "",
+          branch,
+        },
+      });
+      if (started) {
+        console.log(
+          `[watcher] ${started} watcher(s) triggered by ${owner}/${repo} PR #${pr.number} -> ${branch}`
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Error triggering watchers:", err);
   }
 }
 

@@ -68,6 +68,17 @@ const docSchema = new mongoose.Schema({
   // but nothing ever mounts it (dead/unreachable code) — see
   // isOrphanRouteFile in services/githubService.js.
   mounted: { type: Boolean, default: true },
+  // Flagged by the watcher when an endpoint appears that wasn't in the previous
+  // scan of the repo. Cleared once someone has looked at it, so "what shipped
+  // since I last checked" stays answerable.
+  //
+  // NOT called `isNew`: mongoose reserves that name for its own "this document
+  // has not been saved yet" flag, and shadowing it breaks saves in ways that
+  // only show up later.
+  isNewEndpoint: { type: Boolean, default: false, index: true },
+  firstSeenAt: { type: Date, default: null },
+  // The PR that introduced it, so the endpoint links back to the change.
+  firstSeenPr: { type: Number, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

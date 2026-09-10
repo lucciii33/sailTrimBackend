@@ -258,6 +258,7 @@ app.use("/api/qa", require("./routes/apiQARoutes"));
 app.use("/api/e2e", require("./routes/e2eQaRoutes"));
 app.use("/api/installations", require("./routes/installationsRoutes"));
 app.use("/api/example", require("./routes/exampleRoutes"));
+app.use("/api/watchers", require("./routes/watcherRoutes"));
 
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }))
 app.use(errorHandler);

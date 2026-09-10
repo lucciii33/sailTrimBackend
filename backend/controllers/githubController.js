@@ -714,4 +714,13 @@ async function getBackfillJob(req, res) {
   res.status(200).json(job);
 }
 
-module.exports = { githubCallback, getConnectLink, startBackfill, getBackfillJob };
+module.exports = {
+  githubCallback,
+  getConnectLink,
+  startBackfill,
+  getBackfillJob,
+  // The watcher drives the same doc-regeneration pipeline the manual button
+  // does — exported so it runs the identical code path instead of a copy that
+  // can drift.
+  runBackfill,
+};
