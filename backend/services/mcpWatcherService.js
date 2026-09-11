@@ -1,5 +1,6 @@
 const McpProject = require("../model/McpProjectModel.js");
 const McpTool = require("../model/McpToolModel.js");
+const McpDoc = require("../model/McpDocModel.js");
 const McpWatcher = require("../model/McpWatcherModel.js");
 const McpWatcherRun = require("../model/McpWatcherRunModel.js");
 const mcpProjects = require("./mcpProjectService.js");
@@ -64,6 +65,43 @@ async function diffAndFlagNewTools({
     );
   }
   return { fresh, liveCount: (liveTools || []).length };
+}
+
+/**
+ * Real argument values for a brand-new tool, borrowed from its siblings.
+ *
+ * A tool the watcher just discovered has no verified sample args yet, so its QA
+ * would invent every id and report "not found" as a bug. Sibling tools on the
+ * same server usually take the same ids (get_product and a new
+ * get_product_orders both take product_id), and their docs carry values that
+ * were verified against the live server. Reuse those, matched by argument name.
+ */
+async function harvestKnownArgs({ projectId, companyId, tool }) {
+  const wanted = Object.keys(tool?.inputSchema?.properties || {});
+  if (!wanted.length) return {};
+
+  const [docs, tools] = await Promise.all([
+    McpDoc.find({ projectId, companyId }).select("toolName sampleArgs responseVerified").lean(),
+    McpTool.find({ projectId, companyId }).select("name suggestedArgs").lean(),
+  ]);
+
+  // Verified doc args first — they were confirmed against the live server.
+  const sources = [
+    ...docs.filter((d) => d.responseVerified).map((d) => d.sampleArgs),
+    ...docs.filter((d) => !d.responseVerified).map((d) => d.sampleArgs),
+    ...tools.map((t) => t.suggestedArgs),
+  ];
+  const known = {};
+  for (const args of sources) {
+    if (!args || typeof args !== "object") continue;
+    for (const name of wanted) {
+      const v = args[name];
+      if (known[name] === undefined && v !== undefined && v !== null && v !== "") {
+        known[name] = v;
+      }
+    }
+  }
+  return known;
 }
 
 async function runPendingRun(runId) {
@@ -222,10 +260,17 @@ async function runPendingRun(runId) {
       // The bug hunter — separate from the saved suites, same as on the API side.
       if (watcher.actions?.runQa !== false) {
         try {
+          // Without this a new tool's happy path always runs on invented ids.
+          const knownArgs = await harvestKnownArgs({
+            projectId: project._id,
+            companyId: watcher.companyId,
+            tool,
+          });
           const qa = await mcpQa.runQa({
             config,
             projectId: project._id,
             toolName: tool.name,
+            sampleArgsByTool: { [tool.name]: knownArgs },
             maxCasesPerTool: 3,
             save: true,
             userId: watcher.userId,
@@ -348,4 +393,5 @@ module.exports = {
   runPendingRun,
   drainPendingRuns,
   diffAndFlagNewTools,
+  harvestKnownArgs,
 };

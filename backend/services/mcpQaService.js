@@ -272,6 +272,35 @@ async function generateCases({ tools, docs, sampleArgsByTool, provider, model, m
   }
 }
 
+// Required arguments that name an identifier (id, product_id, orderId…). These
+// can't be invented: a made-up id legitimately comes back "not found".
+function idLikeRequiredArgs(tool) {
+  const schema = tool?.inputSchema || {};
+  const required = new Set(schema.required || []);
+  return Object.keys(schema.properties || {}).filter(
+    (name) => required.has(name) && /(^id$|_id$|Id$)/.test(name)
+  );
+}
+
+// True when the case ran on an id nobody has verified exists.
+//
+// Checks the args the case ACTUALLY USED, not just whether a real value was
+// on offer: the generator can be handed product_id=1 and still write a "second
+// known product" happy path with product_id=2. That id was invented, so its
+// "not found" means nothing about the tool.
+function ranBlindOnIds(tool, knownArgs, usedArgs) {
+  const ids = idLikeRequiredArgs(tool);
+  if (!ids.length) return false;
+  const known = knownArgs || {};
+  const used = usedArgs || {};
+  return ids.some((name) => {
+    const k = known[name];
+    if (k === undefined || k === null || k === "") return true;
+    // Compare as strings so 1 and "1" count as the same verified id.
+    return String(used[name]) !== String(k);
+  });
+}
+
 function fallbackJudge(testCase, execution) {
   const expectedRejection = ["sad_path", "security", "schema"].includes(testCase.category);
   const passed = expectedRejection ? execution.status !== "ok" || !!execution.error : execution.status === "ok" && !execution.error;
@@ -427,7 +456,28 @@ async function runQa({
       rawToolResponse: run.toolResponse,
       responseSchema: run.status === "ok" && !run.error ? mcpDocs.inferJsonSchema(parsedResponse) : null,
     };
-    const judged = await judgeCase({ testCase, tool, execution, provider, model, anthropicClient });
+    let judged = await judgeCase({ testCase, tool, execution, provider, model, anthropicClient });
+
+    // Missing-data guard — the MCP counterpart of the API happy-path guard.
+    // A happy path for a tool that needs a real id (product_id, order_id…) only
+    // means something with an id that exists. When none was supplied, the
+    // generator invents one, the tool correctly answers "not found", and the
+    // judge files a bug against a tool that works fine. Downgrade that to a
+    // needs-data warning — it removes false bugs and never hides a real one,
+    // since a happy path WITH a known id is judged exactly as before.
+    if (
+      testCase.category === "happy_path" &&
+      judged.verdict !== "pass" &&
+      ranBlindOnIds(tool, sampleArgsByTool[testCase.toolName], testCase.args)
+    ) {
+      judged = {
+        verdict: "warn",
+        bug: null,
+        reasoning:
+          "Needs data: this tool requires a real id and none was available, so the call used an invented value. " +
+          "The failure says nothing about the tool — give it sample args with a real id to test the happy path.",
+      };
+    }
     const result = {
       ...testCase,
       execution,
@@ -522,4 +572,6 @@ module.exports = {
   runQa,
   callJsonLLM,
   safeParseJson,
+  idLikeRequiredArgs,
+  ranBlindOnIds,
 };
