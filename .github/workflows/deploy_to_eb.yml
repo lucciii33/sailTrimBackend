@@ -1,0 +1,32 @@
+name: "Deploy to AWS Elastic Beanstalk"
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 2. Install Dependencies
+        run: npm install --omit=dev
+        working-directory: ./backend
+
+      - name: 3. Create deployment zip
+        run: zip -r deploy.zip . --exclude "*.git*" --exclude ".github/*" --exclude "*.md"
+
+      - name: 4. Deploy to Elastic Beanstalk
+        uses: einaregilsson/beanstalk-deploy@v22
+        with:
+          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          application_name: inventory-s
+          environment_name: inventory-s-dev
+          region: us-east-1
+          version_label: "v-${{ github.sha }}"
+          deployment_package: deploy.zip

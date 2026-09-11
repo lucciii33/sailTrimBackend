@@ -15,8 +15,20 @@ const userSchema = mongoose.Schema(
       required: true,
     },
     password: {
+      // Not required: SSO (Google) users authenticate via their IdP and have
+      // no local password. Email/password users still always set this.
       type: String,
-      required: true,
+      required: false,
+    },
+    googleId: {
+      type: String,
+      required: false,
+      index: true,
+    },
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
     },
     edad: {
       type: Number,
@@ -56,6 +68,62 @@ const userSchema = mongoose.Schema(
     secretKeyStripe: {
       type: String,
       required: false,
+    },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      index: true,
+    },
+    role: {
+      type: String,
+      enum: ["owner", "member"],
+      default: "owner",
+    },
+    // GitHub identity captured when the user connects GitHub (OAuth hop). Used
+    // to link an org-approval install back to this user via the webhook's
+    // requester.id, since GitHub doesn't return an OAuth code on a request.
+    githubUserId: { type: String, default: "", index: true },
+    githubUsername: { type: String, default: "" },
+    anthropicKeyEncrypted: {
+      type: String,
+      required: false,
+    },
+    anthropicKeyMask: {
+      type: String,
+      required: false,
+    },
+    passwordHistory: {
+      type: [
+        {
+          hash: { type: String, required: true },
+          changedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+      select: false,
+    },
+    passwordChangedAt: {
+      type: Date,
+    },
+    failedLoginAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lockUntil: {
+      type: Date,
+    },
+    twoFactorEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    twoFactorSecret: {
+      type: String,
+      select: false,
+    },
+    twoFactorBackupCodes: {
+      type: [String],
+      default: [],
+      select: false,
     },
   },
   {

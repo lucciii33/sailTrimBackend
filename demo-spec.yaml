@@ -1,0 +1,119 @@
+# REAL inventory endpoints from THIS backend (sailTrimBackend), pointed at your
+# LOCAL server — so you can safely verify the tool finds bugs against an API
+# where you actually have data. Nothing touches aiera. All local.
+#
+# How to test:
+#   1. Run your backend:  npm run server   (http://localhost:5000)
+#   2. Olivia + Swagger → paste this → Generate.
+#   3. Target & auth: type = Bearer (auto-detected) → paste a JWT from your login
+#      (POST /api/user/login returns `token`).
+#   4. Environment: set real values from your DB:
+#        itemId = <a real inventory item _id>
+#        userId = <your user _id>
+#        owner  = <your user _id>   (used as the owner when creating items)
+#   5. Run QA on the Inventory section and watch the bugs.
+openapi: 3.0.0
+info:
+  title: SailTrim Inventory (local)
+  version: "1.0"
+servers:
+  - url: http://localhost:5000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+security:
+  - bearerAuth: []
+paths:
+  /api/inventory/createItem:
+    post:
+      tags: [Inventory]
+      summary: Create an inventory item
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, sku, owner, quantity]
+              properties:
+                name: { type: string }
+                sku: { type: string }
+                barcode: { type: string }
+                description: { type: string }
+                owner: { type: string }
+                quantity: { type: integer }
+                minimumStock: { type: integer }
+                unit: { type: string }
+                costPrice: { type: number }
+                salePrice: { type: number }
+                currency: { type: string }
+                location: { type: string }
+      responses:
+        "200": { description: Created }
+        "400": { description: Validation error }
+
+  /api/inventory/getItemById/{itemId}:
+    get:
+      tags: [Inventory]
+      summary: Get an inventory item by id
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+        "401": { description: Missing/invalid token }
+        "404": { description: Item not found }
+
+  /api/inventory/getItemsByUserId/{userId}:
+    get:
+      tags: [Inventory]
+      summary: List items for a user (public)
+      security: []        # this route has no auth
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /api/inventory/updateItemById/{itemId}:
+    put:
+      tags: [Inventory]
+      summary: Update an inventory item
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                quantity: { type: integer }
+                salePrice: { type: number }
+                location: { type: string }
+      responses:
+        "200": { description: Updated }
+        "401": { description: Missing/invalid token }
+        "404": { description: Item not found }
+
+  /api/inventory/deleteItemById/{itemId}:
+    delete:
+      tags: [Inventory]
+      summary: Delete an inventory item
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Deleted }
+        "401": { description: Missing/invalid token }
+        "404": { description: Item not found }
