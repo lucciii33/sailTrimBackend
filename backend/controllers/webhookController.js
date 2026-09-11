@@ -20,6 +20,7 @@ const Doc = require("../model/DocModel");
 const User = require("../model/userModel");
 const Company = require("../model/companyModel");
 const watchers = require("../services/watcherService");
+const mcpWatchers = require("../services/mcpWatcherService");
 const { decrypt } = require("../services/secretCrypto");
 
 const SLACK_NOTIFY_BRANCHES = new Set(["main", "master", "dev"]);
@@ -653,6 +654,38 @@ async function handlePullRequestMerged(payload) {
     }
   } catch (err) {
     console.error("Error triggering watchers:", err);
+  }
+
+  // MCP watchers on the same repo + branch. Kept in its own try so an MCP
+  // failure can never stop the API watcher above from being enqueued, or the
+  // other way round.
+  try {
+    const pr = payload.pull_request || {};
+    const branch = pr.base?.ref;
+    const owner = payload.repository?.owner?.login;
+    const repo = payload.repository?.name;
+    if (owner && repo && branch) {
+      const started = await mcpWatchers.onBranchUpdated({
+        owner,
+        repo,
+        branch,
+        trigger: {
+          kind: "merge",
+          prNumber: pr.number || null,
+          prTitle: pr.title || "",
+          author: pr.user?.login || "",
+          sha: pr.merge_commit_sha || "",
+          branch,
+        },
+      });
+      if (started) {
+        console.log(
+          `[mcp-watcher] ${started} watcher(s) triggered by ${owner}/${repo} PR #${pr.number} -> ${branch}`
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Error triggering MCP watchers:", err);
   }
 }
 

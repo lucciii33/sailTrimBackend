@@ -259,6 +259,7 @@ app.use("/api/e2e", require("./routes/e2eQaRoutes"));
 app.use("/api/installations", require("./routes/installationsRoutes"));
 app.use("/api/example", require("./routes/exampleRoutes"));
 app.use("/api/watchers", require("./routes/watcherRoutes"));
+app.use("/api/mcp-watchers", require("./routes/mcpWatcherRoutes"));
 
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }))
 app.use(errorHandler);
@@ -278,6 +279,13 @@ if (process.env.NODE_ENV !== "test") {
         .drainPendingRuns()
         .catch((err) =>
           console.error("[watcher] could not resume pending runs:", err.message),
+        );
+      // MCP runs too — those can be minutes into waiting for a deploy when the
+      // process goes down, which makes resuming them matter even more.
+      require("./services/mcpWatcherService")
+        .drainPendingRuns()
+        .catch((err) =>
+          console.error("[mcp-watcher] could not resume pending runs:", err.message),
         );
     }, 10000);
   });

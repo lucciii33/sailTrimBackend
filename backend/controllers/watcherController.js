@@ -234,4 +234,8 @@ module.exports = {
   listRuns,
   listNewEndpoints,
   acknowledgeNewEndpoints,
+  // Shared with the MCP watcher controller so both enforce the same plan and
+  // the same branch check, instead of two copies that can drift.
+  requirePro,
+  branchProblem,
 };

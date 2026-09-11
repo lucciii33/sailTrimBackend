@@ -245,6 +245,8 @@ async function listProjectTools({ projectId, companyId }) {
 }
 
 module.exports = {
+  // Used by the MCP watcher to mirror the live server's tool list into McpTool.
+  upsertProjectTools,
   saveProject,
   getProject,
   getProjectOverview,
