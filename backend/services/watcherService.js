@@ -41,9 +41,26 @@ function endpointKey(doc) {
 // so their prose varies between regenerations even when the code didn't change;
 // comparing it would mark untouched endpoints as edited. Names, types, required
 // and status codes come from the code, so they only move when the code does.
+// The type as a base kind, not the literal text. When one file changes, the
+// backfill regenerates EVERY endpoint in it with the model, and the model
+// writes the same type differently from one run to the next — "array",
+// "Array<Object>", "object[]". Comparing that text flagged untouched endpoints
+// as edited (a whole single-file API lit up on every merge). A real type change
+// — string to number — still moves the base kind, so it's still caught.
+function baseType(raw) {
+  const t = String(raw || "").toLowerCase().trim();
+  if (!t) return "";
+  if (t.startsWith("array") || t.startsWith("list") || t.endsWith("[]")) return "array";
+  if (/^(object|dict|map|record)/.test(t)) return "object";
+  if (/^(int|integer|number|float|double|decimal|long)/.test(t)) return "number";
+  if (/^(bool|boolean)/.test(t)) return "boolean";
+  if (/^(str|string|text|uuid|date|datetime|email)/.test(t)) return "string";
+  return t;
+}
+
 function paramSig(list) {
   return (list || [])
-    .map((p) => `${p.name}:${String(p.type || "").toLowerCase()}:${p.required ? 1 : 0}`)
+    .map((p) => `${p.name}:${baseType(p.type)}:${p.required ? 1 : 0}`)
     .sort();
 }
 
