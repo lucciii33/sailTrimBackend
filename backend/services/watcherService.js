@@ -4,6 +4,7 @@ const WatcherRun = require("../model/WatcherRunModel");
 const BackfillJob = require("../model/BackfillJob");
 const apiSuiteService = require("./apiSuiteService");
 const apiQAService = require("./apiQAService");
+const prDiff = require("./prDiffService");
 const { getUserAnthropicClient } = require("./userKeyService");
 
 // The watcher agent.
@@ -236,19 +237,77 @@ async function runPendingRun(runId) {
     });
 
     // 3b) Edited: same endpoint, different contract.
+    const editedAt = trigger.mergedAt ? new Date(trigger.mergedAt) : new Date();
     const edited = await diffAndFlagEditedEndpoints({
       scope,
       beforeContracts,
       prNumber: trigger.prNumber || null,
-      editedAt: trigger.mergedAt ? new Date(trigger.mergedAt) : new Date(),
+      editedAt,
     });
+
+    const anthropicClient = watcher.userId
+      ? await getUserAnthropicClient(watcher.userId).catch(() => null)
+      : null;
+
+    // 3c) Touched by the diff. A contract only moves for some changes — a new
+    // response field, a validation rule or a logic fix leaves it identical.
+    // Read what the PR actually changed and label every existing endpoint it
+    // touched. Added ON TOP of 3b: a contract change stays labeled even if the
+    // diff analysis misses it or fails.
+    if (trigger.kind === "merge" && trigger.prNumber) {
+      try {
+        const files = await prDiff.fetchPRFiles({
+          installationId: watcher.installationId,
+          owner: watcher.owner,
+          repo: watcher.repo,
+          prNumber: trigger.prNumber,
+        });
+        const freshKeys = new Set(fresh.map(endpointKey));
+        const items = after.map(endpointKey).filter((k) => !freshKeys.has(k));
+        const { touched } = await prDiff.findTouched({
+          files,
+          items,
+          kind: "api",
+          anthropicClient,
+        });
+
+        const byKey = new Map(
+          edited.map((e) => [`${String(e.method).toUpperCase()} ${e.path}`, e])
+        );
+        for (const t of touched) {
+          const existing = byKey.get(t.key);
+          if (existing) {
+            if (t.summary && !existing.changes.includes(t.summary)) {
+              existing.changes.push(t.summary);
+            }
+            continue;
+          }
+          const doc = after.find((d) => endpointKey(d) === t.key);
+          if (!doc) continue;
+          const entry = {
+            docId: doc._id,
+            method: doc.method,
+            path: doc.path,
+            changes: [t.summary || "changed in this PR"],
+          };
+          edited.push(entry);
+          byKey.set(t.key, entry);
+        }
+        if (edited.length) {
+          await Doc.updateMany(
+            { _id: { $in: edited.map((e) => e.docId) } },
+            { $set: { lastEditedAt: editedAt, lastEditedPr: trigger.prNumber } }
+          );
+        }
+      } catch (err) {
+        // Diff analysis is best-effort — the contract result above still stands.
+        console.error("[watcher] PR diff analysis failed:", err.message);
+      }
+    }
 
     // 4) Generate QA for the new endpoints only. One at a time, and a failure
     // on one endpoint is recorded rather than allowed to sink the run — the
     // other endpoints are still flagged and still worth reporting.
-    const anthropicClient = watcher.userId
-      ? await getUserAnthropicClient(watcher.userId).catch(() => null)
-      : null;
 
     let testsCreated = 0;
     let testsPassed = 0;

@@ -7,6 +7,7 @@ const mcpProjects = require("./mcpProjectService.js");
 const mcpLab = require("./mcpLabService.js");
 const mcpQa = require("./mcpQaService.js");
 const mcpToolSuites = require("./mcpToolSuiteService.js");
+const prDiff = require("./prDiffService.js");
 const { getUserAnthropicClient } = require("./userKeyService.js");
 
 // The MCP watcher agent — the counterpart of watcherService for APIs.
@@ -221,13 +222,54 @@ async function runPendingRun(runId) {
       ? mcpProjects.publicServerUrl(config?.url)
       : "the MCP server";
 
-    // Wait for the deploy. First check is immediate — the deploy may already
-    // be done by the time the run is picked up (always true on a resume).
+    const anthropicClient = watcher.userId
+      ? await getUserAnthropicClient(watcher.userId).catch(() => null)
+      : null;
+
+    // Read the PR diff FIRST. It tells us which existing tools the merge
+    // touched (any change, not only schema) and whether it can change the
+    // server's interface at all. A merge that only touched the API used to make
+    // this watcher wait out the whole window for a deploy that would never
+    // change a tool.
+    let diffTouched = [];
+    let diffAdded = [];
+    let diffAnalyzed = false;
+    if (run.trigger?.kind === "merge" && run.trigger?.prNumber) {
+      try {
+        const files = await prDiff.fetchPRFiles({
+          installationId: watcher.installationId,
+          owner: watcher.owner,
+          repo: watcher.repo,
+          prNumber: run.trigger.prNumber,
+        });
+        const res = await prDiff.findTouched({
+          files,
+          items: run.toolsBeforeNames || [],
+          kind: "mcp",
+          anthropicClient,
+        });
+        diffTouched = res.touched;
+        diffAdded = res.addedTools;
+        diffAnalyzed = res.analyzed;
+      } catch (err) {
+        console.error("[mcp-watcher] PR diff analysis failed:", err.message);
+      }
+    }
+
+    // Wait for the deploy only when the diff says the server's interface can
+    // change (a tool added, or a tool's params/output changed). If the analysis
+    // failed we don't know, so keep waiting as before — never skip on a guess.
+    const expectServerChange =
+      !diffAnalyzed || diffAdded.length > 0 || diffTouched.some((t) => t.changesInterface);
+
+    // First check is immediate — the deploy may already be done by the time the
+    // run is picked up (always true on a resume).
     const intervalMs = Math.max(5, watcher.wait?.intervalSec ?? 60) * 1000;
-    const maxChecks = Math.max(
+    const fullChecks = Math.max(
       1,
       Math.ceil(((watcher.wait?.maxMinutes ?? 15) * 60 * 1000) / intervalMs)
     );
+    const maxChecks = expectServerChange ? fullChecks : 1;
 
     let liveTools = null;
     let reached = false;
@@ -280,15 +322,49 @@ async function runPendingRun(runId) {
     fresh = diff.fresh;
     run.toolsAfter = diff.liveCount;
 
-    if (!fresh.length && !(diff.edited || []).length) {
+    // Tools the diff touched that the schema comparison didn't catch (a logic or
+    // validation change with the same interface). Same treatment: the doc is
+    // stale, so ask for an update. Schema-detected edits stay even if the diff
+    // analysis missed them.
+    const editedAt = run.trigger?.mergedAt ? new Date(run.trigger.mergedAt) : new Date();
+    const freshNames = new Set(fresh.map((t) => t.name));
+    const liveNames = new Set((liveTools || []).map((t) => t.name));
+    const editedTools = [...(diff.edited || [])];
+    const editedByName = new Map(editedTools.map((e) => [e.name, e]));
+    for (const t of diffTouched) {
+      if (freshNames.has(t.key)) continue;
+      // A tool the diff removed isn't "edited" — deletions stay silent, as
+      // agreed. The analysis sees the pre-merge list, so drop anything the live
+      // server no longer exposes.
+      if (!liveNames.has(t.key)) continue;
+      const existing = editedByName.get(t.key);
+      if (existing) {
+        if (t.summary && !existing.changes.includes(t.summary)) existing.changes.push(t.summary);
+      } else {
+        const entry = { name: t.key, changes: [t.summary || "changed in this PR"] };
+        editedTools.push(entry);
+        editedByName.set(t.key, entry);
+      }
+    }
+    for (const e of editedTools) {
+      await McpTool.updateOne(
+        { projectId: project._id, name: e.name },
+        {
+          $set: {
+            hasPendingChanges: true,
+            pendingChanges: e.changes,
+            lastEditedAt: editedAt,
+            lastEditedPr: run.trigger?.prNumber || null,
+          },
+        }
+      );
+    }
+
+    if (!fresh.length && !editedTools.length) {
       run.note =
         `No new tools appeared on the server within ${watcher.wait?.maxMinutes ?? 15} min. ` +
         `The deploy may not have finished, may not auto-deploy on merge, or this merge didn't add a tool.`;
     }
-
-    const anthropicClient = watcher.userId
-      ? await getUserAnthropicClient(watcher.userId).catch(() => null)
-      : null;
 
     let testsCreated = 0;
     let bugsFound = 0;
@@ -373,7 +449,7 @@ async function runPendingRun(runId) {
     }
 
     run.newTools = rows;
-    run.editedTools = diff.edited || [];
+    run.editedTools = editedTools;
     run.status = "success";
     run.finishedAt = new Date();
     await run.save();
