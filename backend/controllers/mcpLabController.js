@@ -302,6 +302,16 @@ const generateDocsForTool = asyncHandler(async (req, res) => {
   });
   await recordUsage(req, "docs_generate", projectId);
 
+  // The doc was just regenerated from the tool's current schema, so the
+  // watcher's "this tool has changes, please update it" no longer applies.
+  // Runs only after generation succeeded — a failure above throws first.
+  if (save) {
+    await McpTool.updateOne(
+      { _id: toolRecord._id },
+      { $set: { hasPendingChanges: false, pendingChanges: [] } }
+    );
+  }
+
   res.json({ projectId, toolName, ...out });
 });
 

@@ -643,6 +643,7 @@ async function handlePullRequestMerged(payload) {
           prTitle: pr.title || "",
           author: pr.user?.login || "",
           sha: pr.merge_commit_sha || "",
+          mergedAt: pr.merged_at || null,
           branch,
         },
       });
@@ -675,6 +676,7 @@ async function handlePullRequestMerged(payload) {
           prTitle: pr.title || "",
           author: pr.user?.login || "",
           sha: pr.merge_commit_sha || "",
+          mergedAt: pr.merged_at || null,
           branch,
         },
       });

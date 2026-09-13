@@ -24,6 +24,8 @@ const watcherRunSchema = new mongoose.Schema(
       author: { type: String, default: "" },
       sha: { type: String, default: "" },
       branch: { type: String, default: "" },
+      // When GitHub says the PR was merged — the date shown as "last edited".
+      mergedAt: { type: Date, default: null },
     },
 
     // "pending" exists so a trigger survives the process that received it.
@@ -40,6 +42,23 @@ const watcherRunSchema = new mongoose.Schema(
     // Guards against re-running the same merge if the trigger is delivered
     // twice (GitHub retries) or picked up by two instances.
     attempts: { type: Number, default: 0 },
+
+    // Endpoints that existed before and after the run but whose contract
+    // changed, with a short human description of what changed.
+    editedEndpoints: {
+      type: [
+        new mongoose.Schema(
+          {
+            docId: { type: mongoose.Schema.Types.ObjectId, ref: "Doc" },
+            method: String,
+            path: String,
+            changes: { type: [String], default: [] },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
 
     // Endpoints present after the run that weren't there before it.
     newEndpoints: {

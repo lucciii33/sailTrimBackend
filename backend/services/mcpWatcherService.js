@@ -25,6 +25,53 @@ function toolNamesOf(tools) {
   return (tools || []).map((t) => t?.name).filter(Boolean);
 }
 
+// A tool's contract: its input params (name, type, required) and its output
+// shape. Both come verbatim from the server, so unlike API docs there is no
+// model-written prose to filter out — any difference is a real change.
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function toolContract(tool) {
+  const schema = tool?.inputSchema || {};
+  const required = new Set(schema.required || []);
+  const input = Object.entries(schema.properties || {})
+    .map(([name, def]) => {
+      const type = Array.isArray(def?.type) ? def.type.join("|") : def?.type || "";
+      return `${name}:${type}:${required.has(name) ? 1 : 0}`;
+    })
+    .sort();
+  return { input, output: stableStringify(tool?.outputSchema || null) };
+}
+
+function describeToolChange(before, after) {
+  const out = [];
+  const prev = new Map((before.input || []).map((sig) => [sig.split(":")[0], sig]));
+  const next = new Map((after.input || []).map((sig) => [sig.split(":")[0], sig]));
+  for (const name of next.keys()) if (!prev.has(name)) out.push(`added param "${name}"`);
+  for (const name of prev.keys()) if (!next.has(name)) out.push(`removed param "${name}"`);
+  for (const [name, sig] of next) {
+    if (!prev.has(name) || prev.get(name) === sig) continue;
+    const [, pType, pReq] = prev.get(name).split(":");
+    const [, nType, nReq] = sig.split(":");
+    if (pType !== nType) out.push(`param "${name}" type ${pType || "?"} -> ${nType || "?"}`);
+    if (pReq !== nReq) out.push(`param "${name}" is now ${nReq === "1" ? "required" : "optional"}`);
+  }
+  if (before.output !== after.output) out.push("output shape changed");
+  return out;
+}
+
+function contractChanged(before, after) {
+  return stableStringify(before) !== stableStringify(after);
+}
+
 /**
  * Compare a live tool list against the pre-merge baseline, refresh the stored
  * tools, and flag the ones that are new.
@@ -35,8 +82,10 @@ function toolNamesOf(tools) {
 async function diffAndFlagNewTools({
   project,
   beforeNames,
+  beforeSchemas = {},
   liveTools,
   prNumber = null,
+  editedAt = new Date(),
   userId,
   companyId,
 }) {
@@ -64,7 +113,32 @@ async function diffAndFlagNewTools({
       }
     );
   }
-  return { fresh, liveCount: (liveTools || []).length };
+
+  // Edited: same tool, different schema. The tool record above now holds the
+  // new schema, but its doc was generated from the old one — flag it so the UI
+  // asks for an update instead of silently showing stale docs.
+  const edited = [];
+  for (const tool of liveTools || []) {
+    const prev = beforeSchemas[tool?.name];
+    if (!prev || !before.has(tool.name)) continue;
+    const now = toolContract(tool);
+    if (!contractChanged(prev, now)) continue;
+    const changes = describeToolChange(prev, now);
+    edited.push({ name: tool.name, changes });
+    await McpTool.updateOne(
+      { projectId: project._id, name: tool.name },
+      {
+        $set: {
+          hasPendingChanges: true,
+          pendingChanges: changes,
+          lastEditedAt: editedAt,
+          lastEditedPr: prNumber,
+        },
+      }
+    );
+  }
+
+  return { fresh, edited, liveCount: (liveTools || []).length };
 }
 
 /**
@@ -166,7 +240,16 @@ async function runPendingRun(runId) {
       try {
         liveTools = await mcpLab.listTools(config);
         reached = true;
-        if (toolNamesOf(liveTools).some((n) => !before.has(n))) break;
+        // Stop waiting as soon as the deployed server differs from the baseline
+        // — a new tool OR a changed schema. Breaking only on new names made an
+        // edit-only merge wait out the full window before being noticed.
+        const baseSchemas = run.toolsBeforeSchemas || {};
+        const differs = (liveTools || []).some(
+          (t) =>
+            !before.has(t.name) ||
+            (baseSchemas[t.name] && contractChanged(baseSchemas[t.name], toolContract(t)))
+        );
+        if (differs) break;
       } catch (err) {
         lastError = err.message || String(err);
       }
@@ -187,15 +270,17 @@ async function runPendingRun(runId) {
     const diff = await diffAndFlagNewTools({
       project,
       beforeNames: run.toolsBeforeNames,
+      beforeSchemas: run.toolsBeforeSchemas || {},
       liveTools,
       prNumber: run.trigger?.prNumber || null,
+      editedAt: run.trigger?.mergedAt ? new Date(run.trigger.mergedAt) : new Date(),
       userId: watcher.userId,
       companyId: watcher.companyId,
     });
     fresh = diff.fresh;
     run.toolsAfter = diff.liveCount;
 
-    if (!fresh.length) {
+    if (!fresh.length && !(diff.edited || []).length) {
       run.note =
         `No new tools appeared on the server within ${watcher.wait?.maxMinutes ?? 15} min. ` +
         `The deploy may not have finished, may not auto-deploy on merge, or this merge didn't add a tool.`;
@@ -288,6 +373,7 @@ async function runPendingRun(runId) {
     }
 
     run.newTools = rows;
+    run.editedTools = diff.edited || [];
     run.status = "success";
     run.finishedAt = new Date();
     await run.save();
@@ -320,7 +406,7 @@ async function runPendingRun(runId) {
 async function enqueueRun({ watcher, trigger }) {
   const project = await McpProject.findById(watcher.mcpProjectId).select("projectName").lean();
   const baseline = await McpTool.find({ projectId: watcher.mcpProjectId })
-    .select("name")
+    .select("name inputSchema outputSchema")
     .lean();
 
   const run = await McpWatcherRun.create({
@@ -332,6 +418,7 @@ async function enqueueRun({ watcher, trigger }) {
     trigger: { ...trigger, branch: trigger.branch || watcher.branch },
     status: "pending",
     toolsBeforeNames: baseline.map((t) => t.name),
+    toolsBeforeSchemas: Object.fromEntries(baseline.map((t) => [t.name, toolContract(t)])),
     userId: watcher.userId,
     companyId: watcher.companyId,
   });
@@ -394,4 +481,5 @@ module.exports = {
   drainPendingRuns,
   diffAndFlagNewTools,
   harvestKnownArgs,
+  toolContract,
 };

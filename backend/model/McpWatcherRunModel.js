@@ -26,6 +26,7 @@ const mcpWatcherRunSchema = new mongoose.Schema(
       author: { type: String, default: "" },
       sha: { type: String, default: "" },
       branch: { type: String, default: "" },
+      mergedAt: { type: Date, default: null },
     },
 
     // pending = recorded, not yet picked up. Written by the webhook BEFORE any
@@ -43,6 +44,9 @@ const mcpWatcherRunSchema = new mongoose.Schema(
     // server as it was BEFORE the deploy — not against a list it already
     // partially refreshed.
     toolsBeforeNames: { type: [String], default: [] },
+    // Each tool's contract (input params + output shape) before the merge, keyed
+    // by name — what lets a changed tool be told apart from an untouched one.
+    toolsBeforeSchemas: { type: mongoose.Schema.Types.Mixed, default: {} },
     toolsAfter: { type: Number, default: 0 },
 
     // How many times the live server was asked for its tools before the new
@@ -51,6 +55,16 @@ const mcpWatcherRunSchema = new mongoose.Schema(
     checks: { type: Number, default: 0 },
     note: { type: String, default: "" },
 
+    // Tools that existed before and after but whose schema changed.
+    editedTools: {
+      type: [
+        new mongoose.Schema(
+          { name: String, changes: { type: [String], default: [] } },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     newTools: {
       type: [
         new mongoose.Schema(

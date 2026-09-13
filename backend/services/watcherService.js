@@ -34,6 +34,91 @@ function endpointKey(doc) {
  * snapshot is taken before regeneration and the diff after, which makes the
  * whole thing awkward to test as one block.
  */
+// The parts of an endpoint that are its CONTRACT: parameter names, types and
+// whether they're required, plus which response codes exist.
+//
+// Deliberately excludes descriptions and examples. Docs are written by a model,
+// so their prose varies between regenerations even when the code didn't change;
+// comparing it would mark untouched endpoints as edited. Names, types, required
+// and status codes come from the code, so they only move when the code does.
+function paramSig(list) {
+  return (list || [])
+    .map((p) => `${p.name}:${String(p.type || "").toLowerCase()}:${p.required ? 1 : 0}`)
+    .sort();
+}
+
+function contractOf(doc) {
+  return {
+    body: paramSig(doc.requestBody),
+    query: paramSig(doc.queryParams),
+    responses: (doc.responses || [])
+      .map((r) => Number(r.status))
+      .filter(Boolean)
+      .sort((a, b) => a - b),
+  };
+}
+
+// A short human description of what moved, for the run history.
+function describeContractChange(before, after) {
+  const out = [];
+  const diffParams = (label, a, b) => {
+    const prev = new Map(a.map((sig) => [sig.split(":")[0], sig]));
+    const next = new Map(b.map((sig) => [sig.split(":")[0], sig]));
+    for (const name of next.keys()) if (!prev.has(name)) out.push(`added ${label} "${name}"`);
+    for (const name of prev.keys()) if (!next.has(name)) out.push(`removed ${label} "${name}"`);
+    for (const [name, sig] of next) {
+      if (prev.has(name) && prev.get(name) !== sig) out.push(`changed ${label} "${name}"`);
+    }
+  };
+  diffParams("body param", before.body, after.body);
+  diffParams("query param", before.query, after.query);
+  const prevCodes = new Set(before.responses);
+  const nextCodes = new Set(after.responses);
+  for (const code of nextCodes) if (!prevCodes.has(code)) out.push(`added response ${code}`);
+  for (const code of prevCodes) if (!nextCodes.has(code)) out.push(`removed response ${code}`);
+  return out;
+}
+
+/**
+ * Find endpoints that existed before the merge and still exist, but whose
+ * contract changed — and stamp them with when and in which PR.
+ *
+ * The doc content was already rewritten by the backfill; this only records that
+ * it happened, which is what lets the UI say "Edited · last at <date>".
+ */
+async function diffAndFlagEditedEndpoints({
+  scope,
+  beforeContracts,
+  prNumber = null,
+  editedAt = new Date(),
+}) {
+  const after = await Doc.find(scope)
+    .select("method path requestBody queryParams responses")
+    .lean();
+
+  const edited = [];
+  for (const d of after) {
+    const prev = beforeContracts.get(endpointKey(d));
+    if (!prev) continue; // new endpoint — reported by the new-endpoint diff
+    const now = contractOf(d);
+    if (JSON.stringify(prev) === JSON.stringify(now)) continue;
+    edited.push({
+      docId: d._id,
+      method: d.method,
+      path: d.path,
+      changes: describeContractChange(prev, now),
+    });
+  }
+
+  if (edited.length) {
+    await Doc.updateMany(
+      { _id: { $in: edited.map((e) => e.docId) } },
+      { $set: { lastEditedAt: editedAt, lastEditedPr: prNumber } }
+    );
+  }
+  return edited;
+}
+
 async function diffAndFlagNewEndpoints({ scope, beforeKeys, prNumber = null }) {
   const after = await Doc.find(scope).select("method path").lean();
   const fresh = after.filter((d) => !beforeKeys.has(endpointKey(d)));
@@ -97,9 +182,14 @@ async function runPendingRun(runId) {
     };
 
     // 1) Snapshot what exists BEFORE regenerating. Taken as a set of
-    // method+path so a doc that is rewritten in place doesn't read as new.
-    const before = await Doc.find(scope).select("method path").lean();
+    // method+path so a doc that is rewritten in place doesn't read as new, plus
+    // each endpoint's contract so a changed param can be told apart from an
+    // untouched endpoint once the backfill has rewritten the docs.
+    const before = await Doc.find(scope)
+      .select("method path requestBody queryParams responses")
+      .lean();
     const beforeKeys = new Set(before.map(endpointKey));
+    const beforeContracts = new Map(before.map((d) => [endpointKey(d), contractOf(d)]));
 
     // 2) Regenerate the docs through the same job the manual button uses, so
     // the two can't drift.
@@ -126,6 +216,14 @@ async function runPendingRun(runId) {
       scope,
       beforeKeys,
       prNumber: trigger.prNumber || null,
+    });
+
+    // 3b) Edited: same endpoint, different contract.
+    const edited = await diffAndFlagEditedEndpoints({
+      scope,
+      beforeContracts,
+      prNumber: trigger.prNumber || null,
+      editedAt: trigger.mergedAt ? new Date(trigger.mergedAt) : new Date(),
     });
 
     // 4) Generate QA for the new endpoints only. One at a time, and a failure
@@ -229,6 +327,7 @@ async function runPendingRun(runId) {
     }
 
     run.newEndpoints = rows;
+    run.editedEndpoints = edited;
     run.docsBefore = before.length;
     run.docsAfter = after.length;
     run.status = "success";
@@ -380,4 +479,6 @@ module.exports = {
   onBranchUpdated,
   endpointKey,
   diffAndFlagNewEndpoints,
+  diffAndFlagEditedEndpoints,
+  contractOf,
 };
