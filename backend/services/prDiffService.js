@@ -96,6 +96,8 @@ Return STRICT JSON only:
 Rules:
 - "touched" keys must come from the list, copied exactly.
 - A change to shared code counts for a tool only if it clearly changes that tool's behavior.
+- Only count changes to the tool's OWN code on the MCP server (its definition, or a helper inside the MCP server that it calls). A change to an HTTP API endpoint, route or backend file that the tool calls does NOT count — even if the tool wraps that endpoint.
+- Do not include a tool just because the diff mentions it in a comment or test.
 - Return {"touched":[],"addedTools":[]} if the diff doesn't affect any tool.`;
 
 /**

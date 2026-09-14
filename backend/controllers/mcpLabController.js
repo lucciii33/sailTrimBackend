@@ -1103,7 +1103,27 @@ async function deleteToolSuite(req, res) {
   res.json({ success: true });
 }
 
+// Delete an MCP project and everything under it (tools, docs, tests, QA runs,
+// bugs, load/profile/security runs, watchers). Trial usage is kept on purpose —
+// see deleteMcpProjectData.
+async function deleteMcpProject(req, res) {
+  if (!requireCompany(req, res)) return;
+  const McpProject = require("../model/McpProjectModel.js");
+  const { deleteMcpProjectData } = require("../services/repoRemovalService.js");
+  const project = await McpProject.findOne({
+    _id: req.params.id,
+    companyId: req.user.companyId,
+  });
+  if (!project) return res.status(404).json({ message: "MCP project not found" });
+  const deleted = await deleteMcpProjectData({
+    projectId: project._id,
+    companyId: req.user.companyId,
+  });
+  res.json({ success: true, deleted });
+}
+
 module.exports = {
+  deleteMcpProject,
   generateToolSuite,
   generateProjectToolSuites,
   listToolSuites,

@@ -84,6 +84,14 @@ const userSchema = mongoose.Schema(
     // requester.id, since GitHub doesn't return an OAuth code on a request.
     githubUserId: { type: String, default: "", index: true },
     githubUsername: { type: String, default: "" },
+    // The user's own GitHub token, encrypted. GitHub only lets a USER remove a
+    // repository from an app installation — the app's token can't — so this is
+    // what lets "Remove repo" work from inside Olivia. Captured on the OAuth hop
+    // (it used to be exchanged and thrown away). Expires; refreshed with the
+    // refresh token when GitHub issues one.
+    githubTokenEncrypted: { type: String, default: "" },
+    githubRefreshTokenEncrypted: { type: String, default: "" },
+    githubTokenExpiresAt: { type: Date, default: null },
     anthropicKeyEncrypted: {
       type: String,
       required: false,

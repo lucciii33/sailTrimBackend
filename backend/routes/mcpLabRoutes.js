@@ -11,6 +11,7 @@ router.post("/tools", protect, c.getTools);
 router.post("/projects", protect, c.saveProject);
 router.get("/projects", protect, c.listProjects);
 router.get("/projects/:id", protect, c.getProject);
+router.delete("/projects/:id", protect, c.deleteMcpProject);
 router.get("/projects/:id/tools", protect, c.listProjectTools);
 
 // --- Playground / runs ---

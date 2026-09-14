@@ -4,6 +4,11 @@ const {
   fetchInstallationReposForModel,
 } = require("../services/githubService");
 const { logEvent } = require("../services/auditLogger");
+const {
+  getUserGithubToken,
+  clearUserGithubToken,
+} = require("../services/githubUserTokenService");
+const removal = require("../services/repoRemovalService");
 
 // Which installations a user is allowed to see.
 //
@@ -117,8 +122,106 @@ async function disconnectInstallation(req, res) {
   res.json({ success: true });
 }
 
+// Remove ONE repo from Olivia entirely, from inside Olivia: take away the GitHub
+// App's access to it (so a refresh can't bring it back) and delete everything
+// Olivia stored for it. The connection and every other repo stay as they are.
+//
+// GitHub is asked FIRST. If it refuses, nothing is deleted — a half-removed repo
+// (data gone, still listed) would be worse than none.
+async function removeRepo(req, res) {
+  const { installationId, repo } = req.params;
+  const deleteMcpProjects =
+    req.body?.deleteMcpProjects === true || req.query.deleteMcpProjects === "true";
+
+  if (!req.user.companyId) {
+    return res.status(400).json({ message: "User has no company" });
+  }
+
+  const installation = await Installation.findOne({
+    installationId,
+    ...visibilityFilter(req.user),
+  });
+  if (!installation) {
+    return res.status(404).json({ message: "Installation not found" });
+  }
+  const owner = installation.accountLogin;
+  if (!(installation.repos || []).some((r) => r.repoName === repo)) {
+    return res.status(404).json({ message: `${owner}/${repo} isn't connected.` });
+  }
+
+  const userToken = await getUserGithubToken(req.user._id);
+  if (!userToken) {
+    return res.status(409).json({
+      code: "GITHUB_AUTH_REQUIRED",
+      message: "Sign in with GitHub once so Olivia can remove this repo.",
+    });
+  }
+
+  if ((await removal.installationSelection(installationId)) === "all") {
+    return res.status(409).json({
+      code: "INSTALLATION_ALL_REPOS",
+      message:
+        `Olivia has access to every repository in ${owner}, so a single one can't be removed. ` +
+        `Disconnect ${owner} and reconnect choosing only the repositories you want.`,
+    });
+  }
+
+  try {
+    await removal.removeRepoFromGithub({ userToken, installationId, owner, repo });
+  } catch (err) {
+    if (err.githubStatus === 401) {
+      await clearUserGithubToken(req.user._id).catch(() => {});
+      return res.status(409).json({
+        code: "GITHUB_AUTH_REQUIRED",
+        message: "Your GitHub sign-in expired. Sign in again to remove this repo.",
+      });
+    }
+    if (err.githubStatus === 403) {
+      return res.status(403).json({
+        message:
+          `GitHub didn't allow it: only an owner or admin of ${owner} can remove its repositories. ` +
+          `Nothing was deleted.`,
+      });
+    }
+    console.error("[installations] remove repo on GitHub failed:", err.message, err.githubBody || "");
+    return res.status(502).json({
+      message: "Couldn't remove the repo on GitHub. Nothing was deleted — try again.",
+    });
+  }
+
+  const companyId = req.user.companyId;
+  const mcpProjectIds = deleteMcpProjects
+    ? await removal.linkedMcpProjectIds({ owner, repo, companyId })
+    : [];
+  const deleted = await removal.deleteRepoData({ owner, repo, companyId, installationId });
+  for (const projectId of mcpProjectIds) {
+    await removal.deleteMcpProjectData({ projectId, companyId });
+  }
+
+  installation.repos = (installation.repos || []).filter((r) => r.repoName !== repo);
+  await installation.save();
+
+  await logEvent({
+    event: "github_repo_removed",
+    req,
+    user: req.user,
+    targetType: "Installation",
+    targetId: String(installation.installationId),
+    metadata: { owner, repo, deleteMcpProjects, mcpProjectsDeleted: mcpProjectIds.length },
+  });
+
+  res.json({
+    success: true,
+    owner,
+    repo,
+    deleted,
+    mcpProjectsDeleted: mcpProjectIds.length,
+  });
+}
+
 module.exports = {
   listInstallations,
   syncInstallations,
   disconnectInstallation,
+  removeRepo,
 };

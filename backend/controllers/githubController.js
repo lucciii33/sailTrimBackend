@@ -27,6 +27,7 @@ const {
 const { getUserAnthropicClient } = require("../services/userKeyService");
 const { renderGithubResultPage } = require("../views/githubResultPage");
 const PendingInstall = require("../model/PendingInstall");
+const { saveUserGithubTokens } = require("../services/githubUserTokenService");
 
 const CONCURRENCY = 2;
 
@@ -91,9 +92,14 @@ function hasSourceExtension(p) {
 const CONNECT_STATE_PURPOSE = "github_connect";
 const CONNECT_STATE_TTL = "15m";
 
-function signConnectState(userId) {
+// "reauth" is a sign-in-only hop: capture the user's GitHub token and send them
+// straight back to Olivia, instead of on to the install screen. Used when an
+// action needs the user's own token (removing a repo) and none is stored.
+const REAUTH_STATE_PURPOSE = "github_reauth";
+
+function signConnectState(userId, { purpose = CONNECT_STATE_PURPOSE, returnTo = "" } = {}) {
   return jwt.sign(
-    { sub: String(userId), purpose: CONNECT_STATE_PURPOSE },
+    { sub: String(userId), purpose, returnTo },
     process.env.JWT_SECRET_NODE,
     { expiresIn: CONNECT_STATE_TTL }
   );
@@ -105,15 +111,21 @@ function signConnectState(userId) {
 // Callers treat null the same as "no state" rather than throwing, so a
 // bad/expired state degrades to an unlinked installation instead of a hard
 // failure.
-function resolveStateUserId(state) {
+function resolveStatePayload(state) {
   if (!state) return null;
   try {
     const decoded = jwt.verify(state, process.env.JWT_SECRET_NODE);
-    if (decoded.purpose !== CONNECT_STATE_PURPOSE) return null;
-    return decoded.sub;
+    if (![CONNECT_STATE_PURPOSE, REAUTH_STATE_PURPOSE].includes(decoded.purpose)) {
+      return null;
+    }
+    return decoded;
   } catch (_) {
     return null;
   }
+}
+
+function resolveStateUserId(state) {
+  return resolveStatePayload(state)?.sub || null;
 }
 
 // Exchange the OAuth `code` GitHub sends when "Request user authorization
@@ -143,7 +155,15 @@ async function githubUserFromCode(code) {
     });
     const user = await userRes.json();
     if (!user?.id) return null;
-    return { id: String(user.id), login: user.login };
+    // Keep the token too — it used to be discarded here. It's what lets
+    // Olivia perform the actions only a user can, like removing a repo.
+    return {
+      id: String(user.id),
+      login: user.login,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token || "",
+      expiresIn: tokenData.expires_in || null,
+    };
   } catch (err) {
     console.error("githubUserFromCode failed:", err.message);
     return null;
@@ -193,7 +213,16 @@ async function reconcileInstallationsForGithubUser(userId, githubUserId) {
 // Authenticated endpoint the frontend calls right before sending the user
 // to GitHub, instead of building the install URL itself with a raw id.
 async function getConnectLink(req, res) {
-  const state = signConnectState(req.user._id);
+  // ?purpose=reauth only signs the user in (to capture their token) and returns
+  // them to `returnTo`, a same-site path — never a full URL, so this can't be
+  // turned into an open redirect.
+  const purpose =
+    req.query.purpose === "reauth" ? REAUTH_STATE_PURPOSE : CONNECT_STATE_PURPOSE;
+  const returnTo =
+    typeof req.query.returnTo === "string" && /^\/(?!\/)/.test(req.query.returnTo)
+      ? req.query.returnTo
+      : "";
+  const state = signConnectState(req.user._id, { purpose, returnTo });
   // Send the user through GitHub OAuth FIRST (not straight to the install
   // screen). GitHub does NOT return an OAuth `code` on a pending org "request"
   // — only on a completed install — so the install flow alone can't tell us who
@@ -245,6 +274,9 @@ async function githubCallback(req, res) {
           githubUserId: ghUser.id,
           githubUsername: ghUser.login,
         }).catch((e) => console.error("store githubUserId failed:", e.message));
+        await saveUserGithubTokens(state, ghUser).catch((e) =>
+          console.error("store github token failed:", e.message)
+        );
         console.log(
           `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`
         );
@@ -263,6 +295,14 @@ async function githubCallback(req, res) {
           );
         }
       }
+    }
+    // Sign-in-only hop: token captured above, go back to Olivia.
+    const payload = resolveStatePayload(rawState);
+    if (payload?.purpose === REAUTH_STATE_PURPOSE && frontendUrl) {
+      const to = payload.returnTo || "/workspace";
+      return res.redirect(
+        `${frontendUrl}${to}${to.includes("?") ? "&" : "?"}githubReauthed=1`
+      );
     }
     const slug = process.env.GITHUB_APP_SLUG || "OliviaTools";
     return res.redirect(
