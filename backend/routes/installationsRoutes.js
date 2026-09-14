@@ -6,12 +6,17 @@ const {
   syncInstallations,
   disconnectInstallation,
   removeRepo,
+  listRemovedRepos,
+  restoreRepo,
 } = require("../controllers/installationsController");
 
 router.get("/", protect, listInstallations);
 // Re-read the repo list from GitHub for every install the user can see — the
 // escape hatch when a webhook never arrived and the list went stale.
 router.post("/sync", protect, syncInstallations);
+// Repos removed inside Olivia, and reconnecting one of them.
+router.get("/removed", protect, listRemovedRepos);
+router.post("/:installationId/repos/:repo/restore", protect, restoreRepo);
 // Remove ONE repo from Olivia (GitHub access + all its data), keeping the
 // connection and the other repos. Declared before the bare :installationId
 // route for readability; the extra segments keep them from colliding anyway.

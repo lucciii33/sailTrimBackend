@@ -4,6 +4,7 @@ const PendingInstall = require("../model/PendingInstall");
 const {
   getOctokit,
   fetchInstallationReposForModel,
+  withoutRemovedRepos,
   getPRDiff,
   commentOnPR,
   getPRFiles,
@@ -89,16 +90,19 @@ async function handleInstallation(payload) {
   try {
     const { installation, repositories, requester } = payload;
 
-    const repos = (repositories || []).map((r) => ({
-      repoName: r.name,
-      repoFullName: r.full_name,
-    }));
-
     // Keep any user link the /callback already set for this install (direct
     // installs hit the callback with `state` before/around this webhook).
     const existing = await Installation.findOne({
       installationId: installation.id,
     });
+
+    const repos = withoutRemovedRepos(
+      (repositories || []).map((r) => ({
+        repoName: r.name,
+        repoFullName: r.full_name,
+      })),
+      existing?.removedRepos
+    );
     let userId = existing?.userId || null;
     let companyId = existing?.companyId || null;
 
@@ -233,13 +237,25 @@ async function handleInstallationRepositories(payload) {
       }
     }
 
-    const repos = await fetchInstallationReposForModel(installation.id);
+    // Re-adding a repo on GitHub is an explicit "I want it back": un-remove it.
+    const addedNames = new Set(
+      (payload.repositories_added || []).map((r) => r.name)
+    );
+    const removedRepos = (existing?.removedRepos || []).filter(
+      (r) => !addedNames.has(r.repoName)
+    );
+
+    const repos = withoutRemovedRepos(
+      await fetchInstallationReposForModel(installation.id),
+      removedRepos
+    );
 
     const set = {
       installationId: installation.id,
       accountLogin: installation.account.login,
       accountType: installation.account.type,
       repos,
+      removedRepos,
     };
     if (userId) set.userId = userId;
     if (companyId) set.companyId = companyId;
@@ -461,6 +477,10 @@ async function handlePullRequest(payload) {
     const installationRecord = await Installation.findOne({
       installationId: installation.id,
     });
+    // Removed inside Olivia: GitHub still sends its events, Olivia ignores them.
+    if ((installationRecord?.removedRepos || []).some((r) => r.repoName === repo)) {
+      return;
+    }
     const userId = installationRecord?.userId || null;
     let companyId = installationRecord?.companyId || null;
     if (!companyId && userId) {

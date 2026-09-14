@@ -16,6 +16,7 @@ const {
   extractMountPrefixes,
   isOrphanRouteFile,
   fetchInstallationRepos,
+  withoutRemovedRepos,
   MAX_FILE_BYTES,
 } = require("../services/githubService");
 const {
@@ -396,11 +397,14 @@ async function githubCallback(req, res) {
       accountType = data.account.type;
     }
 
+    const existingInstall = await Installation.findOne({ installationId }).select(
+      "removedRepos"
+    );
     const update = {
       installationId,
       accountLogin,
       accountType,
-      repos,
+      repos: withoutRemovedRepos(repos, existingInstall?.removedRepos),
     };
     if (state) {
       update.userId = state;

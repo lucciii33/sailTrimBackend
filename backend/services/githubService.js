@@ -70,6 +70,13 @@ async function fetchInstallationReposForModel(installationId) {
   return ghRepos.map((r) => ({ repoName: r.name, repoFullName: r.full_name }));
 }
 
+// Drops repos the user removed inside Olivia from a list freshly read from
+// GitHub (see Installation.removedRepos).
+function withoutRemovedRepos(repos, removedRepos) {
+  const removed = new Set((removedRepos || []).map((r) => r.repoName));
+  return (repos || []).filter((r) => !removed.has(r.repoName));
+}
+
 // Revokes the GitHub App's access for real (app-level auth, not
 // installation-level) — this is what actually removes the installation on
 // GitHub's side, same as uninstalling from GitHub Settings would. A 404
@@ -929,6 +936,7 @@ module.exports = {
   getOctokit,
   fetchInstallationRepos,
   fetchInstallationReposForModel,
+  withoutRemovedRepos,
   uninstallApp,
   getPRDiff,
   commentOnPR,

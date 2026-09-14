@@ -2,12 +2,15 @@ const Installation = require("../model/Installation");
 const {
   uninstallApp,
   fetchInstallationReposForModel,
+  withoutRemovedRepos,
 } = require("../services/githubService");
 const { logEvent } = require("../services/auditLogger");
-const {
-  getUserGithubToken,
-  clearUserGithubToken,
-} = require("../services/githubUserTokenService");
+// DISABLED: GitHub only lets a classic PAT remove a repo from an app
+// installation, so the user-token path can't work (see removeRepo).
+// const {
+//   getUserGithubToken,
+//   clearUserGithubToken,
+// } = require("../services/githubUserTokenService");
 const removal = require("../services/repoRemovalService");
 
 // Which installations a user is allowed to see.
@@ -58,7 +61,10 @@ async function syncInstallations(req, res) {
   await Promise.all(
     installations.map(async (inst) => {
       try {
-        inst.repos = await fetchInstallationReposForModel(inst.installationId);
+        inst.repos = withoutRemovedRepos(
+          await fetchInstallationReposForModel(inst.installationId),
+          inst.removedRepos
+        );
         await inst.save();
       } catch (err) {
         // One dead installation (revoked on GitHub, suspended) must not sink
@@ -122,12 +128,15 @@ async function disconnectInstallation(req, res) {
   res.json({ success: true });
 }
 
-// Remove ONE repo from Olivia entirely, from inside Olivia: take away the GitHub
-// App's access to it (so a refresh can't bring it back) and delete everything
-// Olivia stored for it. The connection and every other repo stay as they are.
+// Remove ONE repo from Olivia entirely, from inside Olivia: delete everything
+// Olivia stored for it and take it off the list. The connection and every other
+// repo stay as they are.
 //
-// GitHub is asked FIRST. If it refuses, nothing is deleted — a half-removed repo
-// (data gone, still listed) would be worse than none.
+// GitHub keeps the app's access to the repo: its API only lets a classic PAT
+// drop a single repo from an installation — not the app, not the signed-in
+// user's token. So the repo goes on `removedRepos`, which keeps sync, webhooks
+// and the connect callback from listing it again. Reconnecting it (restoreRepo)
+// starts from zero because its data is gone.
 async function removeRepo(req, res) {
   const { installationId, repo } = req.params;
   const deleteMcpProjects =
@@ -149,45 +158,46 @@ async function removeRepo(req, res) {
     return res.status(404).json({ message: `${owner}/${repo} isn't connected.` });
   }
 
-  const userToken = await getUserGithubToken(req.user._id);
-  if (!userToken) {
-    return res.status(409).json({
-      code: "GITHUB_AUTH_REQUIRED",
-      message: "Sign in with GitHub once so Olivia can remove this repo.",
-    });
-  }
-
-  if ((await removal.installationSelection(installationId)) === "all") {
-    return res.status(409).json({
-      code: "INSTALLATION_ALL_REPOS",
-      message:
-        `Olivia has access to every repository in ${owner}, so a single one can't be removed. ` +
-        `Disconnect ${owner} and reconnect choosing only the repositories you want.`,
-    });
-  }
-
-  try {
-    await removal.removeRepoFromGithub({ userToken, installationId, owner, repo });
-  } catch (err) {
-    if (err.githubStatus === 401) {
-      await clearUserGithubToken(req.user._id).catch(() => {});
-      return res.status(409).json({
-        code: "GITHUB_AUTH_REQUIRED",
-        message: "Your GitHub sign-in expired. Sign in again to remove this repo.",
-      });
-    }
-    if (err.githubStatus === 403) {
-      return res.status(403).json({
-        message:
-          `GitHub didn't allow it: only an owner or admin of ${owner} can remove its repositories. ` +
-          `Nothing was deleted.`,
-      });
-    }
-    console.error("[installations] remove repo on GitHub failed:", err.message, err.githubBody || "");
-    return res.status(502).json({
-      message: "Couldn't remove the repo on GitHub. Nothing was deleted — try again.",
-    });
-  }
+  // DISABLED: GitHub rejects this for app user tokens (403), see above.
+  // const userToken = await getUserGithubToken(req.user._id);
+  // if (!userToken) {
+  //   return res.status(409).json({
+  //     code: "GITHUB_AUTH_REQUIRED",
+  //     message: "Sign in with GitHub once so Olivia can remove this repo.",
+  //   });
+  // }
+  //
+  // if ((await removal.installationSelection(installationId)) === "all") {
+  //   return res.status(409).json({
+  //     code: "INSTALLATION_ALL_REPOS",
+  //     message:
+  //       `Olivia has access to every repository in ${owner}, so a single one can't be removed. ` +
+  //       `Disconnect ${owner} and reconnect choosing only the repositories you want.`,
+  //   });
+  // }
+  //
+  // try {
+  //   await removal.removeRepoFromGithub({ userToken, installationId, owner, repo });
+  // } catch (err) {
+  //   if (err.githubStatus === 401) {
+  //     await clearUserGithubToken(req.user._id).catch(() => {});
+  //     return res.status(409).json({
+  //       code: "GITHUB_AUTH_REQUIRED",
+  //       message: "Your GitHub sign-in expired. Sign in again to remove this repo.",
+  //     });
+  //   }
+  //   if (err.githubStatus === 403) {
+  //     return res.status(403).json({
+  //       message:
+  //         `GitHub didn't allow it: only an owner or admin of ${owner} can remove its repositories. ` +
+  //         `Nothing was deleted.`,
+  //     });
+  //   }
+  //   console.error("[installations] remove repo on GitHub failed:", err.message, err.githubBody || "");
+  //   return res.status(502).json({
+  //     message: "Couldn't remove the repo on GitHub. Nothing was deleted — try again.",
+  //   });
+  // }
 
   const companyId = req.user.companyId;
   const mcpProjectIds = deleteMcpProjects
@@ -198,7 +208,16 @@ async function removeRepo(req, res) {
     await removal.deleteMcpProjectData({ projectId, companyId });
   }
 
+  const removedRow = (installation.repos || []).find((r) => r.repoName === repo);
   installation.repos = (installation.repos || []).filter((r) => r.repoName !== repo);
+  installation.removedRepos = [
+    ...(installation.removedRepos || []).filter((r) => r.repoName !== repo),
+    {
+      repoName: repo,
+      repoFullName: removedRow?.repoFullName || `${owner}/${repo}`,
+      removedAt: new Date(),
+    },
+  ];
   await installation.save();
 
   await logEvent({
@@ -219,9 +238,72 @@ async function removeRepo(req, res) {
   });
 }
 
+// Repos removed inside Olivia, so the UI can offer to reconnect them.
+async function listRemovedRepos(req, res) {
+  const installations = await Installation.find(visibilityFilter(req.user));
+  res.json(
+    installations.flatMap((inst) =>
+      (inst.removedRepos || []).map((r) => ({
+        installationId: inst.installationId,
+        owner: inst.accountLogin,
+        repo: r.repoName,
+        fullName: r.repoFullName,
+        removedAt: r.removedAt,
+      }))
+    )
+  );
+}
+
+// Reconnect a repo removed inside Olivia. It comes back empty — its data was
+// deleted on removal — only if GitHub still gives the app access to it.
+async function restoreRepo(req, res) {
+  const { installationId, repo } = req.params;
+
+  const installation = await Installation.findOne({
+    installationId,
+    ...visibilityFilter(req.user),
+  });
+  if (!installation) {
+    return res.status(404).json({ message: "Installation not found" });
+  }
+  const owner = installation.accountLogin;
+
+  let ghRepos;
+  try {
+    ghRepos = await fetchInstallationReposForModel(installation.installationId);
+  } catch (err) {
+    console.error("[installations] restore repo: GitHub read failed:", err.message);
+    return res.status(502).json({ message: "Couldn't reach GitHub. Try again." });
+  }
+  if (!ghRepos.some((r) => r.repoName === repo)) {
+    return res.status(404).json({
+      message: `Olivia no longer has access to ${owner}/${repo} on GitHub. Connect GitHub again and select it.`,
+    });
+  }
+
+  installation.removedRepos = (installation.removedRepos || []).filter(
+    (r) => r.repoName !== repo
+  );
+  installation.repos = withoutRemovedRepos(ghRepos, installation.removedRepos);
+  await installation.save();
+
+  await logEvent({
+    event: "github_repo_restored",
+    req,
+    user: req.user,
+    targetType: "Installation",
+    targetId: String(installation.installationId),
+    metadata: { owner, repo },
+  });
+
+  res.json({ success: true, owner, repo });
+}
+
 module.exports = {
   listInstallations,
   syncInstallations,
   disconnectInstallation,
   removeRepo,
+  listRemovedRepos,
+  restoreRepo,
 };

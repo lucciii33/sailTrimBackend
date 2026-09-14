@@ -10,6 +10,20 @@ const installationSchema = new mongoose.Schema({
       repoFullName: String,
     },
   ],
+  // Repos the user removed from inside Olivia. GitHub won't let an app drop a
+  // single repo from its own access, so the repo stays reachable on GitHub —
+  // this list is what keeps every re-read (sync, webhooks, connect callback)
+  // from bringing it back until the user reconnects it in Olivia.
+  removedRepos: {
+    type: [
+      {
+        repoName: String,
+        repoFullName: String,
+        removedAt: { type: Date, default: Date.now },
+      },
+    ],
+    default: [],
+  },
   installedAt: { type: Date, default: Date.now },
   // GitHub ids of people whose install request was APPROVED but who we could
   // not link to an Olivia account at the time — almost always because they had
