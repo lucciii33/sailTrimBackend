@@ -1,16 +1,15 @@
 const Order = require("../model/orderModel");
 const asyncHandler = require("express-async-handler");
+const Inventory = require("../model/orderModel"); // ajusta el path si es diferente
 
 const createOrder = asyncHandler(async (req, res) => {
   const resp = req.body;
-
   try {
     const order = await Order.create(resp);
     return res.status(201).json(order);
   } catch (error) {
-    return res.status(500).json({
-      message: "Internal server error",
-    });
+    console.error("createOrder error:", error); // 👈 agrega esto
+    return res.status(500).json({ message: "Internal server error" });
   }
 });
 

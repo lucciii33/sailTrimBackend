@@ -7,21 +7,28 @@ const protect = asyncHandler(async (req, res, next) => {
 
     if(req.headers.authorization && req.headers.authorization.startsWith('Bearer')){
         try {
-            //Get token from header
             token = req.headers.authorization.split(' ')[1]
 
-            //Verify token
             const decoded = jwt.verify(token, process.env.JWT_SECRET_NODE)
 
-            //Get user from the token
-            req.user = await User.findById(decoded.id).select('_id email role company')
-            
+            if (decoded.twoFactorPending) {
+                res.status(401)
+                throw new Error("Two-factor authentication required")
+            }
+
+            req.user = await User.findById(decoded.id).select('_id email role company companyId')
+
+            if (!req.user) {
+                res.status(401)
+                throw new Error("Not authorized")
+            }
+
             next()
 
         } catch (error) {
             console.log(error)
             res.status(401)
-            throw new Error("Not authorized")
+            throw new Error(error?.message || "Not authorized")
         }
     }
 
