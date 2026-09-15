@@ -9,6 +9,9 @@ const mongoose = require("mongoose");
 // press a button.
 const apiWatcherSchema = new mongoose.Schema(
   {
+    // Chosen by the user so the watch is recognisable in lists and banners
+    // ("Orders API — prod"). Older watchers have none; the UI falls back to the repo.
+    name: { type: String, default: "", trim: true, maxlength: 80 },
     installationId: { type: Number, required: true },
     owner: { type: String, required: true },
     repo: { type: String, required: true },

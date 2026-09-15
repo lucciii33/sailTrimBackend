@@ -14,6 +14,8 @@ router.post("/:id/run", protect, c.runWatcherNow);
 
 // Run history — the "which endpoints appeared, and when" record.
 router.get("/runs/all", protect, c.listRuns);
+// Runs in flight for one repo (?owner=&repo=), for the docs page banner.
+router.get("/runs/active", protect, c.listActiveRuns);
 router.get("/:id/runs", protect, c.listRuns);
 
 // Endpoints flagged as new, and clearing that flag once reviewed.

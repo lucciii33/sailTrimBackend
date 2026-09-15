@@ -66,6 +66,48 @@ async function branchProblem(installationId, owner, repo, branch) {
   }
 }
 
+// A run older than this still marked pending/running died without finishing
+// (the process was killed mid-run); don't keep telling the user it's running.
+const ACTIVE_RUN_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+
+function cleanWatcherName(raw) {
+  return String(raw || "").trim().slice(0, 80);
+}
+
+// Runs in flight for one repo, so its docs page can say "a watcher is running".
+async function listActiveRuns(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { owner, repo } = req.query;
+  if (!owner || !repo) {
+    return res.status(400).json({ message: "owner and repo are required" });
+  }
+  const runs = await WatcherRun.find({
+    companyId: req.user.companyId,
+    owner,
+    repo,
+    status: { $in: ["pending", "running"] },
+    createdAt: { $gte: new Date(Date.now() - ACTIVE_RUN_MAX_AGE_MS) },
+  })
+    .select("watcherId status trigger startedAt createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+  const watchers = await ApiWatcher.find({ _id: { $in: runs.map((r) => r.watcherId) } })
+    .select("name branch")
+    .lean();
+  const byId = new Map(watchers.map((w) => [String(w._id), w]));
+  res.json(
+    runs.map((r) => ({
+      _id: r._id,
+      status: r.status,
+      watcherName: byId.get(String(r.watcherId))?.name || "",
+      branch: byId.get(String(r.watcherId))?.branch || r.trigger?.branch || "",
+      prNumber: r.trigger?.prNumber ?? null,
+      prTitle: r.trigger?.prTitle || "",
+      startedAt: r.startedAt || r.createdAt,
+    }))
+  );
+}
+
 async function listWatchers(req, res) {
   if (!requireCompany(req, res)) return;
   const watchers = await ApiWatcher.find({ companyId: req.user.companyId })
@@ -80,8 +122,12 @@ async function createWatcher(req, res) {
   if (!requireCompany(req, res)) return;
   if (!(await requirePro(req, res))) return;
   const { owner, repo, branch = "main", actions } = req.body || {};
+  const name = cleanWatcherName(req.body?.name);
   if (!owner || !repo) {
     return res.status(400).json({ message: "owner and repo are required" });
+  }
+  if (!name) {
+    return res.status(400).json({ message: "Give the watcher a name." });
   }
 
   const installation = await Installation.findOne({
@@ -109,6 +155,7 @@ async function createWatcher(req, res) {
       { owner, repo, branch },
       {
         $set: {
+          name,
           installationId: installation.installationId,
           owner,
           repo,
@@ -144,6 +191,9 @@ async function updateWatcher(req, res) {
   if (!watcher) return res.status(404).json({ message: "Watcher not found" });
 
   if (typeof enabled === "boolean") watcher.enabled = enabled;
+  if (typeof req.body?.name === "string" && cleanWatcherName(req.body.name)) {
+    watcher.name = cleanWatcherName(req.body.name);
+  }
   if (actions) watcher.actions = { ...watcher.actions.toObject?.() ?? watcher.actions, ...actions };
   if (branch && branch !== watcher.branch) {
     const problem = await branchProblem(
@@ -227,6 +277,9 @@ async function acknowledgeNewEndpoints(req, res) {
 
 module.exports = {
   listWatchers,
+  listActiveRuns,
+  cleanWatcherName,
+  ACTIVE_RUN_MAX_AGE_MS,
   createWatcher,
   updateWatcher,
   deleteWatcher,

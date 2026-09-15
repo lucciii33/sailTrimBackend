@@ -9,6 +9,8 @@ const c = require("../controllers/mcpWatcherController");
 //
 // Literal paths first so "/runs" and "/new-tools" are never read as an :id.
 router.get("/runs/all", protect, c.listMcpRuns);
+// Runs in flight for one project (?projectId=), for its page banner.
+router.get("/runs/active", protect, c.listActiveMcpRuns);
 router.get("/new-tools/all", protect, c.listNewTools);
 router.post("/new-tools/acknowledge", protect, c.acknowledgeNewTools);
 

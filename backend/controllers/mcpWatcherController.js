@@ -4,7 +4,12 @@ const McpProject = require("../model/McpProjectModel");
 const McpTool = require("../model/McpToolModel");
 const Installation = require("../model/Installation");
 // Same plan gate and branch check as the API watchers — imported, not copied.
-const { requirePro, branchProblem } = require("./watcherController");
+const {
+  requirePro,
+  branchProblem,
+  cleanWatcherName,
+  ACTIVE_RUN_MAX_AGE_MS,
+} = require("./watcherController");
 
 function requireCompany(req, res) {
   if (!req.user.companyId) {
@@ -37,10 +42,14 @@ async function createMcpWatcher(req, res) {
   if (!(await requirePro(req, res))) return;
 
   const { mcpProjectId, owner, repo, branch = "main", actions, wait } = req.body || {};
+  const name = cleanWatcherName(req.body?.name);
   if (!mcpProjectId || !owner || !repo) {
     return res
       .status(400)
       .json({ message: "mcpProjectId, owner and repo are required" });
+  }
+  if (!name) {
+    return res.status(400).json({ message: "Give the watcher a name." });
   }
 
   const project = await McpProject.findOne({
@@ -69,6 +78,7 @@ async function createMcpWatcher(req, res) {
       { mcpProjectId, owner, repo, branch },
       {
         $set: {
+          name,
           mcpProjectId,
           installationId: installation.installationId,
           owner,
@@ -104,6 +114,9 @@ async function updateMcpWatcher(req, res) {
   if (!watcher) return res.status(404).json({ message: "Watcher not found" });
 
   if (typeof enabled === "boolean") watcher.enabled = enabled;
+  if (typeof req.body?.name === "string" && cleanWatcherName(req.body.name)) {
+    watcher.name = cleanWatcherName(req.body.name);
+  }
   if (actions) watcher.actions = { ...(watcher.actions?.toObject?.() ?? watcher.actions), ...actions };
   if (wait) watcher.wait = { ...(watcher.wait?.toObject?.() ?? watcher.wait), ...wait };
   if (branch && branch !== watcher.branch) {
@@ -143,6 +156,38 @@ async function listMcpRuns(req, res) {
   res.json(runs);
 }
 
+// Runs in flight for one MCP project, for the banner at the top of its page.
+async function listActiveMcpRuns(req, res) {
+  if (!requireCompany(req, res)) return;
+  const { projectId } = req.query;
+  if (!projectId) return res.status(400).json({ message: "projectId is required" });
+  const runs = await McpWatcherRun.find({
+    companyId: req.user.companyId,
+    mcpProjectId: projectId,
+    status: { $in: ["pending", "running"] },
+    createdAt: { $gte: new Date(Date.now() - ACTIVE_RUN_MAX_AGE_MS) },
+  })
+    .select("watcherId status trigger checks startedAt createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+  const watchers = await McpWatcher.find({ _id: { $in: runs.map((r) => r.watcherId) } })
+    .select("name branch")
+    .lean();
+  const byId = new Map(watchers.map((w) => [String(w._id), w]));
+  res.json(
+    runs.map((r) => ({
+      _id: r._id,
+      status: r.status,
+      watcherName: byId.get(String(r.watcherId))?.name || "",
+      branch: byId.get(String(r.watcherId))?.branch || r.trigger?.branch || "",
+      prNumber: r.trigger?.prNumber ?? null,
+      prTitle: r.trigger?.prTitle || "",
+      checks: r.checks || 0,
+      startedAt: r.startedAt || r.createdAt,
+    }))
+  );
+}
+
 async function listNewTools(req, res) {
   if (!requireCompany(req, res)) return;
   const tools = await McpTool.find({
@@ -173,6 +218,7 @@ async function acknowledgeNewTools(req, res) {
 }
 
 module.exports = {
+  listActiveMcpRuns,
   listMcpWatchers,
   createMcpWatcher,
   updateMcpWatcher,
