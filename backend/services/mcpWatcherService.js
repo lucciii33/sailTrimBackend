@@ -89,9 +89,17 @@ async function diffAndFlagNewTools({
   editedAt = new Date(),
   userId,
   companyId,
+  // Tool names the PR diff says this merge ADDS. When the diff was read, only
+  // these count as new: a name the live server has that Olivia's baseline
+  // lacked is usually a leftover from an earlier merge the watcher missed, and
+  // flagging it here credits it to the wrong PR. null = diff unavailable, so
+  // fall back to "anything the baseline didn't have".
+  expectedNewNames = null,
 }) {
   const before = new Set(beforeNames || []);
-  const fresh = (liveTools || []).filter((t) => t?.name && !before.has(t.name));
+  const unknown = (liveTools || []).filter((t) => t?.name && !before.has(t.name));
+  const expected = expectedNewNames ? new Set(expectedNewNames) : null;
+  const fresh = expected ? unknown.filter((t) => expected.has(t.name)) : unknown;
 
   // Mirror the live server into McpTool — including removing tools it no longer
   // exposes — so docs, suites and QA all see the real current set.
@@ -233,6 +241,7 @@ async function runPendingRun(runId) {
     // change a tool.
     let diffTouched = [];
     let diffAdded = [];
+    let diffRemoved = [];
     let diffAnalyzed = false;
     if (run.trigger?.kind === "merge" && run.trigger?.prNumber) {
       try {
@@ -250,6 +259,7 @@ async function runPendingRun(runId) {
         });
         diffTouched = res.touched;
         diffAdded = res.addedTools;
+        diffRemoved = res.removedTools || [];
         diffAnalyzed = res.analyzed;
       } catch (err) {
         console.error("[mcp-watcher] PR diff analysis failed:", err.message);
@@ -286,11 +296,17 @@ async function runPendingRun(runId) {
         // — a new tool OR a changed schema. Breaking only on new names made an
         // edit-only merge wait out the full window before being noticed.
         const baseSchemas = run.toolsBeforeSchemas || {};
-        const differs = (liveTools || []).some(
-          (t) =>
-            !before.has(t.name) ||
-            (baseSchemas[t.name] && contractChanged(baseSchemas[t.name], toolContract(t)))
-        );
+        const liveNow = new Set((liveTools || []).map((t) => t.name));
+        // When the diff named the tools this PR adds, wait for THOSE. Breaking
+        // on any unfamiliar name stopped a run on a tool left over from an
+        // earlier merge, while the deploy for this one was still running.
+        const differs = diffAdded.length
+          ? diffAdded.every((n) => liveNow.has(n))
+          : (liveTools || []).some(
+              (t) =>
+                !before.has(t.name) ||
+                (baseSchemas[t.name] && contractChanged(baseSchemas[t.name], toolContract(t)))
+            );
         if (differs) break;
       } catch (err) {
         lastError = err.message || String(err);
@@ -318,6 +334,7 @@ async function runPendingRun(runId) {
       editedAt: run.trigger?.mergedAt ? new Date(run.trigger.mergedAt) : new Date(),
       userId: watcher.userId,
       companyId: watcher.companyId,
+      expectedNewNames: diffAnalyzed ? diffAdded : null,
     });
     fresh = diff.fresh;
     run.toolsAfter = diff.liveCount;
@@ -329,10 +346,14 @@ async function runPendingRun(runId) {
     const editedAt = run.trigger?.mergedAt ? new Date(run.trigger.mergedAt) : new Date();
     const freshNames = new Set(fresh.map((t) => t.name));
     const liveNames = new Set((liveTools || []).map((t) => t.name));
-    const editedTools = [...(diff.edited || [])];
+    // Tools this PR deleted: they may still answer from the old build, so drop
+    // them from every label. Deletions stay silent, as agreed.
+    const removedByDiff = new Set(diffRemoved);
+    const editedTools = (diff.edited || []).filter((e) => !removedByDiff.has(e.name));
     const editedByName = new Map(editedTools.map((e) => [e.name, e]));
     for (const t of diffTouched) {
       if (freshNames.has(t.key)) continue;
+      if (removedByDiff.has(t.key)) continue;
       // A tool the diff removed isn't "edited" — deletions stay silent, as
       // agreed. The analysis sees the pre-merge list, so drop anything the live
       // server no longer exposes.
@@ -360,10 +381,26 @@ async function runPendingRun(runId) {
       );
     }
 
+    // Names the server has that Olivia's baseline lacked but this PR didn't add
+    // — leftovers from an earlier merge the watcher missed. They're stored (the
+    // upsert above did that) but not credited to this PR; say so, so the run
+    // doesn't look like it silently ignored them.
+    const strayNames = (liveTools || [])
+      .map((t) => t?.name)
+      .filter(
+        (n) =>
+          n && !before.has(n) && !freshNames.has(n) && diffAnalyzed && !diffAdded.includes(n)
+      );
+
     if (!fresh.length && !editedTools.length) {
       run.note =
         `No new tools appeared on the server within ${watcher.wait?.maxMinutes ?? 15} min. ` +
         `The deploy may not have finished, may not auto-deploy on merge, or this merge didn't add a tool.`;
+    }
+    if (strayNames.length) {
+      run.note =
+        `${run.note ? `${run.note} ` : ""}Registered without flagging (this PR doesn't add them): ` +
+        `${strayNames.join(", ")}.`;
     }
 
     let testsCreated = 0;

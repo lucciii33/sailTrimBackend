@@ -89,25 +89,28 @@ const MCP_SYSTEM = `You receive the diff of a merged pull request and the list o
 1) Decide which of THOSE tools this diff changed in any way: its parameters, validation, logic, or what it returns.
 2) For each, say whether the change alters the tool's INTERFACE — its input parameters (names, types, required) or the shape of what it returns.
 3) List any tool this diff newly DEFINES that is not in the list.
+4) List any tool from the list this diff DELETES (its definition is removed).
 
 Return STRICT JSON only:
-{"touched":[{"key":"<tool name copied exactly from the list>","summary":"one short sentence","changesInterface":true}],"addedTools":["new_tool_name"]}
+{"touched":[{"key":"<tool name copied exactly from the list>","summary":"one short sentence","changesInterface":true}],"addedTools":["new_tool_name"],"removedTools":["deleted_tool_name"]}
 
 Rules:
 - "touched" keys must come from the list, copied exactly.
 - A change to shared code counts for a tool only if it clearly changes that tool's behavior.
 - Only count changes to the tool's OWN code on the MCP server (its definition, or a helper inside the MCP server that it calls). A change to an HTTP API endpoint, route or backend file that the tool calls does NOT count — even if the tool wraps that endpoint.
 - Do not include a tool just because the diff mentions it in a comment or test.
-- Return {"touched":[],"addedTools":[]} if the diff doesn't affect any tool.`;
+- A deleted tool goes in "removedTools" ONLY, never in "touched".
+- Return {"touched":[],"addedTools":[],"removedTools":[]} if the diff doesn't affect any tool.`;
 
 /**
  * @param kind  "api" (items are "METHOD /path") or "mcp" (items are tool names)
- * @returns {{ touched: {key, summary, changesInterface?}[], addedTools: string[], analyzed: boolean }}
+ * @returns {{ touched: {key, summary, changesInterface?}[], addedTools: string[],
+ *             removedTools: string[], analyzed: boolean }}
  *          `analyzed` is false when there was nothing to analyze or the call
  *          failed — callers treat that as "unknown", never as "nothing changed".
  */
 async function findTouched({ files, items, kind, anthropicClient = null }) {
-  const empty = { touched: [], addedTools: [], analyzed: false };
+  const empty = { touched: [], addedTools: [], removedTools: [], analyzed: false };
   const diff = buildDiffText(files);
   if (!diff.trim() || !(items || []).length) return empty;
 
@@ -144,8 +147,13 @@ async function findTouched({ files, items, kind, anthropicClient = null }) {
   const addedTools = (Array.isArray(parsed.addedTools) ? parsed.addedTools : [])
     .map((n) => String(n || "").trim())
     .filter((n) => n && !allowed.has(n));
+  // A deleted tool can only be one that existed before, so it must be a listed
+  // key — same rule as `touched`.
+  const removedTools = (Array.isArray(parsed.removedTools) ? parsed.removedTools : [])
+    .map((n) => String(n || "").trim())
+    .filter((n) => n && allowed.has(n));
 
-  return { touched, addedTools, analyzed: true };
+  return { touched, addedTools, removedTools, analyzed: true };
 }
 
 module.exports = { fetchPRFiles, buildDiffText, findTouched };
