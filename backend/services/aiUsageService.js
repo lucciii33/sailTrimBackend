@@ -134,6 +134,72 @@ function explain(err, ctx) {
   return wrapped;
 }
 
+// `messages.create()` does NOT return a plain promise: the SDK returns an
+// APIPromise, which also carries `.withResponse()` and `.asResponse()`. The
+// first version of this wrapper replaced it with an async function, so every
+// caller using `.withResponse()` died with "is not a function" — and the doc
+// generator is one of them, which is how a backfill came back with 22 failed
+// files and no docs.
+//
+// So: keep the original object, add the bookkeeping to the paths that resolve
+// it, and guard against counting the same call twice.
+function meterCall(apiPromise, ctx, requestedModel) {
+  let counted = false;
+  const countOnce = (resp) => {
+    // A streaming create resolves to a Stream, not a Message: no usage to read.
+    // Those are counted when the stream finishes — see meterStream.
+    if (counted || !resp?.usage) return;
+    counted = true;
+    // Fire and forget: the caller is waiting on the model's answer, not on our
+    // bookkeeping.
+    record(ctx, resp?.usage, resp?.model || requestedModel).catch(() => {});
+  };
+
+  const out = apiPromise.then(
+    (resp) => {
+      countOnce(resp);
+      return resp;
+    },
+    (err) => {
+      throw explain(err, ctx);
+    }
+  );
+
+  // Keep the APIPromise extras pointing at the original call.
+  if (typeof apiPromise.withResponse === "function") {
+    out.withResponse = () =>
+      apiPromise.withResponse().then(
+        (wr) => {
+          countOnce(wr?.data);
+          return wr;
+        },
+        (err) => {
+          throw explain(err, ctx);
+        }
+      );
+  }
+  if (typeof apiPromise.asResponse === "function") {
+    out.asResponse = () => apiPromise.asResponse();
+  }
+
+  return out;
+}
+
+function meterStream(stream, ctx, requestedModel) {
+  if (!stream || typeof stream.finalMessage !== "function") return stream;
+  const original = stream.finalMessage.bind(stream);
+  stream.finalMessage = async (...args) => {
+    try {
+      const msg = await original(...args);
+      record(ctx, msg?.usage, msg?.model || requestedModel).catch(() => {});
+      return msg;
+    } catch (err) {
+      throw explain(err, ctx);
+    }
+  };
+  return stream;
+}
+
 /**
  * Wrap an Anthropic client so every `messages.create` writes a usage row.
  *
@@ -155,21 +221,20 @@ function meter(client, baseCtx = {}) {
           return new Proxy(messages, {
             get(mTarget, mProp, mReceiver) {
               const value = Reflect.get(mTarget, mProp, mReceiver);
-              if (mProp !== "create" || typeof value !== "function") return value;
-              return async (...args) => {
-                let resp;
-                try {
-                  resp = await value.apply(mTarget, args);
-                } catch (err) {
-                  throw explain(err, ctx);
-                }
-                // Fire and forget: the caller is waiting on the model's answer,
-                // not on our bookkeeping.
-                record(ctx, resp?.usage, resp?.model || args[0]?.model).catch(
-                  () => {}
-                );
-                return resp;
-              };
+              if (typeof value !== "function") return value;
+
+              if (mProp === "create") {
+                return (...args) =>
+                  meterCall(value.apply(mTarget, args), ctx, args[0]?.model);
+              }
+              // Doc generation streams (a long response would otherwise time
+              // out), and a stream has no usage until it ends — so the row is
+              // written when finalMessage() hands back the complete Message.
+              if (mProp === "stream") {
+                return (...args) =>
+                  meterStream(value.apply(mTarget, args), ctx, args[0]?.model);
+              }
+              return value.bind(mTarget);
             },
           });
         }
