@@ -108,7 +108,7 @@ async function updateCompanyPlan(req, res) {
   const update = {};
 
   if (plan !== undefined) {
-    if (!["free", "pro", "enterprise", "test"].includes(plan)) {
+    if (!["free", "test", "mcp", "api", "pro", "enterprise"].includes(plan)) {
       return res.status(400).json({ message: `Unknown plan "${plan}"` });
     }
     update.plan = plan;

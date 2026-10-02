@@ -48,6 +48,21 @@ const PLANS = {
     features: ["mcp"],
     mcpQuotas: null,
   },
+  // The two half-product plans. $99 and $180 on the website; the budgets below
+  // are what Olivia may spend on Claude for them, not what the customer pays.
+  // The API half costs more because documenting code is the expensive part.
+  mcp: {
+    monthlyAiUsd: 30,
+    features: ["mcp", "watchers"],
+    // Only the project count is capped — docs, tests and bug hunter runs are
+    // limited by the budget, like every paid plan.
+    mcpQuotas: { projects: 3 },
+  },
+  api: {
+    monthlyAiUsd: 50,
+    features: ["api", "watchers"],
+    mcpQuotas: null,
+  },
   pro: {
     monthlyAiUsd: 150,
     features: ["api", "mcp", "automation", "watchers"],

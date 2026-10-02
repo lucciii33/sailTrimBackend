@@ -10,7 +10,7 @@ const companySchema = new mongoose.Schema(
     },
     plan: {
       type: String,
-      enum: ["free", "pro", "enterprise", "test"],
+      enum: ["free", "test", "mcp", "api", "pro", "enterprise"],
       default: "free",
     },
     // Overrides the plan's monthly Claude budget for this one company. Set from
