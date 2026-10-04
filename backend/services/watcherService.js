@@ -563,14 +563,20 @@ async function onBranchUpdated({ owner, repo, branch, trigger }) {
   // Re-check the plan at FIRING time, not just at creation. A workspace that
   // downgrades keeps its watcher rows, and without this they would quietly go
   // on consuming model calls for a plan the company no longer pays for.
+  //
+  // Asks the plan table whether watchers are included, instead of matching
+  // plan === "pro": with that literal, every plan added later (enterprise, api,
+  // mcp) silently stopped firing — merges landed and nothing happened.
   const Company = require("../model/companyModel");
+  const companies = await Company.find({
+    _id: { $in: watchers.map((w) => w.companyId) },
+  })
+    .select("_id plan")
+    .lean();
   const paid = new Set(
-    (
-      await Company.find({
-        _id: { $in: watchers.map((w) => w.companyId) },
-        plan: "pro",
-      }).select("_id").lean()
-    ).map((c) => String(c._id))
+    companies
+      .filter((c) => usageLimit.allowsFeature(c.plan, "watchers"))
+      .map((c) => String(c._id))
   );
 
   const allowed = watchers.filter((w) => paid.has(String(w.companyId)));

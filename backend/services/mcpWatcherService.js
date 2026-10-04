@@ -603,14 +603,18 @@ async function onBranchUpdated({ owner, repo, branch, trigger }) {
   if (!watchers.length) return 0;
 
   // Plan checked at firing time too — a downgraded workspace keeps its rows.
+  // Asks the plan table instead of matching plan === "pro", which silently
+  // stopped every other plan (enterprise included) from ever firing.
   const Company = require("../model/companyModel");
+  const companies = await Company.find({
+    _id: { $in: watchers.map((w) => w.companyId) },
+  })
+    .select("_id plan")
+    .lean();
   const paid = new Set(
-    (
-      await Company.find({
-        _id: { $in: watchers.map((w) => w.companyId) },
-        plan: "pro",
-      }).select("_id").lean()
-    ).map((c) => String(c._id))
+    companies
+      .filter((c) => usageLimit.allowsFeature(c.plan, "watchers"))
+      .map((c) => String(c._id))
   );
   const allowed = watchers.filter((w) => paid.has(String(w.companyId)));
 
