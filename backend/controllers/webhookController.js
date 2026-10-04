@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const Installation = require("../model/Installation");
+const { repointToInstallation } = require("../services/installationRepointService");
 const PendingInstall = require("../model/PendingInstall");
 const {
   getOctokit,
@@ -155,6 +156,14 @@ async function handleInstallation(payload) {
       update,
       { upsert: true, new: true }
     );
+
+    // A reconnect gives a NEW installation id; move the watchers onto it so
+    // they don't keep calling GitHub with one that no longer exists.
+    await repointToInstallation({
+      installationId: installation.id,
+      accountLogin: installation.account.login,
+      repos,
+    });
   } catch (err) {
     console.error("Error saving installation:", err);
   }
@@ -270,6 +279,12 @@ async function handleInstallationRepositories(payload) {
       update,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
+    await repointToInstallation({
+      installationId: installation.id,
+      accountLogin: installation.account.login,
+      repos,
+    });
 
     console.log(
       `[github webhook] installation_repositories/${action} install=${installation.id} ` +

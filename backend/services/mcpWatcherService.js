@@ -9,6 +9,7 @@ const mcpQa = require("./mcpQaService.js");
 const mcpToolSuites = require("./mcpToolSuiteService.js");
 const prDiff = require("./prDiffService.js");
 const usageLimit = require("./usageLimitService.js");
+const { liveInstallationIdFor } = require("./installationRepointService.js");
 const aiUsage = require("./aiUsageService.js");
 const { getAnthropicClientFor } = require("./userKeyService.js");
 
@@ -216,6 +217,21 @@ async function runPendingRun(runId) {
 }
 
 async function runClaimed(run, watcher) {
+  // Same as the API watcher: a reconnect changes the installation id, so look
+  // up the live one rather than failing every merge on a dead one.
+  if (watcher) {
+    const live =
+      (await liveInstallationIdFor({
+        owner: watcher.owner,
+        repo: watcher.repo,
+        fallback: watcher.installationId,
+      }).catch(() => watcher.installationId)) || watcher.installationId;
+    if (live !== watcher.installationId) {
+      watcher.installationId = live;
+      await watcher.save().catch(() => {});
+    }
+  }
+
   const fail = async (message) => {
     run.status = "failed";
     run.error = message;

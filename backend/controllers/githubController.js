@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const Installation = require("../model/Installation");
+const { repointToInstallation } = require("../services/installationRepointService");
 const BackfillJob = require("../model/BackfillJob");
 const Doc = require("../model/DocModel");
 const User = require("../model/userModel");
@@ -417,6 +418,10 @@ async function githubCallback(req, res) {
       update,
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
+
+    // Same as the webhook: a reconnect issues a new id, and the watchers have
+    // to follow it or they fail on the next merge.
+    await repointToInstallation({ installationId, accountLogin, repos });
 
     // With `state` this is the connecting user finishing their own install —
     // they're logged in, so send them back into the app. WITHOUT `state` it's

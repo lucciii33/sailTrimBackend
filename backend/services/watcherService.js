@@ -6,6 +6,7 @@ const apiSuiteService = require("./apiSuiteService");
 const apiQAService = require("./apiQAService");
 const prDiff = require("./prDiffService");
 const usageLimit = require("./usageLimitService");
+const { liveInstallationIdFor } = require("./installationRepointService");
 const aiUsage = require("./aiUsageService");
 const { getAnthropicClientFor } = require("./userKeyService");
 
@@ -203,6 +204,20 @@ async function runPendingRun(runId) {
 }
 
 async function runClaimed(run, watcher) {
+  // Resolve the installation now instead of trusting the id stored when the
+  // watcher was created: a GitHub reconnect issues a new one, and a watcher
+  // pinned to the dead id fails every merge with a 404.
+  const installationId =
+    (await liveInstallationIdFor({
+      owner: watcher.owner,
+      repo: watcher.repo,
+      fallback: watcher.installationId,
+    }).catch(() => watcher.installationId)) || watcher.installationId;
+  if (installationId !== watcher.installationId) {
+    watcher.installationId = installationId;
+    await watcher.save().catch(() => {});
+  }
+
   // Budget gate, before any model call. A watcher fires on its own, so this is
   // where an over-budget workspace has to stop — nobody is watching a webhook.
   if (!(await usageLimit.withinBudget(watcher.companyId, "api"))) {
@@ -248,7 +263,7 @@ async function runClaimed(run, watcher) {
     // the two can't drift.
     if (watcher.actions?.regenerateDocs !== false) {
       const job = await BackfillJob.create({
-        installationId: watcher.installationId,
+        installationId,
         owner: watcher.owner,
         repo: watcher.repo,
         userId: watcher.userId,
@@ -302,7 +317,7 @@ async function runClaimed(run, watcher) {
     if (trigger.kind === "merge" && trigger.prNumber) {
       try {
         const files = await prDiff.fetchPRFiles({
-          installationId: watcher.installationId,
+          installationId,
           owner: watcher.owner,
           repo: watcher.repo,
           prNumber: trigger.prNumber,
