@@ -125,8 +125,15 @@ function sectionForDoc(doc) {
 // The half of a suite that identifies which API the endpoint belongs to.
 function ownerFieldsFor(doc) {
   return doc.projectId
-    ? { projectId: doc.projectId, owner: "", repo: "" }
-    : { projectId: null, owner: doc.owner || "", repo: doc.repo || "" };
+    ? { projectId: doc.projectId, owner: "", repo: "", branch: "" }
+    : {
+        projectId: null,
+        owner: doc.owner || "",
+        repo: doc.repo || "",
+        // The environment travels with the suite, so Tests can be filtered the
+        // same way Docs is.
+        branch: doc.branch || "",
+      };
 }
 
 function specForPrompt(doc) {
@@ -375,6 +382,10 @@ async function runSuite({
   companyId,
   anthropicClient = null,
   authSchemeName = "",
+  // One case id, to re-run a single test after editing it instead of paying for
+  // (and waiting on) the whole suite. The suite's lastRun is only overwritten
+  // when the whole suite ran — a one-case run must not make a suite look green.
+  caseId = null,
 }) {
   const suite = await ApiSuite.findOne({ _id: suiteId, companyId });
   if (!suite) {
@@ -388,8 +399,17 @@ async function runSuite({
   });
   const client = aiUsage.tag(anthropicClient || getAnthropic(), { action: "api_suites", surface: "api" });
 
+  const cases = caseId
+    ? suite.cases.filter((c) => String(c._id) === String(caseId))
+    : suite.cases;
+  if (caseId && !cases.length) {
+    const err = new Error("Test case not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
   const results = [];
-  for (const c of suite.cases) {
+  for (const c of cases) {
     const execution = await executeTestCase({
       testCase: {
         method: c.method,
@@ -466,15 +486,17 @@ async function runSuite({
     regressions: results.filter((r) => r.isRegression).length,
   };
 
-  suite.lastRun = {
-    at: new Date(),
-    passed: summary.passed,
-    failed: summary.failed,
-    regressions: summary.regressions,
-  };
+  if (!caseId) {
+    suite.lastRun = {
+      at: new Date(),
+      passed: summary.passed,
+      failed: summary.failed,
+      regressions: summary.regressions,
+    };
+  }
   await suite.save();
 
-  return { suite, summary, results };
+  return { suite, summary, results, partial: Boolean(caseId) };
 }
 
 // ---------- Editing what a test covers ----------
@@ -721,10 +743,12 @@ async function refineCase({
 
 // Every suite of a project, for the tests page. Grouped section → endpoint by
 // the caller; this just returns them ordered so that grouping is stable.
-async function listProjectSuites({ projectId, owner, repo, companyId }) {
+async function listProjectSuites({ projectId, owner, repo, companyId, branch }) {
   const scope = projectId
     ? { projectId, companyId }
     : { owner, repo, companyId };
+  // Environment filter, so the tests page shows one environment at a time.
+  if (!projectId && branch) scope.branch = branch;
   const suites = await ApiSuite.find(scope)
     .sort({ section: 1, path: 1, kind: 1 })
     .lean();

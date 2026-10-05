@@ -243,9 +243,13 @@ async function runClaimed(run, watcher) {
   await watcher.save();
 
   try {
+    // Scoped to this watcher's environment: a watcher on dev must compare dev's
+    // docs with dev's docs, or every endpoint that only exists on main reads as
+    // "deleted" and every dev endpoint as "new".
     const scope = {
       owner: watcher.owner,
       repo: watcher.repo,
+      branch: watcher.branch || "",
       companyId: watcher.companyId,
     };
 
@@ -266,6 +270,8 @@ async function runClaimed(run, watcher) {
         installationId,
         owner: watcher.owner,
         repo: watcher.repo,
+        // Read the branch this watcher watches, not the repo's default.
+        branch: watcher.branch || "",
         userId: watcher.userId,
         status: "pending",
       });

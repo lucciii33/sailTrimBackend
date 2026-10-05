@@ -107,6 +107,10 @@ const e2eTestSchema = new mongoose.Schema({
         sha: String,
         url: String,
         committedAt: Date,
+        // The pull request the test arrived in. Generated tests go on their own
+        // branch and get reviewed — committing to main was never acceptable.
+        prNumber: Number,
+        prUrl: String,
       },
       { _id: false }
     ),

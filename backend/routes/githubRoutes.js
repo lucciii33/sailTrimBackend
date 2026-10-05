@@ -7,6 +7,7 @@ const {
   getConnectLink,
   startBackfill,
   getBackfillJob,
+  getRepoBranches,
 } = require("../controllers/githubController");
 
 router.get("/connect-link", protect, getConnectLink);
@@ -16,5 +17,7 @@ router.get("/callback", githubCallback);
 // Re-documenting a repo is the single most expensive thing Olivia does.
 router.post("/docs/backfill", protect, requireBudget("api"), startBackfill);
 router.get("/docs/backfill/:jobId", protect, getBackfillJob);
+// The repo's branches — environments are picked from this, never typed.
+router.get("/repos/:owner/:repo/branches", protect, getRepoBranches);
 
 module.exports = router;

@@ -1151,6 +1151,8 @@ async function findBugs({
         docId: doc._id,
         owner: doc.owner,
         repo: doc.repo,
+        // Environment, so Bugs can be filtered like Docs and Tests.
+        branch: doc.branch || "",
         runId,
         severity: b.severity || "medium",
         category: b.category || "general",
@@ -1176,6 +1178,7 @@ async function findBugs({
     docId: doc._id,
     owner: doc.owner,
     repo: doc.repo,
+    branch: doc.branch || "",
     runId,
     totalTests: fullExecutions.length,
     bugCount: bugs.length,

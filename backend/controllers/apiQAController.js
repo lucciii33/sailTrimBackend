@@ -188,6 +188,8 @@ async function listScopeBugs(req, res) {
     filter.owner = owner;
     filter.repo = repo;
   }
+  // One repo can hold two environments; without this they come back mixed.
+  if (req.query.branch) filter.branch = req.query.branch;
   if (req.query.status) filter.status = req.query.status;
 
   const bugs = await Bug.find(filter)
@@ -225,6 +227,7 @@ async function listScopeRuns(req, res) {
     filter.owner = owner;
     filter.repo = repo;
   }
+  if (req.query.branch) filter.branch = req.query.branch;
 
   const runs = await TestRun.find(filter, { executions: 0, postmanCollection: 0 })
     .sort({ createdAt: -1 })
@@ -768,6 +771,7 @@ async function listSuites(req, res) {
       projectId: req.params.id || null,
       owner: req.params.owner,
       repo: req.params.repo,
+      branch: req.query.branch || "",
       companyId: req.user.companyId,
     });
     res.json(suites);
@@ -787,8 +791,14 @@ async function runSuite(req, res) {
       companyId: req.user.companyId,
       anthropicClient,
       authSchemeName: req.body?.authSchemeName || "",
+      // Present when the client asked for one test instead of the suite.
+      caseId: req.params.caseId || req.body?.caseId || null,
     });
-    res.json({ summary: result.summary, results: result.results });
+    res.json({
+      summary: result.summary,
+      results: result.results,
+      partial: result.partial,
+    });
   } catch (err) {
     const status = err.statusCode || 500;
     console.error("runSuite error:", err);

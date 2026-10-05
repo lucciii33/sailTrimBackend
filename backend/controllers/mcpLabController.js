@@ -1076,8 +1076,13 @@ async function runToolSuite(req, res) {
       suiteId: req.params.suiteId,
       companyId: req.user.companyId,
       anthropicClient,
+      caseId: req.params.caseId || req.body?.caseId || null,
     });
-    res.json({ summary: result.summary, results: result.results });
+    res.json({
+      summary: result.summary,
+      results: result.results,
+      partial: result.partial,
+    });
   } catch (err) {
     const status = err.statusCode || 500;
     console.error("runToolSuite error:", err);

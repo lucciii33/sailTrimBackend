@@ -261,17 +261,22 @@ async function saveBackfillDocs({
   sourceFile,
   sourceSha,
   mounted = true,
+  // The environment these endpoints belong to; "" is the repo's default branch.
+  branch = "",
 }) {
   if (!endpoints.length) return 0;
 
   const ops = endpoints.map((ep) => ({
     updateOne: {
-      filter: { method: ep.method, path: ep.path, repo, owner },
+      // branch is part of the key: the same endpoint on main and on dev are two
+      // docs, not one that keeps overwriting the other.
+      filter: { method: ep.method, path: ep.path, repo, owner, branch },
       update: {
         $set: {
           ...ep,
           repo,
           owner,
+          branch,
           userId,
           companyId,
           source: "backfill",
@@ -293,11 +298,14 @@ async function saveBackfillDocs({
  * Removes backfill docs for this repo whose sourceSha is no longer in
  * the latest scan — i.e. endpoints that no longer exist in the code.
  */
-async function cleanupZombieDocs({ owner, repo, liveShas }) {
+async function cleanupZombieDocs({ owner, repo, liveShas, branch = "" }) {
   if (!liveShas || liveShas.length === 0) return 0;
+  // Scoped to the environment that was just scanned: a scan of dev must not
+  // delete main's docs just because dev has different files.
   const result = await Doc.deleteMany({
     owner,
     repo,
+    branch,
     source: "backfill",
     sourceSha: { $nin: liveShas },
   });

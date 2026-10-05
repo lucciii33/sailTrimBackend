@@ -181,9 +181,11 @@ async function assertWithinBudget(companyId, surface = null) {
   }
 
   if (!s.overLimit) return s;
+  // Deliberately no dollar figure: that number is Olivia's cost ceiling for
+  // this workspace, not something the customer agreed to or should see.
   const err = new Error(
-    `This workspace has used its monthly AI budget ($${s.limitUsd}). ` +
-      `It resets at the start of next month. Contact the provider to upgrade.`
+    "This workspace has used the AI work included in its plan for this month. " +
+      "It resets at the start of next month — contact us to raise it."
   );
   err.statusCode = 402;
   err.code = "AI_BUDGET_EXCEEDED";

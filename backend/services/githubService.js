@@ -89,6 +89,29 @@ async function uninstallApp(installationId) {
   });
 }
 
+/**
+ * The repo's branches, with the default one marked.
+ *
+ * Environments are branches, and branch names are not guessable — dev, develop,
+ * development, staging. Asking the customer to type it is asking for a typo that
+ * fails hours later, so the UI picks from this list.
+ */
+async function listBranches(octokit, owner, repo) {
+  const names = [];
+  for (let page = 1; page <= 5; page++) {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/branches", {
+      owner,
+      repo,
+      per_page: 100,
+      page,
+    });
+    names.push(...data.map((b) => b.name));
+    if (data.length < 100) break;
+  }
+  const defaultBranch = await getDefaultBranch(octokit, owner, repo);
+  return { branches: names, defaultBranch };
+}
+
 async function getPRDiff(octokit, owner, repo, prNumber) {
   const { data: files } = await octokit.request(
     "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
@@ -274,6 +297,117 @@ async function getDefaultBranch(octokit, owner, repo) {
 // This writes the commit on the REMOTE (it's pushed + visible on GitHub
 // immediately — no local clone). Creates the file or updates it in place when
 // it already exists (we look up its current sha first). Returns the commit.
+/**
+ * Make sure `branch` exists, creating it from `fromBranch` (or the repo default)
+ * when it doesn't. Returns true when it had to be created.
+ *
+ * Generated tests go on their own branch and arrive through a pull request:
+ * committing straight to main means Olivia writes to the branch the customer
+ * ships from, with no review — which no team will accept, and which was what it
+ * did before.
+ */
+async function ensureBranch(octokit, { owner, repo, branch, fromBranch = null }) {
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", {
+      owner,
+      repo,
+      branch,
+    });
+    return false;
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
+
+  const base = fromBranch || (await getDefaultBranch(octokit, owner, repo));
+  const { data: baseRef } = await octokit.request(
+    "GET /repos/{owner}/{repo}/git/ref/{ref}",
+    { owner, repo, ref: `heads/${base}` }
+  );
+  await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+    owner,
+    repo,
+    ref: `refs/heads/${branch}`,
+    sha: baseRef.object.sha,
+  });
+  return true;
+}
+
+/**
+ * The branch a project's next test should be committed to.
+ *
+ * One OPEN pull request per project: while a review is open its branch is reused,
+ * so a project's tests collect in one PR instead of one per test. Once it is
+ * merged (or closed) a NEW branch is cut from base — reusing a merged branch
+ * leaves a stale ref that can't be reopened and diverges from main, which is the
+ * confusing half of "it goes to the same branch".
+ *
+ * Returns { branch, pr } where pr is the open PR when one exists.
+ */
+async function resolveTestBranch(octokit, { owner, repo, prefix, base }) {
+  const { data: open } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+    owner,
+    repo,
+    state: "open",
+    per_page: 100,
+  });
+  const mine = open.find((pr) => (pr.head?.ref || "").startsWith(prefix));
+  if (mine) {
+    return {
+      branch: mine.head.ref,
+      pr: { number: mine.number, url: mine.html_url, created: false },
+    };
+  }
+
+  // No open review: cut a fresh branch, numbered after the ones already there so
+  // the history reads olivia/e2e-checkout, -2, -3.
+  const { branches } = await listBranches(octokit, owner, repo);
+  const used = branches.filter((b) => b === prefix || b.startsWith(`${prefix}-`));
+  let branch = prefix;
+  let n = 1;
+  while (used.includes(branch)) {
+    n += 1;
+    branch = `${prefix}-${n}`;
+  }
+  await ensureBranch(octokit, { owner, repo, branch, fromBranch: base });
+  return { branch, pr: null };
+}
+
+/**
+ * The open pull request for `head`, opening one if there isn't any.
+ */
+async function ensureOpenPullRequest(
+  octokit,
+  { owner, repo, head, base, title, body }
+) {
+  const { data: open } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+    owner,
+    repo,
+    head: `${owner}:${head}`,
+    state: "open",
+    per_page: 1,
+  });
+  if (open.length) {
+    return { number: open[0].number, url: open[0].html_url, created: false };
+  }
+
+  try {
+    const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
+      owner,
+      repo,
+      head,
+      base,
+      title,
+      body,
+    });
+    return { number: pr.number, url: pr.html_url, created: true };
+  } catch (err) {
+    // 422 means GitHub refused it — almost always "no commits between base and
+    // head", i.e. nothing to review yet. Not an error worth failing a commit for.
+    if (err.status === 422) return null;
+    throw err;
+  }
+}
+
 async function commitFileToBranch(octokit, { owner, repo, branch, path, content, message }) {
   // Updating an existing file needs its current blob sha; a 404 means it's new.
   let sha;
@@ -862,8 +996,12 @@ async function findSpecCandidates(octokit, owner, repo, filenameHint) {
     .map((n) => ({ path: n.path, sha: n.sha, size: n.size }));
 }
 
-async function scanRepoTree(octokit, owner, repo) {
-  const branch = await getDefaultBranch(octokit, owner, repo);
+// `branch` is optional and falls back to the repo's default. A watcher on `dev`
+// used to regenerate docs from `main`: the run fired, read code that didn't have
+// the merged change, found nothing new, and reported success — the worst kind of
+// broken, because it looks like it worked.
+async function scanRepoTree(octokit, owner, repo, branchName = null) {
+  const branch = branchName || (await getDefaultBranch(octokit, owner, repo));
   const { data: branchData } = await octokit.request(
     "GET /repos/{owner}/{repo}/branches/{branch}",
     { owner, repo, branch }
@@ -946,6 +1084,10 @@ module.exports = {
   scanRepoTree,
   findSpecCandidates,
   getDefaultBranch,
+  listBranches,
+  ensureBranch,
+  ensureOpenPullRequest,
+  resolveTestBranch,
   commitFileToBranch,
   fetchBlobContent,
   fetchMountContext,

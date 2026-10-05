@@ -102,6 +102,8 @@ router.post("/projects/:projectId/tools/:toolName/suites", protect, requireBudge
 router.post("/projects/:id/tool-suites", protect, requireBudget("mcp"), c.generateProjectToolSuites);
 router.get("/projects/:id/tool-suites", protect, c.listToolSuites);
 router.post("/tool-suites/:suiteId/run", protect, requireBudget("mcp"), c.runToolSuite);
+// One test on its own — same handler, with the case id.
+router.post("/tool-suites/:suiteId/cases/:caseId/run", protect, requireBudget("mcp"), c.runToolSuite);
 router.post("/tool-suites/:suiteId/cases/:caseId/refine", protect, requireBudget("mcp"), c.refineToolSuiteCase);
 // One test written by hand (blank, or from a sentence), and removing one.
 router.post("/tool-suites/:suiteId/cases", protect, requireBudget("mcp"), c.createToolSuiteCase);

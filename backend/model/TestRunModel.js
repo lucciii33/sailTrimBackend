@@ -64,6 +64,8 @@ const testRunSchema = new mongoose.Schema({
   },
   owner: { type: String },
   repo: { type: String },
+  // Environment (branch) of the endpoint this run is against.
+  branch: { type: String, default: "" },
   runId: { type: String, required: true, unique: true },
   totalTests: Number,
   bugCount: Number,

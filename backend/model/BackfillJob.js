@@ -4,6 +4,9 @@ const backfillJobSchema = new mongoose.Schema({
   installationId: { type: Number, required: true },
   owner: { type: String, required: true },
   repo: { type: String, required: true },
+  // Which branch was read. Empty means the repo's default — what every job did
+  // before watchers could follow a branch like `dev`.
+  branch: { type: String, default: "" },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   status: {
     type: String,

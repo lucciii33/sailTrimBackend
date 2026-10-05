@@ -8,6 +8,8 @@ const {
   getApp,
   getOctokit,
   scanRepoTree,
+  getDefaultBranch,
+  listBranches,
   fetchBlobContent,
   fetchMountContext,
   fetchSchemaContext,
@@ -488,8 +490,18 @@ async function runBackfill(jobId) {
       companyId = owner?.companyId || null;
     }
 
+    // The environment this job documents. Resolved to a real branch NAME, never
+    // left empty: docs are keyed by it, and "" vs "main" would read as two
+    // different environments for the same code.
+    const branch =
+      job.branch || (await getDefaultBranch(octokit, job.owner, job.repo));
+    if (job.branch !== branch) {
+      job.branch = branch;
+      await job.save().catch(() => {});
+    }
+
     // 1) Full tree once — used both for mount context and candidate selection.
-    const tree = await scanRepoTree(octokit, job.owner, job.repo);
+    const tree = await scanRepoTree(octokit, job.owner, job.repo, branch);
     console.log(`[backfill ${job._id}] tree size:`, tree.length);
     console.log(
       `[backfill ${job._id}] first 20 paths:`,
@@ -638,6 +650,7 @@ async function runBackfill(jobId) {
               endpoints,
               repo: job.repo,
               owner: job.owner,
+              branch,
               userId: job.userId,
               companyId,
               sourceFile: file.path,
@@ -689,6 +702,7 @@ async function runBackfill(jobId) {
     const removed = await cleanupZombieDocs({
       owner: job.owner,
       repo: job.repo,
+      branch,
       liveShas: processedShas,
     });
     job.zombieDocsRemoved = removed;
@@ -711,7 +725,7 @@ async function startBackfill(req, res) {
   console.log("[startBackfill] body:", req.body);
   console.log("==================================================");
 
-  const { installationId, owner, repo, force } = req.body;
+  const { installationId, owner, repo, force, branch } = req.body;
 
   if (!installationId || !owner || !repo) {
     console.log("[startBackfill] MISSING FIELDS — bailing");
@@ -746,10 +760,30 @@ async function startBackfill(req, res) {
   //   );
   // }
 
+  // Two environments per repo, no more: what ships, plus the one branch the team
+  // develops on. A third would multiply the docs, the tests and the bill for a
+  // question nobody asked.
+  const wanted = typeof branch === "string" ? branch.trim() : "";
+  if (wanted) {
+    const existing = (
+      await Doc.distinct("branch", { owner, repo, branch: { $nin: ["", null] } })
+    ).filter(Boolean);
+    if (existing.length >= 2 && !existing.includes(wanted)) {
+      return res.status(400).json({
+        code: "TOO_MANY_ENVIRONMENTS",
+        message:
+          `This repo already has two environments (${existing.join(", ")}). ` +
+          `Delete one before adding "${wanted}".`,
+        environments: existing,
+      });
+    }
+  }
+
   const job = await BackfillJob.create({
     installationId: Number(installationId),
     owner,
     repo,
+    branch: wanted,
     userId: installation.userId,
     force: force === true,
   });
@@ -762,6 +796,30 @@ async function startBackfill(req, res) {
   res.status(202).json({ jobId: job._id, status: job.status });
 }
 
+/**
+ * GET /api/github/repos/:owner/:repo/branches
+ * The repo's branches, so the UI can offer environments instead of asking the
+ * customer to type a branch name.
+ */
+async function getRepoBranches(req, res) {
+  const { owner, repo } = req.params;
+  const installation = await Installation.findOne({
+    accountLogin: owner,
+    "repos.repoName": repo,
+  }).select("installationId");
+  if (!installation) {
+    return res.status(404).json({ message: `${owner}/${repo} isn't connected.` });
+  }
+  try {
+    const octokit = await getOctokit(installation.installationId);
+    const { branches, defaultBranch } = await listBranches(octokit, owner, repo);
+    res.json({ branches, defaultBranch });
+  } catch (err) {
+    console.error("[github] listBranches failed:", err.message);
+    res.status(502).json({ message: "Couldn't read the branches from GitHub." });
+  }
+}
+
 async function getBackfillJob(req, res) {
   const job = await BackfillJob.findById(req.params.jobId);
   if (!job) return res.status(404).json({ message: "Job not found" });
@@ -769,6 +827,7 @@ async function getBackfillJob(req, res) {
 }
 
 module.exports = {
+  getRepoBranches,
   githubCallback,
   getConnectLink,
   startBackfill,

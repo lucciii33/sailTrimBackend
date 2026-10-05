@@ -43,6 +43,8 @@ const bugSchema = new mongoose.Schema({
   },
   owner: { type: String },
   repo: { type: String },
+  // Environment (branch) of the endpoint this bug is against.
+  branch: { type: String, default: "" },
   runId: { type: String, required: true, index: true },
   severity: {
     type: String,

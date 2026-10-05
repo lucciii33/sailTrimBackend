@@ -61,6 +61,13 @@ const docSchema = new mongoose.Schema({
   // them empty and key off projectId.
   repo: { type: String },
   owner: { type: String },
+  // Which branch of the repo this doc describes — the "environment". A team
+  // merges into `dev` first, so the API as it will ship and the API as it ships
+  // today are two different things, and they need two sets of docs.
+  //
+  // "" means the repo's default branch (main/master). Every doc written before
+  // environments existed has that, so nothing has to be migrated.
+  branch: { type: String, default: "" },
   source: { type: String, enum: ["pr", "backfill"], default: "pr" },
   sourceFile: { type: String },
   sourceSha: { type: String },
@@ -93,5 +100,8 @@ const docSchema = new mongoose.Schema({
 });
 
 docSchema.index({ companyId: 1, owner: 1, repo: 1 });
+// One endpoint per environment: the same path can exist on main and on dev with
+// different params, and they must not overwrite each other.
+docSchema.index({ companyId: 1, owner: 1, repo: 1, branch: 1 });
 
 module.exports = mongoose.model("Doc", docSchema);

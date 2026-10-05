@@ -50,6 +50,10 @@ const apiSuiteSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    // The environment (branch) the endpoint belongs to, copied from its doc.
+    // Denormalised so the tests page can filter without loading every doc, and
+    // so "which environment is this test for?" survives the doc being deleted.
+    branch: { type: String, default: "" },
     owner: { type: String, default: "" },
     repo: { type: String, default: "" },
     docId: {

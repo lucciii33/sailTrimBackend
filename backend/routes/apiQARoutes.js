@@ -86,6 +86,8 @@ router.get("/projects/:id/suites", protect, listSuites);
 router.post("/repos/:owner/:repo/sections/:section/suites", protect, requireBudget("api"), generateSectionSuites);
 router.get("/repos/:owner/:repo/suites", protect, listSuites);
 router.post("/suites/:suiteId/run", protect, requireBudget("api"), runSuite);
+// One test on its own — same handler, with the case id.
+router.post("/suites/:suiteId/cases/:caseId/run", protect, requireBudget("api"), runSuite);
 router.post("/suites/:suiteId/cases/:caseId/refine", protect, requireBudget("api"), refineSuiteCase);
 // One test written by hand (blank, or from a sentence), and removing one.
 router.post("/suites/:suiteId/cases", protect, requireBudget("api"), createSuiteCase);

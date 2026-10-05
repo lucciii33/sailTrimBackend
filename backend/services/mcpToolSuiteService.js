@@ -342,7 +342,14 @@ async function judgeAssertions({ tool, args, result, assertions, client }) {
  * NOTE: this invokes the customer's tools for real. A tool that writes or
  * deletes will do so.
  */
-async function runSuite({ suiteId, companyId, anthropicClient = null }) {
+async function runSuite({
+  suiteId,
+  companyId,
+  anthropicClient = null,
+  // One case id, to re-run a single test. See the API side for why lastRun is
+  // left alone in that case.
+  caseId = null,
+}) {
   const suite = await McpToolSuite.findOne({ _id: suiteId, companyId });
   if (!suite) {
     const err = new Error("Suite not found");
@@ -360,8 +367,17 @@ async function runSuite({ suiteId, companyId, anthropicClient = null }) {
   });
   const client = aiUsage.tag(anthropicClient || getAnthropic(), { action: "mcp_suites", surface: "mcp" });
 
+  const cases = caseId
+    ? suite.cases.filter((c) => String(c._id) === String(caseId))
+    : suite.cases;
+  if (caseId && !cases.length) {
+    const err = new Error("Test case not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
   const results = [];
-  for (const c of suite.cases) {
+  for (const c of cases) {
     const invocation = await mcpLab.invokeTool({
       config,
       toolName: suite.toolName,
@@ -447,15 +463,17 @@ async function runSuite({ suiteId, companyId, anthropicClient = null }) {
     regressions: results.filter((r) => r.isRegression).length,
   };
 
-  suite.lastRun = {
-    at: new Date(),
-    passed: summary.passed,
-    failed: summary.failed,
-    regressions: summary.regressions,
-  };
+  if (!caseId) {
+    suite.lastRun = {
+      at: new Date(),
+      passed: summary.passed,
+      failed: summary.failed,
+      regressions: summary.regressions,
+    };
+  }
   await suite.save();
 
-  return { suite, summary, results };
+  return { suite, summary, results, partial: Boolean(caseId) };
 }
 
 const REFINE_SYSTEM = `You are editing ONE MCP tool test case based on a user instruction.
