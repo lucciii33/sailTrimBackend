@@ -2,7 +2,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { uploadEvidence } = require("./aws");
+const { uploadEvidence, uploadPrivate } = require("./aws");
 
 // Runs ONE generated spec with Playwright and reports whether it passed plus the
 // failure output (fed back to Claude in the heal loop). The app under test is
@@ -103,9 +103,10 @@ function summarizeFailures(json) {
   return lines.join("\n\n");
 }
 
-// Playwright records the trace as an attachment on the failing result. Pull the
-// first one out of the report so we can ship it somewhere durable.
-function findTracePath(json) {
+// Playwright records the trace and the video as attachments on the failing
+// result. Pull the first of a given kind out of the report so we can ship it
+// somewhere durable.
+function findAttachment(json, name) {
   let found = "";
   const visitSuite = (suite) => {
     (suite.suites || []).forEach(visitSuite);
@@ -113,7 +114,7 @@ function findTracePath(json) {
       (spec.tests || []).forEach((t) => {
         (t.results || []).forEach((r) => {
           for (const a of r.attachments || []) {
-            if (!found && a.name === "trace" && a.path) found = a.path;
+            if (!found && a.name === name && a.path) found = a.path;
           }
         });
       });
@@ -123,19 +124,24 @@ function findTracePath(json) {
   return found;
 }
 
-// This host's disk is ephemeral (a deploy wipes it), so a trace left on disk is
-// worthless a day later. Push it to S3 and hand back a URL the heal log can
-// keep. Best-effort on purpose: losing the trace must never turn a real test
-// result into a failure.
-async function uploadTrace(tracePath, { testId }) {
-  if (!tracePath) return "";
+// This host's disk is ephemeral (a deploy wipes it), so an artifact left there is
+// worthless a day later. Push it to S3 under a PRIVATE key and keep the key, not
+// a URL: the link is minted on demand and expires (see aws.signedUrl). These are
+// recordings of the customer's logged-in app — a permanent public link to one is
+// a data leak, which is why they were switched off before.
+//
+// Best-effort on purpose: losing the video must never turn a real test result
+// into a failure.
+async function uploadArtifact(filePath, { testId, kind, mimeType }) {
+  if (!filePath) return "";
   try {
-    const buf = await fs.promises.readFile(tracePath);
-    const name = `heal-${testId || "run"}-${Date.now()}.zip`;
-    const { url } = await uploadEvidence(buf, name, "application/zip");
-    return url || "";
+    const buf = await fs.promises.readFile(filePath);
+    const ext = path.extname(filePath) || "";
+    const key = `e2e/${testId || "run"}/${Date.now()}-${kind}${ext}`;
+    await uploadPrivate(buf, key, mimeType);
+    return key;
   } catch (err) {
-    console.error("[e2e] trace upload failed:", err.message);
+    console.error(`[e2e] ${kind} upload failed:`, err.message);
     return "";
   }
 }
@@ -226,18 +232,33 @@ function runSpec(specCode, { baseUrl, storagePath, testId, timeoutMs = 120000 } 
       }
       const stats = json.stats || {};
       const passed = (stats.unexpected || 0) === 0 && (stats.expected || 0) > 0;
-      // PAUSED alongside trace capture in playwright.config.js — see the note
-      // there. Uncomment this line (and re-enable trace there) to restore it;
-      // findTracePath/uploadTrace below are left intact for that.
-      // const traceUrl = passed ? "" : await uploadTrace(findTracePath(json), { testId });
-      const traceUrl = "";
+
+      // Only failures leave artifacts worth keeping: a green run has nothing to
+      // watch, and each file is a recording of a logged-in app. Keys, not URLs —
+      // the link is signed and expiring, minted when someone asks to watch.
+      let videoKey = "";
+      let traceKey = "";
+      if (!passed) {
+        videoKey = await uploadArtifact(findAttachment(json, "video"), {
+          testId,
+          kind: "video",
+          mimeType: "video/webm",
+        });
+        traceKey = await uploadArtifact(findAttachment(json, "trace"), {
+          testId,
+          kind: "trace",
+          mimeType: "application/zip",
+        });
+      }
+
       await cleanup();
       resolve({
         passed,
         // Never resolve a failure with an empty error: that's the one thing the
         // heal loop cannot work with.
         error: passed ? "" : (summarizeFailures(json) || describeSilentFailure(stats)).slice(-4000),
-        traceUrl,
+        videoKey,
+        traceKey,
       });
     });
   });

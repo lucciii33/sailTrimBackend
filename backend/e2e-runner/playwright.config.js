@@ -30,17 +30,17 @@ module.exports = defineConfig({
   outputDir: path.join(__dirname, "artifacts"),
   use: {
     baseURL: process.env.E2E_BASE_URL,
-    // PAUSED. Traces are a DOM snapshot of the customer's app in a LOGGED-IN
-    // session — real data, and whatever tokens the network log captured — and
-    // they were being uploaded to a publicly-readable S3 bucket. Turned off
-    // until that's behind signed, expiring URLs.
-    // To re-enable, swap the two lines below back and uncomment the upload in
-    // e2ePlaywrightRunner.js (search: PAUSED).
-    // trace: "retain-on-failure",
-    // screenshot: "only-on-failure",
-    trace: "off",
-    screenshot: "off",
-    video: "off",
+    // Traces and video are a recording of the customer's app in a LOGGED-IN
+    // session — their data on screen, their tokens in the network log. They were
+    // off because the upload went to a publicly-readable bucket.
+    //
+    // Back on, now that artifacts go to a PRIVATE key and are served through
+    // short-lived signed URLs (services/aws.js → uploadPrivate / signedUrl).
+    // Only kept for failures: a passing run has nothing to watch, and every file
+    // stored is a recording of someone's logged-in app.
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

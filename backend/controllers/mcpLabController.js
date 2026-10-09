@@ -28,6 +28,7 @@ const mcpToolSuites = require("../services/mcpToolSuiteService.js");
 // const FREE_LIMITS = { projects: 2, docs_generate: 3, ... };
 
 const usageLimit = require("../services/usageLimitService.js");
+const jobs = require("../services/jobService.js");
 
 function ctx(req) {
   return {
@@ -416,18 +417,39 @@ const runQa = asyncHandler(async (req, res) => {
   });
 
   const anthropicClient = await getUserAnthropicClient(req.user._id);
-  const out = await mcpQa.runQa({
-    config,
-    projectId,
-    toolName,
-    sampleArgsByTool: sampleArgsByTool || {},
-    maxCasesPerTool: 3,
-    save,
-    anthropicClient,
-    ...ctx(req),
-  });
-  await recordUsage(req, "qa_run", projectId);
-  res.json(out);
+  const context = ctx(req);
+
+  // A job, not a held-open request: hunting bugs invokes every tool and takes
+  // minutes. The page polls, so a customer can start several and keep working —
+  // how many at once is their plan's call (see jobService).
+  try {
+    const job = await jobs.start({
+      kind: "mcp_bug_hunt",
+      target: { projectId, toolName: toolName || "", label: toolName || "all tools" },
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      work: async () => {
+        const out = await mcpQa.runQa({
+          config,
+          projectId,
+          toolName,
+          sampleArgsByTool: sampleArgsByTool || {},
+          maxCasesPerTool: 3,
+          save,
+          anthropicClient,
+          ...context,
+        });
+        await recordUsage(req, "qa_run", projectId);
+        return out;
+      },
+    });
+    res.status(202).json({ jobId: job._id, status: job.status });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    res
+      .status(status)
+      .json({ code: err.code, message: err.message || "Internal error" });
+  }
 });
 
 /** GET /api/mcp-lab/qa/runs */
@@ -1072,17 +1094,43 @@ async function runToolSuite(req, res) {
   if (!requireCompany(req, res)) return;
   try {
     const anthropicClient = await getUserAnthropicClient(req.user._id);
-    const result = await mcpToolSuites.runSuite({
-      suiteId: req.params.suiteId,
+    const caseId = req.params.caseId || req.body?.caseId || null;
+    const McpToolSuite = require("../model/McpToolSuiteModel.js");
+    const suite = await McpToolSuite.findOne({
+      _id: req.params.suiteId,
       companyId: req.user.companyId,
-      anthropicClient,
-      caseId: req.params.caseId || req.body?.caseId || null,
+    })
+      .select("toolName kind projectId")
+      .lean();
+
+    // Same as the API side: invoking a tool for every case takes minutes, so it
+    // runs as a job the page polls.
+    const job = await jobs.start({
+      kind: "mcp_suite_run",
+      target: {
+        suiteId: req.params.suiteId,
+        caseId,
+        projectId: suite?.projectId || null,
+        toolName: suite?.toolName || "",
+        label: suite ? `${suite.kind} · ${suite.toolName}` : "",
+      },
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      work: async () => {
+        const result = await mcpToolSuites.runSuite({
+          suiteId: req.params.suiteId,
+          companyId: req.user.companyId,
+          anthropicClient,
+          caseId,
+        });
+        return {
+          summary: result.summary,
+          results: result.results,
+          partial: result.partial,
+        };
+      },
     });
-    res.json({
-      summary: result.summary,
-      results: result.results,
-      partial: result.partial,
-    });
+    res.status(202).json({ jobId: job._id, status: job.status });
   } catch (err) {
     const status = err.statusCode || 500;
     console.error("runToolSuite error:", err);

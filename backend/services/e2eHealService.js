@@ -1,6 +1,7 @@
 const Anthropic = require("@anthropic-ai/sdk");
 const aiUsage = require("./aiUsageService.js");
 const { buildRepoContext } = require("./repoContextService");
+const { auditSpec, auditFeedback } = require("./e2eSpecAudit");
 const { runSpec } = require("./e2ePlaywrightRunner");
 const { decrypt } = require("./secretCrypto");
 
@@ -19,7 +20,10 @@ function getAnthropic() {
 // Opus 4.8 is the current, most capable model — best for the senior-level
 // rewrite + multi-step self-heal reasoning. Overridable via env.
 const HEAL_MODEL = process.env.E2E_HEAL_MODEL || "claude-opus-4-8";
-const MAX_ATTEMPTS = parseInt(process.env.E2E_HEAL_MAX_ATTEMPTS || "4", 10);
+// 6, not 4: a spec rejected by the audit (green but verifying nothing) spends an
+// attempt of its own, so the old budget left barely two real fixes. An attempt
+// costs about $0.10 — the repo snapshot is prompt-cached — and half a minute.
+const MAX_ATTEMPTS = parseInt(process.env.E2E_HEAL_MAX_ATTEMPTS || "6", 10);
 
 // Set E2E_HEAL_DEBUG=1 to print EVERYTHING sent to / received from Claude in the
 // backend terminal (system prompt, repo context, the task message, each heal
@@ -41,7 +45,13 @@ How a senior engineer does this:
 - REUSE (DRY): if the repo already has helpers, fixtures, or page objects that do what a step needs, IMPORT and use them instead of duplicating logic. Match the import paths and conventions of the existing e2e tests in the context.
 - SELECTORS: prefer page.getByTestId(...) / getByRole(...) using data-testids that EXIST in the repo context. Replace the brittle CSS/XPath/nth-child selectors the recorder emitted. NEVER invent a data-testid that is not in the provided selector index or an existing test.
 - ASSERTIONS: turn the recorded clicks/gotos into web-first assertions (expect(locator).toBeVisible(), toHaveText, toHaveURL, …) that verify the Gherkin "then" steps. A recording with no assertions is not a test.
-- DETERMINISM: no page.waitForTimeout / arbitrary sleeps; rely on Playwright auto-waiting locators. No conditional flakiness.
+- THE TEST MUST BE ABLE TO FAIL. This is the rule that matters: if the feature broke tomorrow, this spec has to go red. A spec that passes on a broken app is worse than no spec, and it will be rejected even when the run is green. Specifically:
+  * NEVER assert a URL with alternatives — toHaveURL(/dashboard|login/) accepts any outcome. Assert the ONE url the flow must reach.
+  * NEVER accept the login page as a valid result (unless the test IS about logging in). Landing on login means the session was lost: let the test fail, that is the bug worth reporting.
+  * NEVER assert on body, html, #root, #app or main — they exist on an error page too. Assert on content that only renders when the flow actually worked.
+  * At least two assertions, and at least one of them on real app content via getByTestId / getByRole / getByText.
+  * Do not weaken or delete an assertion to get past a failure. If the app genuinely misbehaves, keep the correct assertion and let it stay red — a red test with the right expectation is the useful answer.
+- DETERMINISM: no page.waitForTimeout / arbitrary sleeps; rely on Playwright auto-waiting locators. No conditional flakiness. Never test.skip.
 - AUTH: do NOT add login steps — the run is already authenticated via a stored session.
 - Keep it a single self-contained spec file unless a repo helper is the right reuse.
 
@@ -160,13 +170,39 @@ async function improveAndHeal({ test, project, storagePath, env = null, anthropi
       passed: run.passed,
       error: run.error || "",
       durationMs: Date.now() - t0,
-      traceUrl: run.traceUrl || "",
+      // Private keys; the watchable link is signed on request.
+      videoKey: run.videoKey || "",
+      traceKey: run.traceKey || "",
     });
 
     dbg(`attempt ${attempt} run: passed=${run.passed} durationMs=${Date.now() - t0}`);
+
     if (run.passed) {
-      dbg(`✓ green on attempt ${attempt}`);
-      return { specCode: spec, passed: true, heal, repo };
+      // Green is necessary, not sufficient. The loop's reward is "make it pass",
+      // and the cheapest way to pass is to stop asserting — which is how a spec
+      // whose only checks were `toHaveURL(/E2E-QA|login/i)` and "body is
+      // visible" got committed as a passing test. Audit the spec and, when it
+      // verifies nothing, treat it as a failure with the rule it broke.
+      const audit = auditSpec(spec, {
+        name: test.name,
+        gherkinText: test.gherkinText,
+      });
+      if (audit.ok) {
+        dbg(`✓ green on attempt ${attempt}`);
+        return { specCode: spec, passed: true, heal, repo };
+      }
+
+      dbg(`✗ green but worthless on attempt ${attempt}: ${audit.violations.length} violation(s)`);
+      heal[heal.length - 1] = {
+        ...heal[heal.length - 1],
+        passed: false,
+        error: `Rejected — the test passed without verifying the behaviour:\n${audit.violations
+          .map((v) => `- ${v}`)
+          .join("\n")}`,
+      };
+      messages.push({ role: "assistant", content: text });
+      messages.push({ role: "user", content: auditFeedback(audit.violations) });
+      continue;
     }
     dbgBlock(`PLAYWRIGHT FAILURE (attempt ${attempt}) → fed back to Claude`, run.error || "(no error text)");
 

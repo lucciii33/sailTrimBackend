@@ -9,6 +9,7 @@ const apiSuiteService = require("../services/apiSuiteService");
 const SuiteRun = require("../model/SuiteRunModel");
 const openApiService = require("../services/openApiService");
 const { getUserAnthropicClient } = require("../services/userKeyService");
+const jobs = require("../services/jobService");
 const {
   getOctokit,
   getDefaultBranch,
@@ -142,23 +143,45 @@ async function upsertConfig(req, res) {
   res.json(serializeConfig(cfg));
 }
 
+// Answers with a job id instead of holding the request open for the minutes a
+// bug hunt takes. The page polls the job, so several can run at once (up to the
+// plan's limit) and the browser stays usable in between.
 async function findBugs(req, res) {
   if (!requireCompany(req, res)) return;
   const { docId } = req.params;
   try {
     const anthropicClient = await getUserAnthropicClient(req.user._id);
-    const result = await apiQAService.findBugs({
-      docId,
+    const authSchemeName = req.body?.authSchemeName || "";
+    const doc = await Doc.findOne({ _id: docId, companyId: req.user.companyId })
+      .select("method path owner repo")
+      .lean();
+
+    const job = await jobs.start({
+      kind: "api_bug_hunt",
+      target: {
+        docId,
+        owner: doc?.owner || "",
+        repo: doc?.repo || "",
+        label: doc ? `${doc.method} ${doc.path}` : "",
+      },
       userId: req.user._id,
       companyId: req.user.companyId,
-      anthropicClient,
-      authSchemeName: req.body?.authSchemeName || "",
+      work: () =>
+        apiQAService.findBugs({
+          docId,
+          userId: req.user._id,
+          companyId: req.user.companyId,
+          anthropicClient,
+          authSchemeName,
+        }),
     });
-    res.json(result);
+    res.status(202).json({ jobId: job._id, status: job.status });
   } catch (err) {
     const status = err.statusCode || 500;
-    console.error("findBugs error:", err);
-    res.status(status).json({ message: err.message || "Internal error" });
+    if (err.code !== "TOO_MANY_RUNNING") console.error("findBugs error:", err);
+    res
+      .status(status)
+      .json({ code: err.code, message: err.message || "Internal error" });
   }
 }
 
@@ -786,19 +809,46 @@ async function runSuite(req, res) {
   if (!requireCompany(req, res)) return;
   try {
     const anthropicClient = await getUserAnthropicClient(req.user._id);
-    const result = await apiSuiteService.runSuite({
-      suiteId: req.params.suiteId,
+    const authSchemeName = req.body?.authSchemeName || "";
+    // Present when the client asked for one test instead of the suite.
+    const caseId = req.params.caseId || req.body?.caseId || null;
+    const ApiSuite = require("../model/ApiSuiteModel");
+    const suite = await ApiSuite.findOne({
+      _id: req.params.suiteId,
       companyId: req.user.companyId,
-      anthropicClient,
-      authSchemeName: req.body?.authSchemeName || "",
-      // Present when the client asked for one test instead of the suite.
-      caseId: req.params.caseId || req.body?.caseId || null,
+    })
+      .select("method path kind owner repo")
+      .lean();
+
+    // A job, not a held-open request: a suite takes as long as the API takes to
+    // answer every case, and the page should stay usable while it does.
+    const job = await jobs.start({
+      kind: "api_suite_run",
+      target: {
+        suiteId: req.params.suiteId,
+        caseId,
+        owner: suite?.owner || "",
+        repo: suite?.repo || "",
+        label: suite ? `${suite.kind} · ${suite.method} ${suite.path}` : "",
+      },
+      userId: req.user._id,
+      companyId: req.user.companyId,
+      work: async () => {
+        const result = await apiSuiteService.runSuite({
+          suiteId: req.params.suiteId,
+          companyId: req.user.companyId,
+          anthropicClient,
+          authSchemeName,
+          caseId,
+        });
+        return {
+          summary: result.summary,
+          results: result.results,
+          partial: result.partial,
+        };
+      },
     });
-    res.json({
-      summary: result.summary,
-      results: result.results,
-      partial: result.partial,
-    });
+    res.status(202).json({ jobId: job._id, status: job.status });
   } catch (err) {
     const status = err.statusCode || 500;
     console.error("runSuite error:", err);

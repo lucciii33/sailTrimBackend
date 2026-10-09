@@ -37,9 +37,16 @@ const healIterationSchema = new mongoose.Schema(
     passed: { type: Boolean, default: false },
     error: { type: String, default: "" },
     durationMs: { type: Number },
-    // S3 link to the Playwright trace for a FAILED attempt (DOM snapshots,
-    // per-step screenshots, network). Empty when the attempt passed, or when
-    // the upload failed — a missing trace never blocks the result.
+    // Playwright's recording of a FAILED attempt: the video of the run and the
+    // trace (DOM snapshots, per-step screenshots, network).
+    //
+    // KEYS, not URLs. These are recordings of the customer's logged-in app, so
+    // they live on a private key and are watched through a signed link that
+    // expires (GET /api/e2e/tests/:id/attempts/:n/video). The old traceUrl held
+    // a permanent public link, which is why capture was switched off entirely.
+    videoKey: { type: String, default: "" },
+    traceKey: { type: String, default: "" },
+    // Kept so old rows still render; no longer written.
     traceUrl: { type: String, default: "" },
   },
   { _id: false }

@@ -262,6 +262,7 @@ app.use("/api/mcp-lab", require("./routes/mcpLabRoutes"));
 app.use("/api/qa", require("./routes/apiQARoutes"));
 app.use("/api/qa-report", require("./routes/qaReportRoutes"));
 app.use("/api/usage", require("./routes/usageRoutes"));
+app.use("/api/jobs", require("./routes/jobRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 app.use("/api/e2e", require("./routes/e2eQaRoutes"));
 app.use("/api/installations", require("./routes/installationsRoutes"));
@@ -276,6 +277,12 @@ app.use(errorHandler);
 if (process.env.NODE_ENV !== "test") {
   app.listen(port, "0.0.0.0", () => {
     console.log(`Server started on port ${port}`);
+
+    // A job left "running" by the process that died belongs to nobody, and it
+    // would hold one of the workspace's concurrent slots forever.
+    require("./services/jobService")
+      .failOrphans()
+      .catch((err) => console.error("[jobs] could not release orphans:", err.message));
 
     // Pick up watcher runs that a previous process recorded but never finished.
     // A merge that lands while this service is redeploying gets its trigger

@@ -24,6 +24,7 @@ const {
   improveTest,
   commitTest,
   deleteTest,
+  getAttemptArtifact,
   startClientRecording,
   ingestClientRecording,
   finishClientRecording,
@@ -96,5 +97,7 @@ router.post("/tests/:testId/improve", protect, improveTest);
 // Commit & push the green spec to the project's connected repo (direct to branch).
 router.post("/tests/:testId/commit", protect, commitTest);
 router.delete("/tests/:testId", protect, deleteTest);
+// Watch what a failed attempt did: a signed, expiring link to the recording.
+router.get("/tests/:testId/attempts/:attempt/:kind", protect, getAttemptArtifact);
 
 module.exports = router;
