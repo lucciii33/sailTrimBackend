@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const Installation = require("../model/Installation");
+const instanceRouter = require("../services/instanceRouter");
 const { repointToInstallation } = require("../services/installationRepointService");
 const BackfillJob = require("../model/BackfillJob");
 const Doc = require("../model/DocModel");
@@ -226,7 +227,9 @@ async function getConnectLink(req, res) {
     typeof req.query.returnTo === "string" && /^\/(?!\/)/.test(req.query.returnTo)
       ? req.query.returnTo
       : "";
-  const state = signConnectState(req.user._id, { purpose, returnTo });
+  const state = instanceRouter.wrapState(
+    signConnectState(req.user._id, { purpose, returnTo })
+  );
   // Send the user through GitHub OAuth FIRST (not straight to the install
   // screen). GitHub does NOT return an OAuth `code` on a pending org "request"
   // — only on a completed install — so the install flow alone can't tell us who
@@ -242,7 +245,14 @@ async function getConnectLink(req, res) {
 async function githubCallback(req, res) {
   const { installation_id, state: rawState, setup_action, code } = req.query;
   const frontendUrl = process.env.FRONTEND_URL;
-  const state = resolveStateUserId(rawState);
+
+  // Started on a dedicated instance: GitHub only knows the main backend's URL,
+  // so the browser continues over there.
+  const instanceTarget = await instanceRouter.callbackTarget(req.query);
+  if (instanceTarget) return res.redirect(instanceTarget);
+
+  const signedState = instanceRouter.unwrapState(rawState);
+  const state = resolveStateUserId(signedState);
 
   // rawState present but state resolved to null = a real token was sent but
   // it's invalid/expired/tampered — show a clear error instead of silently
@@ -284,6 +294,12 @@ async function githubCallback(req, res) {
         console.log(
           `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`
         );
+        // The main backend must know this person's new installation is ours,
+        // or the event announcing it never reaches this instance.
+        await (process.env.OLIVIA_INSTANCE_KEY
+          ? instanceRouter.reportIdentity(ghUser.id)
+          : instanceRouter.clearIdentity(ghUser.id)
+        ).catch((e) => console.error("instance routing failed:", e.message));
         // Now that we know who they are on GitHub, pick up anything that was
         // already approved for them while they were still anonymous to us.
         const linked = await reconcileInstallationsForGithubUser(
@@ -301,7 +317,7 @@ async function githubCallback(req, res) {
       }
     }
     // Sign-in-only hop: token captured above, go back to Olivia.
-    const payload = resolveStatePayload(rawState);
+    const payload = resolveStatePayload(signedState);
     if (payload?.purpose === REAUTH_STATE_PURPOSE && frontendUrl) {
       const to = payload.returnTo || "/workspace";
       return res.redirect(

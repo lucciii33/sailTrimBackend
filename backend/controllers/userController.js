@@ -14,6 +14,7 @@ const {
 } = require("../services/passwordPolicy");
 const { logEvent } = require("../services/auditLogger");
 const { OAuth2Client } = require("google-auth-library");
+const { isDedicated } = require("../config/instance");
 
 // Lazy Google OIDC client — verifies the ID token the browser gets from
 // "Sign in with Google". Only the client_id is needed to check the audience.
@@ -73,6 +74,12 @@ const registerUser = asyncHandler(async (req, res) => {
   const normalizedPais = pais || country;
   const normalizedEdad = edad || age;
   const normalizedTerms = terms ?? termsAccepted ?? false;
+
+  // A dedicated instance belongs to one customer: only people they invite.
+  if (isDedicated() && !inviteToken) {
+    res.status(403);
+    throw new Error("Sign-up is by invitation only.");
+  }
 
   if (!firstName || !lastName || !normalizedEmail || !password) {
     res.status(400);
@@ -588,6 +595,22 @@ const googleLogin = asyncHandler(async (req, res) => {
   }
 
   if (!user) {
+    // A dedicated instance has no open sign-up, and Google has already proved
+    // this email is theirs, so the invitation for it is all that's needed. It
+    // stays pending because the accept-invite page completes it after login.
+    let invite = null;
+    if (isDedicated()) {
+      invite = await CompanyInvite.findOne({
+        email,
+        acceptedAt: null,
+        expiresAt: { $gt: new Date() },
+      });
+      if (!invite) {
+        res.status(403);
+        throw new Error("Sign-up is by invitation only.");
+      }
+    }
+
     user = await User.create({
       firstName: payload.given_name || email.split("@")[0],
       lastName: payload.family_name || "",
@@ -595,14 +618,17 @@ const googleLogin = asyncHandler(async (req, res) => {
       googleId: payload.sub,
       authProvider: "google",
       terms: true,
+      ...(invite ? { companyId: invite.companyId, role: invite.role || "member" } : {}),
     });
-    // New SSO user gets their own workspace, same as registerUser.
-    const company = await Company.create({
-      name: `${user.firstName}'s Workspace`,
-      ownerUserId: user._id,
-    });
-    user.companyId = company._id;
-    await user.save();
+    if (!invite) {
+      // New SSO user gets their own workspace, same as registerUser.
+      const company = await Company.create({
+        name: `${user.firstName}'s Workspace`,
+        ownerUserId: user._id,
+      });
+      user.companyId = company._id;
+      await user.save();
+    }
   }
 
   // If the account has app-level 2FA enabled, don't issue the session token

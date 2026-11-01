@@ -5,6 +5,7 @@ require("dotenv").config();
 const port = process.env.PORT || 5000;
 const { errorHandler } = require("./middleware/errorMiddleware");
 const connectDB = require("./config/db");
+const instance = require("./config/instance");
 
 // const sessionDeleteCronJob = require("./jobs/deleteSession.js");
 const cors = require("cors");
@@ -19,6 +20,7 @@ const bodyParser = require("body-parser");
 //   process.env.MJ_APIKEY_PRIVATE
 // );
 
+instance.assertDedicatedConfig();
 connectDB();
 
 const app = express();
@@ -242,7 +244,7 @@ app.use(
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false, limit: "1mb" }));
-app.use(cors());
+app.use(cors(instance.corsOptions()));
 
 const endpointSecret = process.env.WEB_HOOK_STRIPE;
 
