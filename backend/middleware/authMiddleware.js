@@ -1,27 +1,41 @@
 const jwt = require('jsonwebtoken')
 const asyncHandler = require('express-async-handler')
 const User = require('../model/userModel')
+const aiUsage = require('../services/aiUsageService')
 
 const protect = asyncHandler(async (req, res, next) => {
     let token
 
     if(req.headers.authorization && req.headers.authorization.startsWith('Bearer')){
         try {
-            //Get token from header
             token = req.headers.authorization.split(' ')[1]
 
-            //Verify token
             const decoded = jwt.verify(token, process.env.JWT_SECRET_NODE)
 
-            //Get user from the token
-            req.user = await User.findById(decoded.id).select('_id email role company')
-            
+            if (decoded.twoFactorPending) {
+                res.status(401)
+                throw new Error("Two-factor authentication required")
+            }
+
+            req.user = await User.findById(decoded.id).select('_id email role company companyId')
+
+            if (!req.user) {
+                res.status(401)
+                throw new Error("Not authorized")
+            }
+
+            // Whose spend anything this request triggers belongs to.
+            aiUsage.setContext({
+                userId: req.user._id,
+                companyId: req.user.companyId || null,
+            })
+
             next()
 
         } catch (error) {
             console.log(error)
             res.status(401)
-            throw new Error("Not authorized")
+            throw new Error(error?.message || "Not authorized")
         }
     }
 

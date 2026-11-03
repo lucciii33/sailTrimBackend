@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Security Architecture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .subtitle {
+      color: #8b949e;
+      font-size: 1rem;
+      margin-bottom: 56px;
+      text-align: center;
+    }
+
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      width: 100%;
+      max-width: 680px;
+    }
+
+    .step {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    .step-left {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .circle {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    .line {
+      width: 2px;
+      flex: 1;
+      min-height: 32px;
+      background: #21262d;
+      margin: 4px 0;
+    }
+
+    .step:last-child .line { display: none; }
+
+    .step-body {
+      padding-bottom: 36px;
+      flex: 1;
+    }
+
+    .step-body h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      margin-top: 10px;
+    }
+
+    .step-body p {
+      color: #8b949e;
+      font-size: 0.92rem;
+      line-height: 1.65;
+    }
+
+    .detail {
+      margin-top: 12px;
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.82rem;
+      color: #58a6ff;
+      font-family: "SF Mono", "Fira Code", monospace;
+      line-height: 1.8;
+    }
+
+    .tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .s1 .circle { background: #2ea04320; color: #56d364; border: 2px solid #2ea043; }
+    .s1 .tag    { background: #2ea04320; color: #56d364; }
+
+    .s2 .circle { background: #1f6feb20; color: #58a6ff; border: 2px solid #1f6feb; }
+    .s2 .tag    { background: #1f6feb20; color: #58a6ff; }
+
+    .s3 .circle { background: #a371f720; color: #d2a8ff; border: 2px solid #a371f7; }
+    .s3 .tag    { background: #a371f720; color: #d2a8ff; }
+
+    .s4 .circle { background: #e3b34120; color: #f0c040; border: 2px solid #e3b341; }
+    .s4 .tag    { background: #e3b34120; color: #f0c040; }
+
+    .s5 .circle { background: #f8514920; color: #ff7b72; border: 2px solid #f85149; }
+    .s5 .tag    { background: #f8514920; color: #ff7b72; }
+
+    .vs-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.84rem;
+    }
+
+    .vs-table th {
+      text-align: left;
+      padding: 8px 12px;
+      color: #8b949e;
+      font-weight: 600;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .vs-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #161b22;
+      color: #8b949e;
+      vertical-align: top;
+    }
+
+    .vs-table td:first-child { color: #e6edf3; }
+    .good { color: #56d364 !important; }
+    .bad  { color: #ff7b72 !important; }
+  </style>
+</head>
+<body>
+
+  <h1>Security Architecture</h1>
+  <p class="subtitle">Every layer is designed so that even if one part is compromised, the others hold.</p>
+
+  <div class="flow">
+
+    <div class="step s1">
+      <div class="step-left">
+        <div class="circle">1</div>
+        <div class="line"></div>
+      </div>
+      <div class="step-body">
+        <div class="tag">Webhook</div>
+        <h2>Signature Verification — HMAC-SHA256</h2>
+        <p>Every request GitHub sends to your server is signed with a secret only you and GitHub know. Before processing anything, the server recomputes the signature and compares it using a timing-safe check. If it doesn't match, the request is dropped with a 401 — no exceptions.</p>
+        <div class="detail">
+          GitHub signs → X-Hub-Signature-256: sha256=abc123...<br>
+          Server recomputes HMAC with your secret<br>
+          Mismatch → 401 Unauthorized, request ignored
+        </div>
+      </div>
+    </div>
+
+    <div class="step s2">
+      <div class="step-left">
+        <div class="circle">2</div>
+        <div class="line"></div>
+      </div>
+      <div class="step-body">
+        <div class="tag">Tokens</div>
+        <h2>Short-Lived Access Tokens — 1 Hour Expiry</h2>
+        <p>The server never stores a permanent GitHub token. Each time it needs to read a PR diff, it requests a fresh token using the app's private key. That token expires in 60 minutes — even if intercepted, an attacker gets nothing useful.</p>
+        <div class="detail">
+          App private key → requests installation token<br>
+          GitHub issues → token valid 60 minutes only<br>
+          Token expires → next request gets a new one
+        </div>
+      </div>
+    </div>
+
+    <div class="step s3">
+      <div class="step-left">
+        <div class="circle">3</div>
+        <div class="line"></div>
+      </div>
+      <div class="step-body">
+        <div class="tag">Storage</div>
+        <h2>Encrypted Slack Credentials at Rest</h2>
+        <p>The Slack bot token is never stored in plain text. It is encrypted before being saved to the database and decrypted only at the moment it's needed. If someone dumps the database, they get ciphertext — not a working token.</p>
+        <div class="detail">
+          Slack token → encrypted → saved to DB<br>
+          On PR event → decrypted in memory → used → discarded<br>
+          DB breach → attacker gets encrypted blob only
+        </div>
+      </div>
+    </div>
+
+    <div class="step s4">
+      <div class="step-left">
+        <div class="circle">4</div>
+        <div class="line"></div>
+      </div>
+      <div class="step-body">
+        <div class="tag">Access</div>
+        <h2>Scoped Repository Access</h2>
+        <p>When a user installs the GitHub App, they explicitly choose which repositories to grant access to. The app can only ever see those specific repos — nothing else in the organization or account is accessible, even by accident.</p>
+      </div>
+    </div>
+
+    <div class="step s5">
+      <div class="step-left">
+        <div class="circle">5</div>
+        <div class="line"></div>
+      </div>
+      <div class="step-body">
+        <div class="tag">Design</div>
+        <h2>GitHub App vs OAuth</h2>
+        <p>OAuth ties the token to a person. If that person leaves, the integration breaks — and their token keeps working until manually revoked. GitHub Apps are tied to the installation, not any individual.</p>
+        <table class="vs-table">
+          <tr>
+            <th></th>
+            <th>OAuth (user token)</th>
+            <th>GitHub App</th>
+          </tr>
+          <tr>
+            <td>Token tied to</td>
+            <td class="bad">A person</td>
+            <td class="good">The installation</td>
+          </tr>
+          <tr>
+            <td>Employee leaves</td>
+            <td class="bad">Integration breaks</td>
+            <td class="good">Nothing changes</td>
+          </tr>
+          <tr>
+            <td>Token lifespan</td>
+            <td class="bad">Until manually revoked</td>
+            <td class="good">1 hour, auto-rotated</td>
+          </tr>
+          <tr>
+            <td>Access scope</td>
+            <td class="bad">Everything the user can see</td>
+            <td class="good">Only selected repos</td>
+          </tr>
+          <tr>
+            <td>Used by</td>
+            <td></td>
+            <td class="good">Vercel, Linear, Render</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>
