@@ -9,6 +9,7 @@ const Bug = require("../model/BugModel");
 const TestRun = require("../model/TestRunModel");
 const SuiteRun = require("../model/SuiteRunModel");
 const { decrypt } = require("./secretCrypto");
+const businessRules = require("./businessRuleService");
 
 let _anthropic = null;
 function getAnthropic() {
@@ -427,7 +428,13 @@ Rules:
 
 async function generateTestCases(
   doc,
-  { anthropicClient = null, variables = {}, context = {}, priorCases = [] } = {},
+  {
+    anthropicClient = null,
+    variables = {},
+    context = {},
+    priorCases = [],
+    rulesNote = "",
+  } = {},
 ) {
   const spec = {
     method: doc.method,
@@ -467,7 +474,7 @@ Use a "{{key}}" placeholder wherever a path param or field matches one of these 
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}${bodyNote}${priorNote}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}${envNote}${contextNote}${bodyNote}${priorNote}${rulesNote}`,
       },
     ],
   });
@@ -1050,11 +1057,15 @@ async function findBugs({
     `[dedup][api] ${doc.method} ${doc.path} priorCases=${priorCases.length}`,
     priorCases.map((c) => c.name)
   );
+  const rulesNote = businessRules.rulesNote(
+    await businessRules.rulesFor({ companyId, doc })
+  );
   const { cases, usage: genUsage } = await generateTestCases(doc, {
     anthropicClient,
     variables,
     context,
     priorCases,
+    rulesNote,
   });
   console.log(
     `[dedup][api] generated ${cases.length} cases`,

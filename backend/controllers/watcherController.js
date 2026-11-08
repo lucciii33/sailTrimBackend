@@ -189,7 +189,7 @@ async function createWatcher(req, res) {
 
 async function updateWatcher(req, res) {
   if (!requireCompany(req, res)) return;
-  const { enabled, actions, branch } = req.body || {};
+  const { enabled, actions, branch, deployWaitMinutes, reviewBaseUrl } = req.body || {};
   const watcher = await ApiWatcher.findOne({
     _id: req.params.id,
     companyId: req.user.companyId,
@@ -201,6 +201,20 @@ async function updateWatcher(req, res) {
     watcher.name = cleanWatcherName(req.body.name);
   }
   if (actions) watcher.actions = { ...watcher.actions.toObject?.() ?? watcher.actions, ...actions };
+  if (deployWaitMinutes !== undefined) {
+    const minutes = Number(deployWaitMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 30) {
+      return res.status(400).json({ message: "deployWaitMinutes must be between 0 and 30" });
+    }
+    watcher.deployWaitMinutes = Math.round(minutes);
+  }
+  if (reviewBaseUrl !== undefined) {
+    const url = String(reviewBaseUrl).trim();
+    if (url && !/^https?:\/\/[^\s]+$/i.test(url)) {
+      return res.status(400).json({ message: "reviewBaseUrl must be an http(s) URL" });
+    }
+    watcher.reviewBaseUrl = url;
+  }
   if (branch && branch !== watcher.branch) {
     const problem = await branchProblem(
       watcher.installationId,
