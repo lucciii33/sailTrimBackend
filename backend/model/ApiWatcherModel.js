@@ -35,7 +35,21 @@ const apiWatcherSchema = new mongoose.Schema(
       // reports actual bugs in the endpoint that just shipped. That report is
       // the thing worth reading the morning after a merge.
       runQa: { type: Boolean, default: true },
+      // The QA review of the merged PR: tests of every type against what it
+      // changed, a verdict with evidence, and questions, commented on the PR.
+      // Off by default: it makes real requests, including attacks, so it must
+      // only point at a dev or staging environment.
+      prReview: { type: Boolean, default: false },
     },
+
+    // Minutes to wait after a merge before reviewing, so the branch's deploy
+    // has finished and the tests hit the new code.
+    deployWaitMinutes: { type: Number, default: 0, min: 0, max: 30 },
+
+    // Where the PR review sends its requests: the environment this branch
+    // deploys to. Required for the review, and never taken from the repo's QA
+    // settings, whose base URL may well be production.
+    reviewBaseUrl: { type: String, default: "", trim: true },
 
     lastRun: {
       at: { type: Date, default: null },

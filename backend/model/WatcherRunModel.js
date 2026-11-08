@@ -43,6 +43,10 @@ const watcherRunSchema = new mongoose.Schema(
     // twice (GitHub retries) or picked up by two instances.
     attempts: { type: Number, default: 0 },
 
+    // Business rules Olivia proposed from this merge's diff, waiting for review.
+    rulesProposed: { type: Number, default: 0 },
+    prReviewId: { type: mongoose.Schema.Types.ObjectId, ref: "PrReview", default: null },
+
     // Endpoints that existed before and after the run but whose contract
     // changed, with a short human description of what changed.
     editedEndpoints: {

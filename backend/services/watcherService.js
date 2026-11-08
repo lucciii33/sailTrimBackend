@@ -5,6 +5,8 @@ const BackfillJob = require("../model/BackfillJob");
 const apiSuiteService = require("./apiSuiteService");
 const apiQAService = require("./apiQAService");
 const prDiff = require("./prDiffService");
+const businessRules = require("./businessRuleService");
+const prReview = require("./prReviewService");
 const usageLimit = require("./usageLimitService");
 const { liveInstallationIdFor } = require("./installationRepointService");
 const aiUsage = require("./aiUsageService");
@@ -320,6 +322,7 @@ async function runClaimed(run, watcher) {
     // doc-wording noise on top. The contract result is the fallback when the
     // diff couldn't be read (no PR, API failure, or a diff too big to send
     // whole) — then nothing real is lost to a partial read.
+    let prFiles = null;
     if (trigger.kind === "merge" && trigger.prNumber) {
       try {
         const files = await prDiff.fetchPRFiles({
@@ -328,6 +331,7 @@ async function runClaimed(run, watcher) {
           repo: watcher.repo,
           prNumber: trigger.prNumber,
         });
+        prFiles = files;
         const freshKeys = new Set(fresh.map(endpointKey));
         const items = after.map(endpointKey).filter((k) => !freshKeys.has(k));
         const { touched, analyzed, truncated } = await prDiff.findTouched({
@@ -379,6 +383,26 @@ async function runClaimed(run, watcher) {
         { _id: { $in: edited.map((e) => e.docId) } },
         { $set: { lastEditedAt: editedAt, lastEditedPr: trigger.prNumber || null } }
       );
+    }
+
+    // 3d) What this merge taught us. Proposed, not applied: nothing reaches a
+    // test prompt until a person approves it. Best-effort, like the diff read.
+    if (prFiles?.length) {
+      await businessRules
+        .proposeFromDiff({
+          companyId: watcher.companyId,
+          scope: { owner: watcher.owner, repo: watcher.repo },
+          files: prFiles,
+          prNumber: trigger.prNumber,
+          endpoints: after.map(endpointKey),
+          anthropicClient,
+        })
+        .then((saved) => {
+          run.rulesProposed = saved.length;
+        })
+        .catch((err) =>
+          console.error("[watcher] business rule proposals failed:", err.message)
+        );
     }
 
     // 4) Generate QA for the new endpoints only. One at a time, and a failure
@@ -476,6 +500,44 @@ async function runClaimed(run, watcher) {
         }
       }
       rows.push(row);
+    }
+
+    // 5) The QA review of the PR itself, against what it added or changed.
+    if (
+      watcher.actions?.prReview === true &&
+      trigger.kind === "merge" &&
+      trigger.prNumber
+    ) {
+      const waitMs = Math.min(Math.max(watcher.deployWaitMinutes || 0, 0), 30) * 60 * 1000;
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      const byKey = new Map(after.map((d) => [endpointKey(d), d]));
+      const changed = [
+        ...fresh.map((d) => ({ doc: d, change: "new endpoint" })),
+        ...edited
+          .map((e) => ({
+            doc: byKey.get(`${String(e.method).toUpperCase()} ${e.path}`),
+            change: (e.changes || []).join("; "),
+          }))
+          .filter((c) => c.doc),
+      ];
+      if (changed.length) {
+        try {
+          const review = await prReview.reviewPullRequest({
+            watcher,
+            installationId,
+            prNumber: trigger.prNumber,
+            prTitle: trigger.prTitle || "",
+            files: prFiles || [],
+            changed,
+            anthropicClient,
+          });
+          run.prReviewId = review._id;
+        } catch (err) {
+          // The docs and tests above are done; losing the review is not a
+          // reason to report the whole run as failed.
+          console.error("[watcher] PR review failed:", err.message);
+        }
+      }
     }
 
     run.newEndpoints = rows;

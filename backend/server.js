@@ -271,6 +271,8 @@ app.use("/api/installations", require("./routes/installationsRoutes"));
 app.use("/api/example", require("./routes/exampleRoutes"));
 app.use("/api/watchers", require("./routes/watcherRoutes"));
 app.use("/api/mcp-watchers", require("./routes/mcpWatcherRoutes"));
+app.use("/api/rules", require("./routes/businessRuleRoutes"));
+app.use("/api/pr-reviews", require("./routes/prReviewRoutes"));
 
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }))
 app.use(errorHandler);

@@ -10,6 +10,7 @@ const {
 const Anthropic = require("@anthropic-ai/sdk");
 const aiUsage = require("./aiUsageService.js");
 const { modelFor } = require("./modelRouter.js");
+const businessRules = require("./businessRuleService");
 
 // Persistent test suites per endpoint — the API-side counterpart of the MCP
 // smoke/regression suites.
@@ -176,6 +177,9 @@ async function generateSuite({
   const envNote = varKeys.length
     ? `\n\nAVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}`
     : "";
+  const rulesNote = businessRules.rulesNote(
+    await businessRules.rulesFor({ companyId, doc })
+  );
 
   const client = aiUsage.tag(anthropicClient || getAnthropic(), { action: "api_suites", surface: "api" });
   const resp = await client.messages.create({
@@ -185,7 +189,7 @@ async function generateSuite({
     messages: [
       {
         role: "user",
-        content: `ENDPOINT SPEC:\n${JSON.stringify(specForPrompt(doc), null, 2)}${envNote}`,
+        content: `ENDPOINT SPEC:\n${JSON.stringify(specForPrompt(doc), null, 2)}${envNote}${rulesNote}`,
       },
     ],
   });
@@ -769,6 +773,7 @@ async function listProjectSuites({ projectId, owner, repo, companyId, branch }) 
 }
 
 module.exports = {
+  judgeAssertions,
   sectionForDoc,
   generateSuite,
   createCase,
