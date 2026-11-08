@@ -2,6 +2,8 @@ const asyncHandler = require("express-async-handler");
 const mongoose = require("mongoose");
 const PrReview = require("../model/PrReviewModel");
 const BusinessRule = require("../model/BusinessRuleModel");
+const ApiQaConfig = require("../model/ApiQaConfig");
+const prReviewChat = require("../services/prReviewChatService");
 
 // Reading Olivia's PR reviews, answering its questions, and recording the
 // team's decision. Scoped to the caller's company throughout.
@@ -33,7 +35,7 @@ const listReviews = asyncHandler(async (req, res) => {
     filter.repo = String(req.query.repo);
   }
   const list = await PrReview.find(filter)
-    .select("-tests.request -tests.response")
+    .select("-tests.request -tests.response -chat")
     .sort({ createdAt: -1 })
     .limit(100)
     .lean();
@@ -103,4 +105,72 @@ const decide = asyncHandler(async (req, res) => {
   res.json(review);
 });
 
-module.exports = { listReviews, getReview, answerQuestion, decide };
+/** POST /api/pr-reviews/:id/chat { message } — talk to the agent about this review. */
+const chat = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(404).json({ message: "Review not found" });
+  }
+  const message = String(req.body?.message || "").trim();
+  if (!message) return res.status(400).json({ message: "message is required" });
+  const review = await prReviewChat.chat({
+    reviewId: req.params.id,
+    companyId: req.user.companyId,
+    message,
+  });
+  res.json(review);
+});
+
+/**
+ * POST /api/pr-reviews/:id/actions/:actionId { decision: apply|dismiss }
+ * Applies what the agent proposed to keep: a repo variable or a business rule.
+ */
+const resolveAction = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const decision = req.body?.decision;
+  if (!["apply", "dismiss"].includes(decision)) {
+    return res.status(400).json({ message: "decision must be apply or dismiss" });
+  }
+  const review = await findOwn(req, res);
+  if (!review) return;
+  const action = review.chat
+    .flatMap((m) => m.actions || [])
+    .find((a) => String(a._id) === req.params.actionId);
+  if (!action) return res.status(404).json({ message: "Action not found" });
+  if (action.status !== "pending") return res.json(review);
+
+  if (decision === "apply" && action.kind === "save_variable") {
+    const config = await ApiQaConfig.findOne({
+      companyId: req.user.companyId,
+      owner: review.owner,
+      repo: review.repo,
+    });
+    if (!config) {
+      return res.status(400).json({ message: "Set up this repo's QA config (URL and auth) first" });
+    }
+    const rest = (config.variables || []).filter((v) => v.key !== action.key);
+    config.variables = [...rest, { key: action.key, value: action.value, secret: false }];
+    config.updatedAt = new Date();
+    await config.save();
+  }
+  if (decision === "apply" && action.kind === "save_rule") {
+    await BusinessRule.create({
+      companyId: req.user.companyId,
+      owner: review.owner,
+      repo: review.repo,
+      kind: BusinessRule.KINDS.includes(action.ruleKind) ? action.ruleKind : "rule",
+      text: action.ruleText,
+      appliesTo: action.endpoint ? [action.endpoint] : [],
+      status: "approved",
+      source: "user",
+      evidence: { prNumber: review.prNumber, files: [], note: "Agreed in the review chat" },
+      reviewedBy: req.user._id,
+      reviewedAt: new Date(),
+    });
+  }
+  action.status = decision === "apply" ? "applied" : "dismissed";
+  await review.save();
+  res.json(review);
+});
+
+module.exports = { listReviews, getReview, answerQuestion, decide, chat, resolveAction };

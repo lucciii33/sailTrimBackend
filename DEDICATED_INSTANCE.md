@@ -17,7 +17,6 @@ Ejemplo con Acme: `https://acme.oliviatools.com` y `https://api.acme.oliviatools
    ```
    OLIVIA_DEDICATED=true
    OLIVIA_INSTANCE_KEY=acme
-   OLIVIA_HUB_URL=<URL del backend principal>
    FRONTEND_URL=https://acme.oliviatools.com
    MONGO_URL=
    JWT_SECRET_NODE=

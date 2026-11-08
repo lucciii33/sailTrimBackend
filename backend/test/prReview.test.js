@@ -170,3 +170,25 @@ describe("where the review sends requests", () => {
     expect(client.messages.create).not.toHaveBeenCalled();
   });
 });
+
+describe("blocked tests", () => {
+  const blocked = { type: "business_rule", passed: false, blocked: true, needs: "a shipped order" };
+  test("a test waiting for data is never a failure", () => {
+    expect(svc.verdictFor([ok(), blocked], []).verdict).toBe("review");
+  });
+  test("a real failure still fails the PR", () => {
+    expect(svc.verdictFor([bad(), blocked], []).verdict).toBe("fail");
+  });
+  test("a blocked case is recorded without sending any request", async () => {
+    const t = await svc.runCase({
+      c: { type: "state", name: "can't cancel shipped", blocked: true, needs: "a shipped order" },
+      doc: {},
+      config: {},
+      variables: {},
+      client: null,
+      endpoint: "POST /orders/:id/cancel",
+    });
+    expect(t).toMatchObject({ blocked: true, passed: false, needs: "a shipped order" });
+    expect(t.request).toBeUndefined();
+  });
+});

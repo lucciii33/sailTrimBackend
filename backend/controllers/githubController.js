@@ -294,12 +294,6 @@ async function githubCallback(req, res) {
         console.log(
           `[github] oauth identity captured user=${state} gh=${ghUser.login} (${ghUser.id})`
         );
-        // The main backend must know this person's new installation is ours,
-        // or the event announcing it never reaches this instance.
-        await (process.env.OLIVIA_INSTANCE_KEY
-          ? instanceRouter.reportIdentity(ghUser.id)
-          : instanceRouter.clearIdentity(ghUser.id)
-        ).catch((e) => console.error("instance routing failed:", e.message));
         // Now that we know who they are on GitHub, pick up anything that was
         // already approved for them while they were still anonymous to us.
         const linked = await reconcileInstallationsForGithubUser(

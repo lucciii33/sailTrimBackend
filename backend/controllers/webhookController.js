@@ -40,17 +40,19 @@ async function handleWebhook(req, res) {
     const event = req.headers["x-github-event"];
     const payload = JSON.parse(body.toString());
 
-    const instance = await instanceRouter.webhookTarget(event, payload);
+    // A copy for a dedicated instance that connected this installation. Never
+    // instead of handling it here: the same GitHub account can be connected on
+    // both, and this backend's watchers must keep firing.
+    const instance = await instanceRouter.webhookTarget(event, payload).catch(() => null);
     if (instance) {
-      const delivered = await instanceRouter
+      instanceRouter
         .forwardWebhook(instance, body, req.headers)
-        .catch((err) => {
-          console.error(`[instances] could not reach ${instance}:`, err.message);
-          return false;
-        });
-      // A failure status keeps the delivery marked as failed in GitHub's log,
-      // where it can be redelivered.
-      return res.status(delivered ? 200 : 502).json({ forwarded: delivered });
+        .then((ok) => {
+          if (!ok) console.error(`[instances] ${instance} refused a forwarded ${event}`);
+        })
+        .catch((err) =>
+          console.error(`[instances] could not reach ${instance}:`, err.message)
+        );
     }
 
     if (event === "installation" && payload.action === "created") {
@@ -86,17 +88,6 @@ async function handleWebhook(req, res) {
     console.error("Webhook error:", err);
     res.status(200).json({ received: true });
   }
-}
-
-// An instance telling us whose GitHub events are its own. Signed with the
-// webhook secret, which only our own backends have.
-async function handleInstanceIdentity(req, res) {
-  if (!verifySignature(req.body, req.headers["x-hub-signature-256"])) {
-    return res.status(401).json({ message: "Invalid signature" });
-  }
-  const { instance, githubUserId } = JSON.parse(req.body.toString());
-  const saved = await instanceRouter.saveIdentity(instance, githubUserId);
-  res.status(saved ? 200 : 404).json({ saved });
 }
 
 function verifySignature(body, signature) {
@@ -751,4 +742,4 @@ async function handlePullRequestMerged(payload) {
   }
 }
 
-module.exports = { handleInstanceIdentity, handleWebhook };
+module.exports = { handleWebhook };

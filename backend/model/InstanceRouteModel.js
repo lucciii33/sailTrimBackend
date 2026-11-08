@@ -1,14 +1,11 @@
 const mongoose = require("mongoose");
 
-// Which dedicated instance a GitHub event belongs to. Only the main backend
-// keeps these, because it is the one GitHub sends everything to.
-//
-// kind "installation": the GitHub App installation id.
-// kind "github-user":  someone who started connecting from that instance. Lets
-// the first event of a new installation find its way before its id is known.
+// Which dedicated instance also gets a GitHub installation's events: one that
+// someone connected from that instance. Only the main backend keeps these,
+// because it is the one GitHub sends everything to.
 const instanceRouteSchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ["installation", "github-user"], required: true },
+    kind: { type: String, enum: ["installation"], required: true },
     value: { type: String, required: true },
     instance: { type: String, required: true },
   },

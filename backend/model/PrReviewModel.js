@@ -14,6 +14,12 @@ const testSchema = new mongoose.Schema(
     covers: String,
     expectedStatus: { type: [Number], default: [] },
     passed: Boolean,
+    // Couldn't run: it needs data Olivia doesn't have. Never invented, never
+    // counted as a failure.
+    blocked: { type: Boolean, default: false },
+    needs: { type: String, default: "" },
+    // Written by the first review, or later in the chat with the agent.
+    source: { type: String, enum: ["review", "chat"], default: "review" },
     reason: String,
     // Evidence. Credentials are removed before saving: this is shown in the PR.
     request: {
@@ -45,6 +51,31 @@ const questionSchema = new mongoose.Schema(
   { _id: true }
 );
 
+// Something the agent wants to keep, waiting for the user's yes.
+const actionSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ["save_variable", "save_rule"], required: true },
+    key: { type: String, default: "" },
+    value: { type: String, default: "" },
+    ruleKind: { type: String, default: "rule" },
+    ruleText: { type: String, default: "" },
+    endpoint: { type: String, default: "" },
+    why: { type: String, default: "" },
+    status: { type: String, enum: ["pending", "applied", "dismissed"], default: "pending" },
+  },
+  { _id: true }
+);
+
+const chatMessageSchema = new mongoose.Schema(
+  {
+    role: { type: String, enum: ["user", "agent"], required: true },
+    text: { type: String, default: "" },
+    at: { type: Date, default: Date.now },
+    actions: { type: [actionSchema], default: [] },
+  },
+  { _id: true }
+);
+
 const prReviewSchema = new mongoose.Schema(
   {
     companyId: {
@@ -67,6 +98,8 @@ const prReviewSchema = new mongoose.Schema(
     tests: { type: [testSchema], default: [] },
     questions: { type: [questionSchema], default: [] },
     commentUrl: { type: String, default: "" },
+    // The conversation with the agent about this review.
+    chat: { type: [chatMessageSchema], default: [] },
 
     // The person's call, separate from Olivia's verdict.
     decision: { type: String, enum: ["approved", "rejected", null], default: null },
