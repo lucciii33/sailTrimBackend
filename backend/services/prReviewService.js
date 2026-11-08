@@ -58,13 +58,16 @@ Return STRICT JSON only:
     "query": {},
     "body": null,
     "expectedStatus": [200],
-    "assertions": ["plain-language check on the response body"]
+    "assertions": ["plain-language check on the response body"],
+    "blocked": false,
+    "needs": ""
   }],
   "questions": ["..."]
 }
 
 Rules:
 - At most ${MAX_CASES_PER_ENDPOINT} cases, at least one of each type that applies.
+- NEVER invent data. If a case needs data you don't have (an id of a resource in a specific state, a user with a specific role) and no environment variable provides it and the case can't create it itself, still write the case but add "blocked": true and "needs": "what data is missing, in one sentence", and ask for it in "questions".
 - For a "no credentials" case set "headers": {"Authorization": ""} and the runner removes the project's real credentials.
 - Use only the environment variables listed; never invent ids when a variable exists.
 - expectedStatus lists every status that would be CORRECT, from the spec and the rules.
@@ -105,6 +108,8 @@ function parseJson(text) {
  * pass:   tests ran, all passed, nothing left open.
  */
 function verdictFor(tests, questions, errors = []) {
+  const blocked = tests.filter((t) => t.blocked);
+  tests = tests.filter((t) => !t.blocked);
   const failed = tests.filter((t) => t.passed === false && !t.response?.error);
   if (failed.length) {
     return {
@@ -113,6 +118,12 @@ function verdictFor(tests, questions, errors = []) {
     };
   }
   const unreachable = tests.filter((t) => t.response?.error);
+  if (blocked.length) {
+    return {
+      verdict: "review",
+      reason: `${blocked.length} tests are blocked waiting for data; ${tests.length} ran and passed.`,
+    };
+  }
   if (!tests.length || unreachable.length || errors.length) {
     return {
       verdict: "review",
@@ -169,55 +180,7 @@ async function reviewEndpoint({ doc, change, diffText, companyId, baseUrl, clien
 
   const tests = [];
   for (const c of cases) {
-    const execution = await executeTestCase({
-      testCase: {
-        method: c.method,
-        path: c.path,
-        headers: c.headers,
-        query: c.query && Object.keys(c.query).length ? c.query : undefined,
-        body: c.body,
-        category: c.type === "security" && c.headers?.Authorization === "" ? "unauthorized" : c.type,
-      },
-      doc,
-      config,
-      variables,
-    });
-    const status = execution.response.status;
-    const expected = Array.isArray(c.expectedStatus) ? c.expectedStatus.map(Number) : [];
-    const statusOk = expected.length ? expected.includes(status) : status >= 200 && status < 300;
-    const assertionResults = execution.response.error
-      ? []
-      : await judgeAssertions({ doc, execution, assertions: c.assertions || [], client });
-    const failedAssertion = assertionResults.find((r) => !r.passed);
-    const passed = !execution.response.error && statusOk && !failedAssertion;
-
-    tests.push({
-      type: PrReview.TEST_TYPES.includes(c.type) ? c.type : "functional",
-      endpoint,
-      name: c.name || endpoint,
-      covers: c.covers || "",
-      expectedStatus: expected,
-      passed,
-      reason: execution.response.error
-        ? `Request failed: ${execution.response.error}`
-        : !statusOk
-          ? `Expected ${expected.join(" or ") || "2xx"}, got ${status}`
-          : failedAssertion
-            ? failedAssertion.reason || "An assertion didn't hold"
-            : "Passed",
-      request: {
-        method: execution.request.method,
-        url: execution.request.url,
-        headers: redactHeaders(execution.request.headers),
-        body: truncateBody(execution.request.body),
-      },
-      response: {
-        status,
-        durationMs: execution.response.durationMs,
-        body: truncateBody(execution.response.body),
-        error: execution.response.error || "",
-      },
-    });
+    tests.push(await runCase({ c, doc, config, variables, client, endpoint }));
   }
 
   const questions = (Array.isArray(parsed.questions) ? parsed.questions : [])
@@ -226,12 +189,81 @@ async function reviewEndpoint({ doc, change, diffText, companyId, baseUrl, clien
   return { tests, questions };
 }
 
+/** Runs one case and turns the result into a test record, evidence included. */
+async function runCase({ c, doc, config, variables, client, endpoint, source = "review" }) {
+  const type = PrReview.TEST_TYPES.includes(c.type) ? c.type : "functional";
+  if (c.blocked) {
+    return {
+      type,
+      endpoint,
+      name: c.name || endpoint,
+      covers: c.covers || "",
+      expectedStatus: [],
+      passed: false,
+      blocked: true,
+      needs: String(c.needs || "data that isn't available").slice(0, 300),
+      source,
+      reason: `Blocked: needs ${c.needs || "data that isn't available"}`,
+    };
+  }
+  const execution = await executeTestCase({
+    testCase: {
+      method: c.method,
+      path: c.path,
+      headers: c.headers,
+      query: c.query && Object.keys(c.query).length ? c.query : undefined,
+      body: c.body,
+      category: c.type === "security" && c.headers?.Authorization === "" ? "unauthorized" : c.type,
+    },
+    doc,
+    config,
+    variables,
+  });
+  const status = execution.response.status;
+  const expected = Array.isArray(c.expectedStatus) ? c.expectedStatus.map(Number) : [];
+  const statusOk = expected.length ? expected.includes(status) : status >= 200 && status < 300;
+  const assertionResults = execution.response.error
+    ? []
+    : await judgeAssertions({ doc, execution, assertions: c.assertions || [], client });
+  const failedAssertion = assertionResults.find((r) => !r.passed);
+  const passed = !execution.response.error && statusOk && !failedAssertion;
+
+  return {
+    type,
+    source,
+    endpoint,
+    name: c.name || endpoint,
+    covers: c.covers || "",
+    expectedStatus: expected,
+    passed,
+    reason: execution.response.error
+      ? `Request failed: ${execution.response.error}`
+      : !statusOk
+        ? `Expected ${expected.join(" or ") || "2xx"}, got ${status}`
+        : failedAssertion
+          ? failedAssertion.reason || "An assertion didn't hold"
+          : "Passed",
+    request: {
+      method: execution.request.method,
+      url: execution.request.url,
+      headers: redactHeaders(execution.request.headers),
+      body: truncateBody(execution.request.body),
+    },
+    response: {
+      status,
+      durationMs: execution.response.durationMs,
+      body: truncateBody(execution.response.body),
+      error: execution.response.error || "",
+    },
+  };
+}
+
 const VERDICT_LABEL = { pass: "✅ Passes", fail: "❌ Does not pass", review: "⚠️ Needs review" };
 
 /** The comment Olivia leaves on the pull request. */
 function commentBody(review) {
   const byType = {};
-  for (const t of review.tests) {
+  for (const t of review.tests.filter((x) => !x.blocked)) {
     const row = (byType[t.type] = byType[t.type] || { passed: 0, failed: 0 });
     t.passed ? row.passed++ : row.failed++;
   }
@@ -240,7 +272,12 @@ function commentBody(review) {
   for (const type of PrReview.TEST_TYPES) {
     if (byType[type]) md += `| ${type} | ${byType[type].passed} | ${byType[type].failed} |\n`;
   }
-  const failed = review.tests.filter((t) => !t.passed).slice(0, 10);
+  const blocked = review.tests.filter((t) => t.blocked);
+  if (blocked.length) {
+    md += `\n### Blocked, waiting for data (${blocked.length})\n\n`;
+    for (const t of blocked.slice(0, 10)) md += `- **${t.endpoint}**, ${t.name}: needs ${t.needs}\n`;
+  }
+  const failed = review.tests.filter((t) => !t.passed && !t.blocked).slice(0, 10);
   if (failed.length) {
     md += "\n### Failed\n\n";
     for (const t of failed) {
@@ -349,6 +386,8 @@ async function reviewPullRequest({
 
 module.exports = {
   reviewPullRequest,
+  runCase,
+  getAnthropic,
   verdictFor,
   redactHeaders,
   commentBody,

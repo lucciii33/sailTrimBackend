@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const InstanceRoute = require("../model/InstanceRouteModel");
 
 // Every instance shares one GitHub App, and a GitHub App has one webhook URL and
@@ -6,7 +5,7 @@ const InstanceRoute = require("../model/InstanceRouteModel");
 // each browser redirect on to the instance it belongs to.
 //
 // Main backend: OLIVIA_INSTANCES={"acme":"https://api.acme.oliviatools.com"}
-// Instance:     OLIVIA_INSTANCE_KEY=acme, OLIVIA_HUB_URL=<main backend>
+// Instance:     OLIVIA_INSTANCE_KEY=acme
 //
 // The instance puts its key in front of the OAuth state ("acme~<jwt>") because
 // the state is the only thing that comes back through GitHub untouched.
@@ -63,32 +62,21 @@ async function callbackTarget(query) {
   return `${url}/api/github/callback?${new URLSearchParams(query)}`;
 }
 
-/** Main backend, /webhook: the instance this event belongs to, or null. */
+/**
+ * Main backend, /webhook: the instance that should ALSO get this event, or
+ * null. Only installations someone connected from that instance (recorded by
+ * callbackTarget) are copied to it. The main backend handles every event
+ * itself either way: an instance gets a copy, never the event instead of us.
+ */
 async function webhookTarget(event, payload) {
   if (!Object.keys(registry()).length) return null;
   const installationId = payload.installation?.id;
   if (!installationId) return null;
-
   const known = await InstanceRoute.findOne({
     kind: "installation",
     value: String(installationId),
   }).lean();
-  if (known) return instanceUrl(known.instance) ? known.instance : null;
-
-  // Only a brand-new installation is matched by person. Anyone can open a pull
-  // request on a repo that isn't connected to their instance.
-  if (event !== "installation" || payload.action !== "created") return null;
-
-  const githubUserId = payload.requester?.id || payload.sender?.id;
-  if (!githubUserId) return null;
-  const person = await InstanceRoute.findOne({
-    kind: "github-user",
-    value: String(githubUserId),
-  }).lean();
-  if (!person || !instanceUrl(person.instance)) return null;
-
-  await saveRoute("installation", installationId, person.instance);
-  return person.instance;
+  return known && instanceUrl(known.instance) ? known.instance : null;
 }
 
 /** Pass an event on untouched, so the instance can check GitHub's signature. */
@@ -107,47 +95,10 @@ async function forwardWebhook(key, body, headers) {
   return res.ok;
 }
 
-/** Main backend: someone connecting from an instance, reported by reportIdentity. */
-async function saveIdentity(instance, githubUserId) {
-  if (!instanceUrl(instance) || !githubUserId) return false;
-  await saveRoute("github-user", githubUserId, instance);
-  return true;
-}
-
-/** Main backend: this person now connects here, not from an instance. */
-async function clearIdentity(githubUserId) {
-  await InstanceRoute.deleteOne({ kind: "github-user", value: String(githubUserId) });
-}
-
-/** Instance: tell the main backend whose GitHub events are coming our way. */
-async function reportIdentity(githubUserId) {
-  const hub = process.env.OLIVIA_HUB_URL;
-  const instance = process.env.OLIVIA_INSTANCE_KEY;
-  if (!hub || !instance) return;
-  const body = JSON.stringify({ instance, githubUserId: String(githubUserId) });
-  const digest = crypto
-    .createHmac("sha256", process.env.GITHUB_WEBHOOK_SECRET)
-    .update(body)
-    .digest("hex");
-  const res = await fetch(`${hub.replace(/\/+$/, "")}/webhook/identity`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-hub-signature-256": `sha256=${digest}`,
-    },
-    body,
-    signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`main backend answered ${res.status}`);
-}
-
 module.exports = {
   wrapState,
   unwrapState,
   callbackTarget,
   webhookTarget,
   forwardWebhook,
-  saveIdentity,
-  clearIdentity,
-  reportIdentity,
 };
