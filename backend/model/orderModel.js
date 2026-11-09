@@ -1,3 +1,5 @@
+const mongoose = require("mongoose");
+
 const OrderSchema = new mongoose.Schema(
   {
     orderNumber: { type: String, unique: true },
@@ -41,3 +43,5 @@ const OrderSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+module.exports = mongoose.model("Order", OrderSchema);
