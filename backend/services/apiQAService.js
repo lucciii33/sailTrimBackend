@@ -1035,11 +1035,19 @@ async function findBugs({
   // Which declared auth scheme this run should authenticate with. Omitted →
   // the project's active one.
   authSchemeName = "",
+  // Where to send the requests instead of the configured base URL: the PR
+  // review hunts on the watcher's dev environment, never the repo default.
+  baseUrl = "",
+  // What to concentrate on. The PR review passes what the PR changed, so the
+  // hunt attacks the change instead of the whole endpoint. Empty = general.
+  focusNote = "",
 }) {
   const doc = await loadDocForCompany(docId, companyId);
-  const { config, variables } = await resolveDocRunConfig(doc, companyId, {
+  const resolved = await resolveDocRunConfig(doc, companyId, {
     authSchemeName,
   });
+  const config = baseUrl ? { ...resolved.config, baseUrl } : resolved.config;
+  const { variables } = resolved;
 
   const runId = crypto.randomUUID();
 
@@ -1065,7 +1073,7 @@ async function findBugs({
     variables,
     context,
     priorCases,
-    rulesNote,
+    rulesNote: rulesNote + focusNote,
   });
   console.log(
     `[dedup][api] generated ${cases.length} cases`,

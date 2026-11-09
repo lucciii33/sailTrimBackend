@@ -192,3 +192,117 @@ describe("blocked tests", () => {
     expect(t.request).toBeUndefined();
   });
 });
+
+describe("acceptance criteria", () => {
+  const review = (criteria, tests, questions = []) => ({ criteria, tests, questions });
+  const crit = (text, extra = {}) => ({ text, endpoints: ["GET /orders/:id/invoice"], testable: "api", ...extra });
+
+  test("they are read from the PR and tied only to real endpoints", async () => {
+    const client = {
+      messages: {
+        create: jest.fn(async () => ({
+          content: [{ type: "text", text: JSON.stringify({ criteria: [
+            { text: "Returns the invoice of an order", endpoints: ["GET /orders/:id/invoice", "GET /invented"], testable: "api" },
+            { text: "The invoice email looks right", endpoints: [], testable: "manual" },
+          ] }) }],
+        })),
+      },
+    };
+    const criteria = await svc.extractCriteria({
+      title: "Add invoice",
+      body: "## Acceptance criteria\n- returns the invoice\n- email looks right",
+      endpointKeys: ["GET /orders/:id/invoice"],
+      client,
+    });
+    expect(criteria).toEqual([
+      { text: "Returns the invoice of an order", endpoints: ["GET /orders/:id/invoice"], testable: "api", status: "untested" },
+      { text: "The invoice email looks right", endpoints: [], testable: "manual", status: "manual" },
+    ]);
+  });
+
+  test("a criterion not met fails the PR even if every other test passes", () => {
+    const r = review([crit("Returns 404 for a missing order")], [
+      { ...ok(), criterion: null },
+      { ...bad("functional"), criterion: 0 },
+    ]);
+    expect(svc.verdictForReview(r).verdict).toBe("fail");
+    expect(r.criteria[0].status).toBe("not_met");
+  });
+
+  test("every criterion met passes", () => {
+    const r = review([crit("Returns the invoice")], [{ ...ok(), criterion: 0 }]);
+    expect(svc.verdictForReview(r).verdict).toBe("pass");
+    expect(r.criteria[0].status).toBe("met");
+  });
+
+  test("a criterion nobody tested, or waiting for data, needs review", () => {
+    const untested = review([crit("Returns the invoice"), crit("Totals include tax")], [{ ...ok(), criterion: 0 }]);
+    expect(svc.verdictForReview(untested).verdict).toBe("review");
+    expect(untested.criteria[1].status).toBe("untested");
+
+    const waiting = review([crit("Returns the invoice")], [{ type: "functional", criterion: 0, blocked: true, passed: false }]);
+    expect(svc.verdictForReview(waiting).verdict).toBe("review");
+    expect(waiting.criteria[0].status).toBe("blocked");
+  });
+
+  test("a PR without criteria is never a pass", () => {
+    const r = review([], [ok()]);
+    const v = svc.verdictForReview(r);
+    expect(v.verdict).toBe("review");
+    expect(v.reason).toMatch(/no acceptance criteria/);
+  });
+
+  test("the PR comment lists each criterion with its result", () => {
+    process.env.FRONTEND_URL = "";
+    const md = svc.commentBody({
+      _id: "r1",
+      verdict: "fail",
+      verdictReason: "1 of 2 acceptance criteria not met.",
+      criteria: [
+        { text: "Returns the invoice", status: "met" },
+        { text: "404 for a missing order", status: "not_met" },
+      ],
+      tests: [],
+      questions: [],
+    });
+    expect(md).toContain("### Acceptance criteria");
+    expect(md).toContain("- ✅ Returns the invoice");
+    expect(md).toContain("- ❌ 404 for a missing order");
+  });
+});
+
+describe("bugs from the bug hunter", () => {
+  const base = { criteria: [{ text: "Returns the invoice", endpoints: [], testable: "api" }], questions: [] };
+  const passing = [{ ...ok(), criterion: 0 }];
+
+  test("a critical or high bug fails the PR even with every criterion met", () => {
+    const r = { ...base, tests: passing, bugs: [{ severity: "high", title: "IDOR on invoice" }] };
+    expect(svc.verdictForReview(r).verdict).toBe("fail");
+  });
+
+  test("medium or low bugs need a person to look", () => {
+    const r = { ...base, tests: passing, bugs: [{ severity: "low", title: "Wrong content-type" }] };
+    expect(svc.verdictForReview(r).verdict).toBe("review");
+  });
+
+  test("they are listed in the PR comment", () => {
+    const md = svc.commentBody({
+      _id: "r1", verdict: "fail", verdictReason: "", criteria: [], tests: [], questions: [],
+      bugs: [{ severity: "high", endpoint: "GET /orders/:id/invoice", title: "IDOR on invoice" }],
+    });
+    expect(md).toContain("### Bugs found (1)");
+    expect(md).toContain("- **high** · GET /orders/:id/invoice: IDOR on invoice");
+  });
+});
+
+test("the review's bug hunt is aimed at the PR's changes", () => {
+  const note = svc.focusNoteFor({
+    doc: { method: "GET", path: "/orders/:id/invoice" },
+    change: "new endpoint",
+    diffText: "+ router.get('/orders/:id/invoice')",
+    criteria: [{ text: "Returns 404 for a missing order", endpoints: [], testable: "api" }],
+  });
+  expect(note).toContain("NOT A GENERAL ONE");
+  expect(note).toContain("Returns 404 for a missing order");
+  expect(note).toContain("router.get('/orders/:id/invoice')");
+});

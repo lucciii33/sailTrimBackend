@@ -18,6 +18,8 @@ const testSchema = new mongoose.Schema(
     // counted as a failure.
     blocked: { type: Boolean, default: false },
     needs: { type: String, default: "" },
+    // Index into the review's criteria this test checks, or null.
+    criterion: { type: Number, default: null },
     // Written by the first review, or later in the chat with the agent.
     source: { type: String, enum: ["review", "chat"], default: "review" },
     reason: String,
@@ -47,6 +49,38 @@ const questionSchema = new mongoose.Schema(
     answeredAt: { type: Date, default: null },
     // The approved rule the answer became, so the next PR already knows it.
     ruleId: { type: mongoose.Schema.Types.ObjectId, ref: "BusinessRule", default: null },
+  },
+  { _id: true }
+);
+
+// A bug the bug hunter found while trying to break what the PR changed.
+const bugSchema = new mongoose.Schema(
+  {
+    endpoint: String,
+    severity: { type: String, default: "medium" },
+    category: String,
+    title: String,
+    description: String,
+    testCaseName: String,
+    request: mongoose.Schema.Types.Mixed,
+    response: mongoose.Schema.Types.Mixed,
+  },
+  { _id: true }
+);
+
+// One acceptance criterion from the PR, and whether the tests show it is met.
+const criterionSchema = new mongoose.Schema(
+  {
+    text: { type: String, required: true },
+    // "METHOD /path" keys it is about.
+    endpoints: { type: [String], default: [] },
+    // "manual" when it can't be checked through the API (UI, emails...).
+    testable: { type: String, enum: ["api", "manual"], default: "api" },
+    status: {
+      type: String,
+      enum: ["met", "not_met", "blocked", "untested", "manual"],
+      default: "untested",
+    },
   },
   { _id: true }
 );
@@ -95,6 +129,11 @@ const prReviewSchema = new mongoose.Schema(
     error: { type: String, default: "" },
     verdict: { type: String, enum: [...VERDICTS, null], default: null },
     verdictReason: { type: String, default: "" },
+    // What the PR was supposed to do, read from its title and description.
+    prBody: { type: String, default: "" },
+    criteria: { type: [criterionSchema], default: [] },
+    // From the bug hunter, run against the dev URL on every reviewed endpoint.
+    bugs: { type: [bugSchema], default: [] },
     tests: { type: [testSchema], default: [] },
     questions: { type: [questionSchema], default: [] },
     commentUrl: { type: String, default: "" },

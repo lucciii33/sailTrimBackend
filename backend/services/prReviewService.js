@@ -4,12 +4,17 @@ const aiUsage = require("./aiUsageService.js");
 const { modelFor } = require("./modelRouter.js");
 const prDiff = require("./prDiffService");
 const businessRules = require("./businessRuleService");
-const { resolveDocRunConfig, executeTestCase } = require("./apiQAService");
+const { resolveDocRunConfig, executeTestCase, findBugs } = require("./apiQAService");
 const { judgeAssertions } = require("./apiSuiteService");
 const { getOctokit } = require("./githubService");
 
 // The QA review of a merged pull request, run against the environment the
 // watched branch deploys to.
+//
+// First it reads what the PR was supposed to do: the acceptance criteria in its
+// title and description. Each criterion is checked by tests and gets its own
+// result, met or not. A PR is validated against what was asked, not only
+// against what its code happens to do.
 //
 // For every endpoint the PR added or changed, Claude writes tests of each type
 // (does it do what the PR says, do the business rules still hold, edges,
@@ -35,9 +40,21 @@ function getAnthropic() {
   return aiUsage.meter(_anthropic, { payer: "platform", action: "pr_review", surface: "api" });
 }
 
-const REVIEW_SYSTEM = `You are a senior QA engineer reviewing a merged pull request. Your job is to prove the change works AND to break it.
+const CRITERIA_SYSTEM = `You are a senior QA engineer. Read a pull request's title and description and list its ACCEPTANCE CRITERIA: each separate thing the change must do or must not do, as the team would check it before approving the ticket.
 
-You receive one endpoint the PR added or changed, what changed, the diff, and the team's approved business rules. Write test cases of these types:
+Use explicit criteria when the description has them (an "Acceptance criteria" section, a checklist). Otherwise derive them from what the title and description promise. Do not invent requirements the text doesn't state.
+
+For each criterion, list the endpoints it is about, copied exactly from the endpoint list, and say whether it can be checked through the HTTP API ("api") or only by a person ("manual": UI, emails, documentation).
+
+Return STRICT JSON only:
+{"criteria":[{"text":"one sentence","endpoints":["METHOD /path"],"testable":"api"}]}
+Return {"criteria":[]} if the description states nothing checkable.`;
+
+const REVIEW_SYSTEM = `You are a senior QA engineer reviewing a merged pull request. Your job is to prove the change does what the ticket asked AND to break it.
+
+You receive one endpoint the PR added or changed, the PR's numbered ACCEPTANCE CRITERIA, what changed, the diff, and the team's approved business rules.
+
+First, for EVERY acceptance criterion about this endpoint, write at least one case that proves whether it is met, and set "criterion" to that criterion's number. Then write cases of these types:
 - "functional": the endpoint does what this PR intended.
 - "business_rule": each relevant business rule still holds. Try to violate it.
 - "boundary": empty, null, missing and extra fields, wrong types, min/max lengths and values, negative numbers, unicode, very long strings.
@@ -59,6 +76,7 @@ Return STRICT JSON only:
     "body": null,
     "expectedStatus": [200],
     "assertions": ["plain-language check on the response body"],
+    "criterion": null,
     "blocked": false,
     "needs": ""
   }],
@@ -142,7 +160,7 @@ function verdictFor(tests, questions, errors = []) {
 }
 
 /** Tests and questions for one endpoint, executed. */
-async function reviewEndpoint({ doc, change, diffText, companyId, baseUrl, client }) {
+async function reviewEndpoint({ doc, change, diffText, criteria = [], companyId, baseUrl, client }) {
   const resolved = await resolveDocRunConfig(doc, companyId, {});
   // Auth and variables from the repo's settings, but always the watcher's URL.
   const config = { ...resolved.config, baseUrl };
@@ -167,6 +185,7 @@ async function reviewEndpoint({ doc, change, diffText, companyId, baseUrl, clien
         role: "user",
         content:
           `ENDPOINT SPEC:\n${JSON.stringify(spec, null, 2)}\n\n` +
+          `ACCEPTANCE CRITERIA OF THIS PR:\n${criteriaNote(criteria, doc)}\n\n` +
           `WHAT THIS PR CHANGED HERE: ${change || "new endpoint"}\n\n` +
           (varKeys.length ? `AVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}\n\n` : "") +
           `DIFF:\n${diffText.slice(0, MAX_DIFF_CHARS)}` +
@@ -192,9 +211,11 @@ async function reviewEndpoint({ doc, change, diffText, companyId, baseUrl, clien
 /** Runs one case and turns the result into a test record, evidence included. */
 async function runCase({ c, doc, config, variables, client, endpoint, source = "review" }) {
   const type = PrReview.TEST_TYPES.includes(c.type) ? c.type : "functional";
+  const criterion = Number.isInteger(c.criterion) ? c.criterion : null;
   if (c.blocked) {
     return {
       type,
+      criterion,
       endpoint,
       name: c.name || endpoint,
       covers: c.covers || "",
@@ -230,6 +251,7 @@ async function runCase({ c, doc, config, variables, client, endpoint, source = "
 
   return {
     type,
+    criterion,
     source,
     endpoint,
     name: c.name || endpoint,
@@ -258,6 +280,147 @@ async function runCase({ c, doc, config, variables, client, endpoint, source = "
   };
 }
 
+function endpointKeyOf(doc) {
+  return `${String(doc.method).toUpperCase()} ${doc.path}`;
+}
+
+/** The criteria as numbered lines, marking the ones about this endpoint. */
+function criteriaNote(criteria, doc) {
+  if (!criteria.length) return "(the PR states none)";
+  const key = doc ? endpointKeyOf(doc) : "";
+  return criteria
+    .map((c, i) => {
+      const here = !c.endpoints?.length || c.endpoints.includes(key);
+      return `${i}. ${c.text}${c.testable === "manual" ? " [manual]" : ""}${here ? " [about this endpoint]" : ""}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Turns the general bug hunter into one aimed at this PR: what changed, the
+ * diff and the acceptance criteria, with the order to attack those first.
+ */
+function focusNoteFor({ doc, change, diffText, criteria }) {
+  return (
+    "\n\nTHIS IS A HUNT ON A PULL REQUEST'S CHANGES, NOT A GENERAL ONE.\n" +
+    `WHAT THE PR CHANGED IN THIS ENDPOINT: ${change || "new endpoint"}\n` +
+    `ACCEPTANCE CRITERIA OF THE PR:\n${criteriaNote(criteria || [], doc)}\n` +
+    `DIFF:\n${String(diffText || "").slice(0, 8000)}\n` +
+    "Aim most cases at the behaviour this PR added or changed: its new fields, " +
+    "branches, validations, permissions and state transitions. Try to make each " +
+    "acceptance criterion fail. Only a few cases on unchanged behaviour."
+  );
+}
+
+function addQuestion(review, text, endpoint) {
+  if (review.questions.some((q) => q.text === text)) return;
+  review.questions.push({ text: text.slice(0, 500), endpoint });
+}
+
+/** The PR's title and description, straight from GitHub. */
+async function fetchPullRequest(installationId, owner, repo, prNumber) {
+  const octokit = await getOctokit(installationId);
+  const { data } = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+    owner,
+    repo,
+    pull_number: prNumber,
+  });
+  return { title: data.title || "", body: data.body || "" };
+}
+
+/** The acceptance criteria the PR states, each tied to the endpoints it is about. */
+async function extractCriteria({ title, body, endpointKeys, client }) {
+  if (!title && !body) return [];
+  const resp = await client.messages.create({
+    model: modelFor("diff"),
+    max_tokens: 3000,
+    system: CRITERIA_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `PR TITLE: ${title}\n\nPR DESCRIPTION:\n${body || "(empty)"}\n\n` +
+          `ENDPOINTS:\n${endpointKeys.join("\n") || "(none)"}`,
+      },
+    ],
+  });
+  const parsed = parseJson((resp.content || []).map((b) => b.text || "").join("")) || {};
+  const known = new Set(endpointKeys);
+  return (Array.isArray(parsed.criteria) ? parsed.criteria : [])
+    .slice(0, 15)
+    .map((c) => ({
+      text: String(c.text || "").slice(0, 500),
+      endpoints: (Array.isArray(c.endpoints) ? c.endpoints : []).filter((k) => known.has(k)),
+      testable: c.testable === "manual" ? "manual" : "api",
+      status: c.testable === "manual" ? "manual" : "untested",
+    }))
+    .filter((c) => c.text);
+}
+
+/** Each criterion's result, from the tests tied to it. */
+function criteriaStatus(criteria, tests) {
+  return criteria.map((c, i) => {
+    if (c.testable === "manual") return "manual";
+    const mine = tests.filter((t) => t.criterion === i);
+    const ran = mine.filter((t) => !t.blocked && !t.response?.error);
+    if (ran.some((t) => !t.passed)) return "not_met";
+    if (ran.length) return "met";
+    if (mine.some((t) => t.blocked)) return "blocked";
+    return "untested";
+  });
+}
+
+/**
+ * The verdict for a whole review. The criteria come first: a PR that doesn't
+ * do what its ticket asked fails, however well its endpoints behave.
+ */
+function verdictForReview(review, errors = []) {
+  const criteria = review.criteria || [];
+  const statuses = criteriaStatus(criteria, review.tests);
+  criteria.forEach((c, i) => {
+    c.status = statuses[i];
+  });
+  const notMet = criteria.filter((c) => c.status === "not_met");
+  const serious = (review.bugs || []).filter((b) => ["critical", "high"].includes(b.severity));
+  const minor = (review.bugs || []).length - serious.length;
+  const open = criteria.filter((c) => ["blocked", "untested", "manual"].includes(c.status));
+  const base = verdictFor(review.tests, review.questions.filter((q) => !q.answer), errors);
+
+  if (notMet.length) {
+    return {
+      verdict: "fail",
+      reason: `${notMet.length} of ${criteria.length} acceptance criteria not met. ${base.reason}`,
+    };
+  }
+  if (serious.length) {
+    return {
+      verdict: "fail",
+      reason: `The bug hunter found ${serious.length} critical or high bugs. ${base.reason}`,
+    };
+  }
+  if (base.verdict === "fail") return base;
+  if (minor) {
+    return {
+      verdict: "review",
+      reason: `The bug hunter found ${minor} medium or low bugs to look at. ${base.reason}`,
+    };
+  }
+  if (!criteria.length) {
+    return {
+      verdict: "review",
+      reason: `The PR states no acceptance criteria, so it can't be validated against the ticket; only what the code changed was tested. ${base.reason}`,
+    };
+  }
+  if (open.length) {
+    return {
+      verdict: "review",
+      reason: `${criteria.length - open.length} of ${criteria.length} acceptance criteria met; ${open.length} still need data or a person. ${base.reason}`,
+    };
+  }
+  if (base.verdict === "review") return base;
+  return { verdict: "pass", reason: `All ${criteria.length} acceptance criteria met. ${base.reason}` };
+}
+
 const VERDICT_LABEL = { pass: "✅ Passes", fail: "❌ Does not pass", review: "⚠️ Needs review" };
 
 /** The comment Olivia leaves on the pull request. */
@@ -268,6 +431,12 @@ function commentBody(review) {
     t.passed ? row.passed++ : row.failed++;
   }
   let md = `## Olivia QA review: ${VERDICT_LABEL[review.verdict]}\n\n${review.verdictReason}\n\n`;
+  const marks = { met: "✅", not_met: "❌", blocked: "🚫", untested: "⚪", manual: "👤" };
+  if (review.criteria?.length) {
+    md += "### Acceptance criteria\n\n";
+    for (const c of review.criteria) md += `- ${marks[c.status] || "⚪"} ${c.text}\n`;
+    md += "\n";
+  }
   md += "| Type | Passed | Failed |\n|---|---|---|\n";
   for (const type of PrReview.TEST_TYPES) {
     if (byType[type]) md += `| ${type} | ${byType[type].passed} | ${byType[type].failed} |\n`;
@@ -282,6 +451,12 @@ function commentBody(review) {
     md += "\n### Failed\n\n";
     for (const t of failed) {
       md += `- **${t.endpoint}**, ${t.name}: ${t.reason}\n`;
+    }
+  }
+  if (review.bugs?.length) {
+    md += `\n### Bugs found (${review.bugs.length})\n\n`;
+    for (const b of review.bugs.slice(0, 15)) {
+      md += `- **${b.severity}** · ${b.endpoint}: ${b.title}\n`;
     }
   }
   if (review.questions.length) {
@@ -305,6 +480,7 @@ async function reviewPullRequest({
   prTitle = "",
   files,
   changed,
+  allDocs = [],
   anthropicClient = null,
 }) {
   const review = await PrReview.create({
@@ -334,12 +510,46 @@ async function reviewPullRequest({
     });
     const diffText = prDiff.buildDiffText(files || []);
     const errors = [];
-    for (const { doc, change } of changed.slice(0, MAX_ENDPOINTS)) {
+
+    // What the ticket asked for.
+    try {
+      const pr = await fetchPullRequest(installationId, watcher.owner, watcher.repo, prNumber);
+      review.prTitle = pr.title || review.prTitle;
+      review.prBody = pr.body.slice(0, 20000);
+    } catch (err) {
+      errors.push(`couldn't read the PR description: ${err.message}`);
+    }
+    const docByKey = new Map(allDocs.map((d) => [endpointKeyOf(d), d]));
+    review.criteria = await extractCriteria({
+      title: review.prTitle,
+      body: review.prBody,
+      endpointKeys: [...docByKey.keys()],
+      client,
+    }).catch((err) => {
+      errors.push(`couldn't read the acceptance criteria: ${err.message}`);
+      return [];
+    });
+
+    // The endpoints to review: what the code changed, plus whatever the
+    // criteria are about even if the diff didn't flag it.
+    const toReview = [...changed];
+    const seen = new Set(toReview.map((c) => endpointKeyOf(c.doc)));
+    for (const c of review.criteria) {
+      for (const key of c.endpoints) {
+        if (!seen.has(key) && docByKey.has(key)) {
+          seen.add(key);
+          toReview.push({ doc: docByKey.get(key), change: "named by an acceptance criterion" });
+        }
+      }
+    }
+
+    for (const { doc, change } of toReview.slice(0, MAX_ENDPOINTS)) {
       try {
         const { tests, questions } = await reviewEndpoint({
           doc,
           change,
           diffText,
+          criteria: review.criteria,
           companyId: watcher.companyId,
           baseUrl,
           client,
@@ -347,18 +557,67 @@ async function reviewPullRequest({
         review.tests.push(...tests);
         review.questions.push(...questions);
       } catch (err) {
-        // Usually no base URL configured. Recorded, and the verdict says the
-        // change wasn't fully checked.
+        // Usually the repo has no QA config (auth) yet: asked for, not guessed.
         errors.push(`${doc.method} ${doc.path}: ${err.message}`);
+        if (/QA config|auth|token/i.test(err.message)) {
+          addQuestion(
+            review,
+            `Olivia can't authenticate against ${watcher.owner}/${watcher.repo}: ${err.message} ` +
+              "Set the auth and variables in this repo's API tests settings, then re-run the review.",
+            endpointKeyOf(doc)
+          );
+        }
+        continue;
+      }
+
+      // Then try to break it, with the same bug hunter as the API side, on dev.
+      try {
+        const hunt = await findBugs({
+          docId: doc._id,
+          userId: watcher.userId,
+          companyId: watcher.companyId,
+          anthropicClient,
+          baseUrl,
+          focusNote: focusNoteFor({ doc, change, diffText, criteria: review.criteria }),
+        });
+        for (const e of hunt.executions || []) {
+          if (!e.isBug) continue;
+          review.bugs.push({
+            endpoint: endpointKeyOf(doc),
+            severity: e.bugSeverity || "medium",
+            category: e.bugCategory || "",
+            title: e.bugTitle || e.name,
+            description: e.bugDescription || "",
+            testCaseName: e.name,
+            request: e.request && { ...e.request, headers: redactHeaders(e.request.headers) },
+            response: e.response && {
+              status: e.response.status,
+              body: truncateBody(e.response.body),
+              error: e.response.error || "",
+            },
+          });
+        }
+        // Data it needed and couldn't find becomes a question, not a guess.
+        for (const w of hunt.warnings || []) {
+          if (w.type !== "missing_data") continue;
+          addQuestion(
+            review,
+            `I need a real value for {${(w.params || []).join(", ")}} to test ${endpointKeyOf(doc)}. ` +
+              "Tell me one in the chat and I'll offer to save it as a variable.",
+            endpointKeyOf(doc)
+          );
+        }
+      } catch (err) {
+        errors.push(`bug hunter on ${doc.method} ${doc.path}: ${err.message}`);
       }
     }
 
-    const { verdict, reason } = verdictFor(review.tests, review.questions, errors);
+    const { verdict, reason } = verdictForReview(review, errors);
     review.verdict = verdict;
     review.verdictReason =
       reason +
-      (changed.length > MAX_ENDPOINTS
-        ? ` Only the first ${MAX_ENDPOINTS} of ${changed.length} changed endpoints were reviewed.`
+      (toReview.length > MAX_ENDPOINTS
+        ? ` Only the first ${MAX_ENDPOINTS} of ${toReview.length} endpoints were reviewed.`
         : "") +
       (errors.length ? ` Not checked: ${errors.join("; ")}` : "");
     review.status = "done";
@@ -389,6 +648,10 @@ module.exports = {
   runCase,
   getAnthropic,
   verdictFor,
+  verdictForReview,
+  criteriaStatus,
+  extractCriteria,
+  focusNoteFor,
   redactHeaders,
   commentBody,
   MAX_ENDPOINTS,

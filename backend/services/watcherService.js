@@ -510,33 +510,35 @@ async function runClaimed(run, watcher) {
     ) {
       const waitMs = Math.min(Math.max(watcher.deployWaitMinutes || 0, 0), 30) * 60 * 1000;
       if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
-      const byKey = new Map(after.map((d) => [endpointKey(d), d]));
+      // Whole docs: `after` only carries method and path, and the review needs
+      // the repo to find its QA config (URL, auth, variables).
+      const docs = await Doc.find(scope).lean();
+      const byKey = new Map(docs.map((d) => [endpointKey(d), d]));
       const changed = [
-        ...fresh.map((d) => ({ doc: d, change: "new endpoint" })),
-        ...edited
-          .map((e) => ({
-            doc: byKey.get(`${String(e.method).toUpperCase()} ${e.path}`),
-            change: (e.changes || []).join("; "),
-          }))
-          .filter((c) => c.doc),
-      ];
-      if (changed.length) {
-        try {
-          const review = await prReview.reviewPullRequest({
-            watcher,
-            installationId,
-            prNumber: trigger.prNumber,
-            prTitle: trigger.prTitle || "",
-            files: prFiles || [],
-            changed,
-            anthropicClient,
-          });
-          run.prReviewId = review._id;
-        } catch (err) {
-          // The docs and tests above are done; losing the review is not a
-          // reason to report the whole run as failed.
-          console.error("[watcher] PR review failed:", err.message);
-        }
+        ...fresh.map((d) => ({ doc: byKey.get(endpointKey(d)), change: "new endpoint" })),
+        ...edited.map((e) => ({
+          doc: byKey.get(`${String(e.method).toUpperCase()} ${e.path}`),
+          change: (e.changes || []).join("; "),
+        })),
+      ].filter((c) => c.doc);
+      // Reviewed even when no endpoint changed: the PR's acceptance criteria
+      // still have to be checked.
+      try {
+        const review = await prReview.reviewPullRequest({
+          watcher,
+          installationId,
+          prNumber: trigger.prNumber,
+          prTitle: trigger.prTitle || "",
+          files: prFiles || [],
+          changed,
+          allDocs: docs,
+          anthropicClient,
+        });
+        run.prReviewId = review._id;
+      } catch (err) {
+        // The docs and tests above are done; losing the review is not a
+        // reason to report the whole run as failed.
+        console.error("[watcher] PR review failed:", err.message);
       }
     }
 

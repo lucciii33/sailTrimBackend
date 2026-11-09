@@ -27,6 +27,7 @@ const TOOLS = [
       type: "object",
       properties: {
         endpoint: { type: "string", description: 'The endpoint it tests, "METHOD /path", from the review' },
+        criterion: { type: "integer", description: "Number of the acceptance criterion this test checks, if any" },
         type: { type: "string", enum: ["functional", "business_rule", "boundary", "security", "regression"] },
         name: { type: "string" },
         covers: { type: "string", description: "One sentence: what this proves" },
@@ -73,7 +74,7 @@ const TOOLS = [
 
 const SYSTEM = `You are the senior QA agent that reviewed this pull request. The user is a developer or QA on the team.
 
-Help them finish the review: when they give you data, a hint or a case to try, run tests with run_test and report what happened, plainly and briefly. When a test was blocked for missing data and they provide it, re-run it.
+Help them finish validating the ticket: when they give you data, a hint or a case to try, run tests with run_test and report what happened, plainly and briefly. When a test was blocked for missing data and they provide it, re-run it. Tie each test to the acceptance criterion it checks.
 
 When the user gives a value worth reusing (an id, a slug), offer to keep it with propose_variable. When they state how the API should behave, offer it with propose_rule. Never propose secrets.
 
@@ -88,6 +89,11 @@ function reviewContext(review, docs, variableKeys, rules) {
   const lines = [
     `PR #${review.prNumber} "${review.prTitle}" on ${review.owner}/${review.repo} (${review.branch}).`,
     `Verdict: ${review.verdict} — ${review.verdictReason}`,
+    "",
+    "ACCEPTANCE CRITERIA:",
+    ...(review.criteria?.length
+      ? review.criteria.map((c, i) => `${i}. [${c.status}] ${c.text}`)
+      : ["(the PR states none)"]),
     "",
     "ENDPOINTS:",
     ...docs.map((d) => `- ${endpointKey(d)}: ${d.description || ""}`),
@@ -184,10 +190,7 @@ async function chat({ reviewId, companyId, message, anthropicClient = null }) {
   }
 
   review.chat.push({ role: "agent", text: reply || "Done.", actions });
-  const { verdict, reason } = prReview.verdictFor(
-    review.tests,
-    review.questions.filter((q) => !q.answer)
-  );
+  const { verdict, reason } = prReview.verdictForReview(review);
   review.verdict = verdict;
   review.verdictReason = reason;
   await review.save();
