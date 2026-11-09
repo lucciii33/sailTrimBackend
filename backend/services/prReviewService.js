@@ -50,11 +50,29 @@ Return STRICT JSON only:
 {"criteria":[{"text":"one sentence","endpoints":["METHOD /path"],"testable":"api"}]}
 Return {"criteria":[]} if the description states nothing checkable.`;
 
+const ACCEPTANCE_SYSTEM = `You are a senior QA engineer checking a pull request against its ACCEPTANCE CRITERIA, exactly as the ticket describes them.
+
+You receive the numbered criteria, the PR description (which may give real ids, data and the order to run things in), and the specs of the endpoints involved.
+
+For EACH criterion that can be checked through the API, write the ordered HTTP steps that prove it: usually one request, sometimes a few (call the endpoint, then read the resource to check nothing else changed). The checks run one after another in the criteria's order, against the same environment, so a criterion may rely on the state an earlier one left (the PR's "run in this order").
+
+Use the ids and values the PR description gives. Never invent data: if a criterion needs data neither the description nor the variables give, return it with "blocked": true and "needs".
+
+Return STRICT JSON only:
+{"checks":[{"criterion":0,"steps":[{"endpoint":"METHOD /path from the spec list","name":"short name","method":"GET","path":"/products/7/availability","query":{},"headers":{},"body":null,"expectedStatus":[200],"assertions":["plain-language check on the response body"]}],"blocked":false,"needs":""}]}
+
+Rules:
+- One entry per criterion number, in order. Skip criteria marked [manual].
+- "endpoint" is copied exactly from the spec list; "path" is the concrete URL path to call.
+- expectedStatus and assertions say exactly what the criterion requires, nothing more.`;
+
 const REVIEW_SYSTEM = `You are a senior QA engineer reviewing a merged pull request. Your job is to prove the change does what the ticket asked AND to break it.
 
-You receive one endpoint the PR added or changed, the PR's numbered ACCEPTANCE CRITERIA, what changed, the diff, and the team's approved business rules.
+You receive one endpoint the PR added or changed, the PR's ACCEPTANCE CRITERIA, what changed, the diff, and the team's approved business rules.
 
-First, for EVERY acceptance criterion about this endpoint, write at least one case that proves whether it is met, and set "criterion" to that criterion's number. Then write cases of these types:
+The acceptance criteria were already checked, in order, before you. Do not repeat them. Those checks may have changed data (an order's status, a product's stock): never assume a resource is in the state the PR description started from. Prefer data you create in the same case; if a case depends on a state you can't guarantee, mark it blocked.
+
+Write cases of these types:
 - "functional": the endpoint does what this PR intended.
 - "business_rule": each relevant business rule still holds. Try to violate it.
 - "boundary": empty, null, missing and extra fields, wrong types, min/max lengths and values, negative numbers, unicode, very long strings.
@@ -76,7 +94,6 @@ Return STRICT JSON only:
     "body": null,
     "expectedStatus": [200],
     "assertions": ["plain-language check on the response body"],
-    "criterion": null,
     "blocked": false,
     "needs": ""
   }],
@@ -290,7 +307,7 @@ function criteriaNote(criteria, doc) {
   const key = doc ? endpointKeyOf(doc) : "";
   return criteria
     .map((c, i) => {
-      const here = !c.endpoints?.length || c.endpoints.includes(key);
+      const here = doc && (!c.endpoints?.length || c.endpoints.includes(key));
       return `${i}. ${c.text}${c.testable === "manual" ? " [manual]" : ""}${here ? " [about this endpoint]" : ""}`;
     })
     .join("\n");
@@ -315,6 +332,91 @@ function focusNoteFor({ doc, change, diffText, criteria }) {
 function addQuestion(review, text, endpoint) {
   if (review.questions.some((q) => q.text === text)) return;
   review.questions.push({ text: text.slice(0, 500), endpoint });
+}
+
+/**
+ * The acceptance criteria, checked first and in order, each with its own steps
+ * so every result is tied to its criterion. Returns the tests it ran.
+ */
+async function checkAcceptance({ review, docByKey, companyId, baseUrl, client }) {
+  const api = review.criteria
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.testable !== "manual");
+  if (!api.length) return [];
+
+  const keys = [...new Set(api.flatMap(({ c }) => c.endpoints))].filter((k) => docByKey.has(k));
+  const specs = keys.map((k) => {
+    const d = docByKey.get(k);
+    return { endpoint: k, description: d.description, requestBody: d.requestBody, queryParams: d.queryParams, responses: d.responses };
+  });
+
+  // Each endpoint's run settings, from the repo's QA config, on the dev URL.
+  const run = new Map();
+  let varKeys = [];
+  for (const k of keys) {
+    const resolved = await resolveDocRunConfig(docByKey.get(k), companyId, {});
+    run.set(k, { config: { ...resolved.config, baseUrl }, variables: resolved.variables });
+    varKeys = [...new Set([...varKeys, ...Object.keys(resolved.variables || {})])];
+  }
+
+  const resp = await client.messages.create({
+    model: modelFor("bughunt"),
+    max_tokens: 12000,
+    system: ACCEPTANCE_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `ACCEPTANCE CRITERIA:\n${criteriaNote(review.criteria, null)}\n\n` +
+          `PR DESCRIPTION:\n${review.prBody || "(empty)"}\n\n` +
+          (varKeys.length ? `AVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}\n\n` : "") +
+          `ENDPOINT SPECS:\n${JSON.stringify(specs, null, 2)}`,
+      },
+    ],
+  });
+  const parsed = parseJson((resp.content || []).map((b) => b.text || "").join("")) || {};
+  const byCriterion = new Map(
+    (Array.isArray(parsed.checks) ? parsed.checks : []).map((ch) => [ch.criterion, ch])
+  );
+
+  const tests = [];
+  for (const { c, i } of api) {
+    const check = byCriterion.get(i);
+    const steps = Array.isArray(check?.steps) ? check.steps : [];
+    if (!check || check.blocked || !steps.length) {
+      tests.push(
+        await runCase({
+          c: { type: "functional", criterion: i, name: c.text, blocked: true, needs: check?.needs || "a way to check it through the API" },
+          endpoint: c.endpoints[0] || "",
+        })
+      );
+      continue;
+    }
+    for (const step of steps) {
+      const doc = docByKey.get(step.endpoint);
+      const cfg = run.get(step.endpoint);
+      if (!doc || !cfg) {
+        tests.push(
+          await runCase({
+            c: { type: "functional", criterion: i, name: step.name || c.text, blocked: true, needs: `the spec of ${step.endpoint}` },
+            endpoint: step.endpoint || "",
+          })
+        );
+        continue;
+      }
+      tests.push(
+        await runCase({
+          c: { ...step, type: "functional", criterion: i, covers: c.text },
+          doc,
+          config: cfg.config,
+          variables: cfg.variables,
+          client,
+          endpoint: step.endpoint,
+        })
+      );
+    }
+  }
+  return tests;
 }
 
 /** The PR's title and description, straight from GitHub. */
@@ -530,6 +632,34 @@ async function reviewPullRequest({
       return [];
     });
 
+    // The criteria become proposed business rules, for later PRs to keep.
+    await businessRules
+      .proposeFromCriteria({
+        companyId: watcher.companyId,
+        scope: { owner: watcher.owner, repo: watcher.repo },
+        criteria: review.criteria,
+        prNumber,
+      })
+      .catch((err) => console.error("[pr-review] couldn't propose rules:", err.message));
+
+    // The ticket first: every criterion, in order, before anything else
+    // touches the data it depends on.
+    try {
+      review.tests.push(
+        ...(await checkAcceptance({ review, docByKey, companyId: watcher.companyId, baseUrl, client }))
+      );
+    } catch (err) {
+      errors.push(`acceptance checks: ${err.message}`);
+      if (/QA config|auth|token/i.test(err.message)) {
+        addQuestion(
+          review,
+          `Olivia can't authenticate against ${watcher.owner}/${watcher.repo}: ${err.message} ` +
+            "Set the auth and variables in this repo's API tests settings, then re-run the review.",
+          ""
+        );
+      }
+    }
+
     // The endpoints to review: what the code changed, plus whatever the
     // criteria are about even if the diff didn't flag it.
     const toReview = [...changed];
@@ -651,6 +781,7 @@ module.exports = {
   verdictForReview,
   criteriaStatus,
   extractCriteria,
+  checkAcceptance,
   focusNoteFor,
   redactHeaders,
   commentBody,

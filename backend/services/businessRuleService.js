@@ -171,6 +171,36 @@ async function proposeFromDiff({
   return toSave.length ? BusinessRule.insertMany(toSave) : [];
 }
 
+/**
+ * After a PR review: each acceptance criterion the API can check becomes a
+ * proposed rule, so the next PRs are tested against it too. Proposed, never
+ * approved: a person decides which ones are lasting rules and which were
+ * one-off details of that ticket. Returns the rules it saved.
+ */
+async function proposeFromCriteria({ companyId, scope, criteria, prNumber = null }) {
+  const testable = (criteria || []).filter((c) => c.testable !== "manual" && c.text);
+  if (!companyId || !scope || !testable.length) return [];
+  const existing = await BusinessRule.find({ companyId, ...scope }).select("text").lean();
+  const known = new Set(existing.map((r) => normalize(r.text)));
+  const toSave = [];
+  for (const c of testable) {
+    const text = String(c.text).trim().slice(0, 500);
+    if (known.has(normalize(text))) continue;
+    known.add(normalize(text));
+    toSave.push({
+      companyId,
+      ...scope,
+      kind: "rule",
+      text,
+      appliesTo: c.endpoints || [],
+      status: "proposed",
+      source: "olivia",
+      evidence: { prNumber, files: [], note: "Acceptance criterion of the PR" },
+    });
+  }
+  return toSave.length ? BusinessRule.insertMany(toSave) : [];
+}
+
 /** The approved rules as Markdown, for a team that wants them in their repo. */
 function toMarkdown(rules, title) {
   const byKind = {};
@@ -199,6 +229,7 @@ module.exports = {
   rulesFor,
   rulesNote,
   proposeFromDiff,
+  proposeFromCriteria,
   toMarkdown,
   MAX_RULES_IN_PROMPT,
 };

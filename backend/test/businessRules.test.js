@@ -187,3 +187,27 @@ describe("reviewing rules", () => {
     expect(res.text).not.toContain("Wrong guess");
   });
 });
+
+describe("proposals from a PR's acceptance criteria", () => {
+  test("each criterion the API can check is proposed once, never approved", async () => {
+    mockRules.push({ companyId: COMPANY, ...SCOPE, status: "approved", text: "Returns 404 for a missing order", appliesTo: [] });
+    const saved = await rules.proposeFromCriteria({
+      companyId: COMPANY,
+      scope: SCOPE,
+      prNumber: 29,
+      criteria: [
+        { text: "Only the order's owner can see the invoice", endpoints: ["GET /orders/:id/invoice"], testable: "api" },
+        { text: "returns 404 for a missing order", endpoints: [], testable: "api" },
+        { text: "The invoice email looks right", endpoints: [], testable: "manual" },
+      ],
+    });
+    expect(saved).toEqual([
+      expect.objectContaining({
+        text: "Only the order's owner can see the invoice",
+        status: "proposed",
+        appliesTo: ["GET /orders/:id/invoice"],
+        evidence: expect.objectContaining({ prNumber: 29 }),
+      }),
+    ]);
+  });
+});
