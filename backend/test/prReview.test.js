@@ -14,6 +14,12 @@ jest.mock("../model/PrReviewModel", () => ({
   ),
 }));
 
+const mockExecute = jest.fn();
+jest.mock("../services/apiQAService", () => ({
+  ...jest.requireActual("../services/apiQAService"),
+  executeTestCase: (...a) => mockExecute(...a),
+}));
+
 const svc = require("../services/prReviewService");
 const c = require("../controllers/prReviewController");
 const { errorHandler } = require("../middleware/errorMiddleware");
@@ -407,5 +413,56 @@ describe("steps that use what an earlier step answered", () => {
   test("steps without references are left as they are", () => {
     const raw = { path: "/orders/{{ORDER_ID}}", body: null };
     expect(svc.fillStepRefs(raw, []).step).toEqual({ ...raw, query: undefined, headers: undefined });
+  });
+});
+
+describe("arithmetic between steps", () => {
+  const bodies = [{ quantity: 12, total: "10.5" }, { stock: 20 }];
+  test("one operation on a live value", () => {
+    const { step } = svc.fillStepRefs(
+      { path: "/p/{{step1.quantity + 1}}", body: { expected_quantity: "{{step1.quantity + 1}}", d: "{{step2.stock - step1.quantity}}", t: "{{step1.total * 2}}", h: "{{step2.stock / 4}}" } },
+      bodies
+    );
+    expect(step.path).toBe("/p/13");
+    expect(step.body).toEqual({ expected_quantity: 13, d: 8, t: 21, h: 5 });
+  });
+  test("arithmetic on a value that isn't there or isn't a number blocks", () => {
+    expect(svc.fillStepRefs({ body: { q: "{{step1.missing + 1}}" } }, bodies).missing).toBe("{{step1.missing + 1}}");
+    expect(svc.fillStepRefs({ body: { q: "{{step2.stock / 0}}" } }, bodies).missing).toBe("{{step2.stock / 0}}");
+  });
+});
+
+describe("a placeholder that reached the API unfilled", () => {
+  test("blocks the test instead of passing it", async () => {
+    mockExecute.mockResolvedValueOnce({
+      request: { method: "POST", url: "https://api.test/products/1/stock", headers: {}, body: { expected_quantity: "{{quantity}}" } },
+      response: { status: 422, durationMs: 4, body: { detail: "bad" }, error: null },
+    });
+    const judge = { messages: { create: jest.fn() } };
+    const t = await svc.runCase({
+      c: { type: "functional", name: "rejects a stale quantity", method: "POST", path: "/products/1/stock", expectedStatus: [422], assertions: ["it says why"] },
+      doc: { method: "POST", path: "/products/:id/stock" },
+      config: {},
+      variables: {},
+      client: judge,
+      endpoint: "POST /products/:id/stock",
+    });
+    expect(t.passed).toBe(false);
+    expect(t.blocked).toBe(true);
+    expect(t.needs).toBe("a value for {{quantity}}");
+    expect(judge.messages.create).not.toHaveBeenCalled();
+  });
+
+  test("in the URL, encoded or not, too", async () => {
+    mockExecute.mockResolvedValueOnce({
+      request: { method: "GET", url: "https://api.test/orders/%7B%7BORDER_ID%7D%7D", headers: {}, body: null },
+      response: { status: 404, durationMs: 4, body: {}, error: null },
+    });
+    const t = await svc.runCase({
+      c: { type: "functional", name: "x", method: "GET", path: "/orders/{{ORDER_ID}}", expectedStatus: [404] },
+      doc: { method: "GET", path: "/orders/:id" }, config: {}, variables: {}, client: null, endpoint: "GET /orders/:id",
+    });
+    expect(t.blocked).toBe(true);
+    expect(t.needs).toBe("a value for {{ORDER_ID}}");
   });
 });

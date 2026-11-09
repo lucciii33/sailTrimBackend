@@ -7,7 +7,10 @@ jest.mock("../model/ApiWatcherModel", () => ({
   findOne: () => ({ lean: async () => ({ reviewBaseUrl: mockReview.baseUrl }) }),
 }));
 jest.mock("../model/DocModel", () => ({
-  find: async () => [{ method: "GET", path: "/orders/:id", owner: "acme", repo: "shop", branch: "dev" }],
+  find: async () => [
+    { method: "GET", path: "/orders/:id", owner: "acme", repo: "shop", branch: "dev" },
+    { method: "POST", path: "/orders", owner: "acme", repo: "shop", branch: "dev" },
+  ],
 }));
 jest.mock("../services/businessRuleService", () => ({ rulesFor: async () => [], rulesNote: () => "" }));
 jest.mock("../services/apiQAService", () => ({
@@ -102,4 +105,42 @@ test("without a dev URL the agent sends nothing", async () => {
   );
   await chat({ reviewId: "r1", companyId: "c1", message: "prueba", anthropicClient: client });
   expect(executeTestCase).not.toHaveBeenCalled();
+});
+
+test("the agent sets up data on any endpoint of the API, without recording it as a test", async () => {
+  const client = scripted(
+    {
+      content: [
+        { type: "tool_use", id: "t1", name: "prepare_data", input: { endpoint: "POST /orders", method: "POST", path: "/orders", body: { customer_name: "QA" } } },
+      ],
+    },
+    { content: [{ type: "text", text: "Created." }] }
+  );
+  const before = mockReview.current.tests.length;
+  const review = await chat({ reviewId: "r1", companyId: "c1", message: "crea una orden", anthropicClient: client });
+  expect(executeTestCase).toHaveBeenCalledTimes(1);
+  expect(executeTestCase.mock.calls[0][0].config.baseUrl).toBe("https://api-dev.example");
+  expect(review.tests).toHaveLength(before);
+  expect(client.messages.create.mock.calls[0][0].messages[0].content).toContain("- POST /orders");
+});
+
+test("a test that failed on the wrong data stops counting against the PR", async () => {
+  const client = scripted(
+    {
+      content: [
+        {
+          type: "tool_use",
+          id: "t1",
+          name: "run_test",
+          input: { endpoint: "GET /orders/:id", type: "functional", name: "cancelled order can't be edited", method: "GET", path: "/orders/2", expectedStatus: [200] },
+        },
+      ],
+    },
+    { content: [{ type: "tool_use", id: "t2", name: "mark_wrong_data", input: { name: "cancelled order can't be edited", needs: "an order in cancelled status" } }] },
+    { content: [{ type: "text", text: "Order 2 isn't cancelled." }] }
+  );
+  const review = await chat({ reviewId: "r1", companyId: "c1", message: "la 2 está cancelada", anthropicClient: client });
+  const t = review.tests.find((x) => x.source === "chat");
+  expect(t).toMatchObject({ passed: false, blocked: true, needs: "an order in cancelled status" });
+  expect(review.verdict).not.toBe("fail");
 });

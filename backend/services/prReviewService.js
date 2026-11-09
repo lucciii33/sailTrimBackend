@@ -58,7 +58,7 @@ You receive the numbered criteria, the PR description (which may give real ids, 
 
 For EACH criterion that can be checked through the API, write the ordered HTTP steps that prove it: usually one request, sometimes a few (call the endpoint, then read the resource to check nothing else changed). The checks run one after another in the criteria's order, against the same environment, so a criterion may rely on the state an earlier one left (the PR's "run in this order").
 
-Use the ids and values the PR description gives. When a step needs a value only the API knows right now (the current stock, a current total, an id an earlier step created), read it in an earlier step of the same criterion and use {{stepN.field}}: N counts this criterion's steps from 1, and field is a dot path into that step's JSON response (e.g. {{step1.quantity}}, {{step2.items.0.id}}). Never copy a current value from the description: it may be stale.
+Use the ids and values the PR description gives. When a step needs a value only the API knows right now (the current stock, a current total, an id an earlier step created), read it in an earlier step of the same criterion and use {{stepN.field}}: N counts this criterion's steps from 1, and field is a dot path into that step's JSON response (e.g. {{step1.quantity}}, {{step2.items.0.id}}). One arithmetic operation is allowed when the check needs it: {{step1.quantity + 1}}, {{step1.total * 2}}, {{step2.stock - step1.quantity}}. Never copy a current value from the description: it may be stale.
 Never invent data: only if no endpoint can give a value and neither the description nor the variables have it, return the criterion with "blocked": true and "needs" naming exactly the value (e.g. "the id of an order in pending status").
 
 Return STRICT JSON only:
@@ -261,6 +261,37 @@ async function runCase({ c, doc, config, variables, client, endpoint, source = "
     config,
     variables,
   });
+  // A placeholder that reached the API unfilled proves nothing either way:
+  // the test waits for that value instead of passing or failing on it.
+  const unfilled = unfilledPlaceholder(execution.request);
+  if (unfilled) {
+    if (capture) capture.body = undefined;
+    return {
+      type,
+      criterion,
+      source,
+      endpoint,
+      name: c.name || endpoint,
+      covers: c.covers || "",
+      expectedStatus: [],
+      passed: false,
+      blocked: true,
+      needs: `a value for ${unfilled}`.slice(0, 300),
+      reason: `Blocked: needs a value for ${unfilled}; the request went out without it, so nothing was checked`,
+      request: {
+        method: execution.request.method,
+        url: execution.request.url,
+        headers: redactHeaders(execution.request.headers),
+        body: truncateBody(execution.request.body),
+      },
+      response: {
+        status: execution.response.status,
+        durationMs: execution.response.durationMs,
+        body: truncateBody(execution.response.body),
+        error: execution.response.error || "",
+      },
+    };
+  }
   const status = execution.response.status;
   if (capture) capture.body = execution.response.error ? undefined : execution.response.body;
   const expected = Array.isArray(c.expectedStatus) ? c.expectedStatus.map(Number) : [];
@@ -343,7 +374,12 @@ function addQuestion(review, text, endpoint) {
  * The acceptance criteria, checked first and in order, each with its own steps
  * so every result is tied to its criterion. Returns the tests it ran.
  */
-const STEP_REF = /\{\{\s*step(\d+)\.([^}\s]+)\s*\}\}/g;
+// {{step1.quantity}}, or one arithmetic step on it: {{step1.quantity + 1}},
+// {{step1.total * 2}}, {{step2.stock - step1.quantity}}.
+const OPERAND = String.raw`(?:step\d+\.[^}\s+*/-]+|-?\d+(?:\.\d+)?)`;
+const STEP_EXPR = String.raw`\{\{\s*(step\d+\.[^}\s+*/-]+)\s*(?:([+*/-])\s*(${OPERAND})\s*)?\}\}`;
+const STEP_REF = new RegExp(STEP_EXPR, "g");
+const STEP_WHOLE = new RegExp(`^${STEP_EXPR}$`);
 
 function readPath(body, path) {
   let v = body;
@@ -354,23 +390,43 @@ function readPath(body, path) {
   return v;
 }
 
+function operandValue(text, bodies) {
+  const ref = text.match(/^step(\d+)\.(.+)$/);
+  return ref ? readPath(bodies[Number(ref[1]) - 1], ref[2]) : Number(text);
+}
+
+/** The value of one {{...}}, or undefined when it can't be worked out. */
+function evalRef(left, op, right, bodies) {
+  const a = operandValue(left, bodies);
+  if (!op) return a;
+  const b = operandValue(right, bodies);
+  const x = Number(a);
+  const y = Number(b);
+  if (a === null || b === null || a === "" || b === "" || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return undefined;
+  }
+  const v = op === "+" ? x + y : op === "-" ? x - y : op === "*" ? x * y : y === 0 ? NaN : x / y;
+  return Number.isFinite(v) ? Math.round(v * 1e6) / 1e6 : undefined;
+}
+
 /**
- * Fill {{stepN.field}} in a step with what earlier steps of the same criterion
- * answered, so a check can read a live value (current stock) and use it.
- * Returns { step } or { missing: "{{stepN.field}}" } when a value isn't there.
+ * Fill {{stepN.field}} (optionally with one + - * / on it) in a step with what
+ * earlier steps of the same criterion answered, so a check can read a live
+ * value (current stock) and use it, or use it plus one.
+ * Returns { step } or { missing: "{{...}}" } when a value isn't there.
  */
 function fillStepRefs(step, bodies) {
   let missing = null;
   const fill = (value) => {
     if (typeof value === "string") {
-      const whole = value.match(/^\{\{\s*step(\d+)\.([^}\s]+)\s*\}\}$/);
+      const whole = value.match(STEP_WHOLE);
       if (whole) {
-        const v = readPath(bodies[Number(whole[1]) - 1], whole[2]);
+        const v = evalRef(whole[1], whole[2], whole[3], bodies);
         if (v === undefined) missing = missing || value;
         return v === undefined ? value : v;
       }
-      return value.replace(STEP_REF, (ref, n, path) => {
-        const v = readPath(bodies[Number(n) - 1], path);
+      return value.replace(STEP_REF, (ref, left, op, right) => {
+        const v = evalRef(left, op, right, bodies);
         if (v === undefined || (v !== null && typeof v === "object")) {
           missing = missing || ref;
           return ref;
@@ -392,6 +448,13 @@ function fillStepRefs(step, bodies) {
     body: fill(step.body),
   };
   return missing ? { missing } : { step: filled };
+}
+
+/** A {{placeholder}} that reached the API unfilled, or "" when none did. */
+function unfilledPlaceholder(request) {
+  const text = [request?.url, typeof request?.body === "string" ? request.body : JSON.stringify(request?.body ?? null)].join(" ");
+  const m = text.match(/\{\{\s*[^}]+?\s*\}\}|%7B%7B[^%]*%7D%7D/i);
+  return m ? decodeURIComponent(m[0]) : "";
 }
 
 async function checkAcceptance({ review, docByKey, companyId, baseUrl, client }) {

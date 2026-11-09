@@ -46,10 +46,12 @@ jest.mock("../services/apiQAService", () => ({
   resolveDocRunConfig: (...a) => mockApi.resolveDocRunConfig(...a),
   findBugs: (...a) => mockApi.findBugs(...a),
   // The fake API: the invoice exists, a missing order wrongly returns 200.
-  executeTestCase: jest.fn(async ({ testCase, config }) => {
+  executeTestCase: jest.fn(async ({ testCase, config, variables = {} }) => {
     const missing = /999999/.test(testCase.path);
+    // Like the real runner: {{key}} is filled from the variables.
+    const path = testCase.path.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in variables ? variables[k] : m));
     return {
-      request: { method: testCase.method, url: `${config.baseUrl}${testCase.path}`, headers: { Authorization: "Bearer real" } },
+      request: { method: testCase.method, url: `${config.baseUrl}${path}`, headers: { Authorization: "Bearer real" } },
       response: { status: missing ? 200 : 200, durationMs: 3, body: { total: 10 }, error: null },
     };
   }),
