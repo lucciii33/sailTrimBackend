@@ -378,3 +378,34 @@ describe("triage before reporting", () => {
     expect(md).toContain("### Bugs that were already there (1), to open separately");
   });
 });
+
+describe("steps that use what an earlier step answered", () => {
+  const bodies = [{ quantity: 12, items: [{ id: 7 }] }, { total: 99.5 }];
+
+  test("a live value fills the next request, keeping its type", () => {
+    const { step, missing } = svc.fillStepRefs(
+      {
+        endpoint: "POST /products/:id/stock",
+        path: "/products/{{step2.total}}/x/{{step1.items.0.id}}",
+        query: { dry_run: "true", expected: "{{step1.quantity}}" },
+        headers: {},
+        body: { current_quantity: "{{step1.quantity}}", note: "had {{step1.quantity}}", list: ["{{step2.total}}"] },
+      },
+      bodies
+    );
+    expect(missing).toBeUndefined();
+    expect(step.path).toBe("/products/99.5/x/7");
+    expect(step.query).toEqual({ dry_run: "true", expected: 12 });
+    expect(step.body).toEqual({ current_quantity: 12, note: "had 12", list: [99.5] });
+  });
+
+  test("a value an earlier step didn't return blocks the step instead of guessing", () => {
+    expect(svc.fillStepRefs({ path: "/x", body: { q: "{{step1.stock}}" } }, bodies).missing).toBe("{{step1.stock}}");
+    expect(svc.fillStepRefs({ path: "/x/{{step3.id}}" }, bodies).missing).toBe("{{step3.id}}");
+  });
+
+  test("steps without references are left as they are", () => {
+    const raw = { path: "/orders/{{ORDER_ID}}", body: null };
+    expect(svc.fillStepRefs(raw, []).step).toEqual({ ...raw, query: undefined, headers: undefined });
+  });
+});

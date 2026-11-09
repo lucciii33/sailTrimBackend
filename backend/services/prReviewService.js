@@ -58,7 +58,8 @@ You receive the numbered criteria, the PR description (which may give real ids, 
 
 For EACH criterion that can be checked through the API, write the ordered HTTP steps that prove it: usually one request, sometimes a few (call the endpoint, then read the resource to check nothing else changed). The checks run one after another in the criteria's order, against the same environment, so a criterion may rely on the state an earlier one left (the PR's "run in this order").
 
-Use the ids and values the PR description gives. Never invent data: if a criterion needs data neither the description nor the variables give, return it with "blocked": true and "needs".
+Use the ids and values the PR description gives. When a step needs a value only the API knows right now (the current stock, a current total, an id an earlier step created), read it in an earlier step of the same criterion and use {{stepN.field}}: N counts this criterion's steps from 1, and field is a dot path into that step's JSON response (e.g. {{step1.quantity}}, {{step2.items.0.id}}). Never copy a current value from the description: it may be stale.
+Never invent data: only if no endpoint can give a value and neither the description nor the variables have it, return the criterion with "blocked": true and "needs" naming exactly the value (e.g. "the id of an order in pending status").
 
 Return STRICT JSON only:
 {"checks":[{"criterion":0,"steps":[{"endpoint":"METHOD /path from the spec list","name":"short name","method":"GET","path":"/products/7/availability","query":{},"headers":{},"body":null,"expectedStatus":[200],"assertions":["plain-language check on the response body"]}],"blocked":false,"needs":""}]}
@@ -229,7 +230,7 @@ async function reviewEndpoint({ doc, change, diffText, criteria = [], companyId,
 }
 
 /** Runs one case and turns the result into a test record, evidence included. */
-async function runCase({ c, doc, config, variables, client, endpoint, source = "review" }) {
+async function runCase({ c, doc, config, variables, client, endpoint, source = "review", capture = null }) {
   const type = PrReview.TEST_TYPES.includes(c.type) ? c.type : "functional";
   const criterion = Number.isInteger(c.criterion) ? c.criterion : null;
   if (c.blocked) {
@@ -261,6 +262,7 @@ async function runCase({ c, doc, config, variables, client, endpoint, source = "
     variables,
   });
   const status = execution.response.status;
+  if (capture) capture.body = execution.response.error ? undefined : execution.response.body;
   const expected = Array.isArray(c.expectedStatus) ? c.expectedStatus.map(Number) : [];
   const statusOk = expected.length ? expected.includes(status) : status >= 200 && status < 300;
   const assertionResults = execution.response.error
@@ -341,6 +343,57 @@ function addQuestion(review, text, endpoint) {
  * The acceptance criteria, checked first and in order, each with its own steps
  * so every result is tied to its criterion. Returns the tests it ran.
  */
+const STEP_REF = /\{\{\s*step(\d+)\.([^}\s]+)\s*\}\}/g;
+
+function readPath(body, path) {
+  let v = body;
+  for (const key of path.split(".")) {
+    if (v == null || typeof v !== "object") return undefined;
+    v = v[key];
+  }
+  return v;
+}
+
+/**
+ * Fill {{stepN.field}} in a step with what earlier steps of the same criterion
+ * answered, so a check can read a live value (current stock) and use it.
+ * Returns { step } or { missing: "{{stepN.field}}" } when a value isn't there.
+ */
+function fillStepRefs(step, bodies) {
+  let missing = null;
+  const fill = (value) => {
+    if (typeof value === "string") {
+      const whole = value.match(/^\{\{\s*step(\d+)\.([^}\s]+)\s*\}\}$/);
+      if (whole) {
+        const v = readPath(bodies[Number(whole[1]) - 1], whole[2]);
+        if (v === undefined) missing = missing || value;
+        return v === undefined ? value : v;
+      }
+      return value.replace(STEP_REF, (ref, n, path) => {
+        const v = readPath(bodies[Number(n) - 1], path);
+        if (v === undefined || (v !== null && typeof v === "object")) {
+          missing = missing || ref;
+          return ref;
+        }
+        return String(v);
+      });
+    }
+    if (Array.isArray(value)) return value.map(fill);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fill(v)]));
+    }
+    return value;
+  };
+  const filled = {
+    ...step,
+    path: fill(step.path),
+    query: fill(step.query),
+    headers: fill(step.headers),
+    body: fill(step.body),
+  };
+  return missing ? { missing } : { step: filled };
+}
+
 async function checkAcceptance({ review, docByKey, companyId, baseUrl, client }) {
   const api = review.criteria
     .map((c, i) => ({ c, i }))
@@ -395,10 +448,29 @@ async function checkAcceptance({ review, docByKey, companyId, baseUrl, client })
       );
       continue;
     }
-    for (const step of steps) {
-      const doc = docByKey.get(step.endpoint);
-      const cfg = run.get(step.endpoint);
+    const bodies = [];
+    for (const raw of steps) {
+      const doc = docByKey.get(raw.endpoint);
+      const cfg = run.get(raw.endpoint);
+      const { step = raw, missing } = fillStepRefs(raw, bodies);
+      if (missing) {
+        bodies.push(undefined);
+        tests.push(
+          await runCase({
+            c: {
+              type: "functional",
+              criterion: i,
+              name: raw.name || c.text,
+              blocked: true,
+              needs: `${missing}, which an earlier step should have returned but didn't`,
+            },
+            endpoint: raw.endpoint || "",
+          })
+        );
+        continue;
+      }
       if (!doc || !cfg) {
+        bodies.push(undefined);
         tests.push(
           await runCase({
             c: { type: "functional", criterion: i, name: step.name || c.text, blocked: true, needs: `the spec of ${step.endpoint}` },
@@ -407,6 +479,7 @@ async function checkAcceptance({ review, docByKey, companyId, baseUrl, client })
         );
         continue;
       }
+      const capture = {};
       tests.push(
         await runCase({
           c: { ...step, type: "functional", criterion: i, covers: c.text },
@@ -415,8 +488,10 @@ async function checkAcceptance({ review, docByKey, companyId, baseUrl, client })
           variables: cfg.variables,
           client,
           endpoint: step.endpoint,
+          capture,
         })
       );
+      bodies.push(capture.body);
     }
   }
   return tests;
@@ -899,6 +974,7 @@ module.exports = {
   verdictForReview,
   criteriaStatus,
   extractCriteria,
+  fillStepRefs,
   checkAcceptance,
   triageFindings,
   focusNoteFor,
