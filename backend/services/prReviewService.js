@@ -28,7 +28,9 @@ const { getOctokit } = require("./githubService");
 // one big refactor can't spend the month's budget.
 const MAX_ENDPOINTS = 8;
 const MAX_CASES_PER_ENDPOINT = 12;
-const MAX_QUESTIONS_PER_ENDPOINT = 3;
+const MAX_QUESTIONS_PER_ENDPOINT = 2;
+// What the team is asked at most per review, after triage keeps the ones that matter.
+const MAX_QUESTIONS = 5;
 const MAX_DIFF_CHARS = 15000;
 const MAX_BODY_CHARS = 3000;
 
@@ -79,7 +81,7 @@ Write cases of these types:
 - "security": no credentials, a bogus token, another user's resource ids (IDOR), privilege escalation, injection in params and body.
 - "regression": behaviour that existed before this PR and must keep working.
 
-Then list QUESTIONS for the team: things the expected behaviour depends on that neither the diff nor the rules answer ("Can a member see orders from other members?"). Only real doubts, at most ${MAX_QUESTIONS_PER_ENDPOINT}.
+Then list QUESTIONS for the team: things the expected behaviour depends on that neither the diff nor the rules answer ("Can a member see orders from other members?"). Only real doubts that change what the ticket should do, at most ${MAX_QUESTIONS_PER_ENDPOINT}. Never ask about roles or permissions unless the spec or the PR mentions roles.
 
 Return STRICT JSON only:
 {
@@ -144,7 +146,8 @@ function parseJson(text) {
  */
 function verdictFor(tests, questions, errors = []) {
   const blocked = tests.filter((t) => t.blocked);
-  tests = tests.filter((t) => !t.blocked);
+  // A pre-existing bug is real but not this PR's: listed, never blocking.
+  tests = tests.filter((t) => !t.blocked && t.triage !== "pre_existing");
   const failed = tests.filter((t) => t.passed === false && !t.response?.error);
   if (failed.length) {
     return {
@@ -419,6 +422,104 @@ async function checkAcceptance({ review, docByKey, companyId, baseUrl, client })
   return tests;
 }
 
+const TRIAGE_SYSTEM = `You are a senior QA lead reviewing your team's findings on a pull request before reporting them. Be strict: only the PR's own defects may block it.
+
+You receive the PR's diff, the requests the review itself made that changed data (in order), and numbered failed tests, bugs and questions.
+
+Classify every failed test:
+- "pr_bug": the behaviour this PR added or changed is wrong.
+- "pre_existing": a real defect in code this PR didn't touch (it would have failed before the PR too).
+- "needs_data": it failed because of the data's state, often state the review itself changed earlier (an order it had already cancelled). Not a defect.
+- "environment": a proxy, CDN or firewall answered instead of the API (an HTML "Blocked" page, a 403 from Cloudflare on an injection payload). Blocking an attack is good.
+- "olivia_check": the API behaved acceptably and the check was wrong (the status was one of the expected ones, a conditional assertion that didn't apply, the value was correct).
+
+Classify every bug with the same words; "olivia_check" and "environment" mean it isn't a bug.
+
+Keep at most ${MAX_QUESTIONS} questions: the ones whose answer changes what this ticket must do. Drop generic ones (roles, when the API has no roles; formats nobody asked about).
+
+Return STRICT JSON only:
+{"tests":[{"i":0,"as":"pr_bug","note":"one short sentence"}],"bugs":[{"i":0,"as":"pre_existing","note":""}],"keepQuestions":[0,2]}`;
+
+/**
+ * The last step, as a QA lead would before reporting: every failure and bug is
+ * sorted into the PR's fault or not. Only the PR's own defects block it;
+ * pre-existing bugs are listed to open separately; state problems become
+ * missing data; Olivia's own mistaken checks and firewall answers stop counting.
+ */
+async function triageFindings({ review, diffText, client }) {
+  const failed = review.tests
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => !t.passed && !t.blocked);
+  if (!failed.length && !review.bugs.length && review.questions.length <= MAX_QUESTIONS) return;
+
+  const mutations = review.tests
+    .filter((t) => t.request && !["GET", "HEAD"].includes(String(t.request.method).toUpperCase()) && t.response?.status < 300)
+    .map((t) => `${t.request.method} ${t.request.url} ${JSON.stringify(t.request.body ?? null).slice(0, 200)} -> ${t.response.status}`);
+  const brief = (body) => {
+    const s = typeof body === "string" ? body : JSON.stringify(body ?? null);
+    return s.length > 300 ? `${s.slice(0, 300)}…` : s;
+  };
+
+  const resp = await client.messages.create({
+    model: modelFor("bughunt"),
+    max_tokens: 6000,
+    system: TRIAGE_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `DIFF:\n${String(diffText || "").slice(0, 10000)}\n\n` +
+          `REQUESTS THE REVIEW MADE THAT CHANGED DATA:\n${mutations.join("\n") || "(none)"}\n\n` +
+          `FAILED TESTS:\n${failed
+            .map(({ t }, n) => `${n}. [${t.type}] ${t.endpoint} · ${t.name} · ${t.request?.method} ${t.request?.url} · expected ${t.expectedStatus?.join(" or ") || "2xx"} · ${t.reason} · body: ${brief(t.response?.body)}`)
+            .join("\n") || "(none)"}\n\n` +
+          `BUGS:\n${review.bugs
+            .map((b, n) => `${n}. [${b.severity}] ${b.endpoint} · ${b.title}: ${b.description} · got ${b.response?.status}`)
+            .join("\n") || "(none)"}\n\n` +
+          `QUESTIONS:\n${review.questions.map((q, n) => `${n}. ${q.text}`).join("\n") || "(none)"}`,
+      },
+    ],
+  });
+  const parsed = parseJson((resp.content || []).map((b) => b.text || "").join("")) || {};
+
+  for (const r of Array.isArray(parsed.tests) ? parsed.tests : []) {
+    const t = failed[r.i]?.t;
+    if (!t) continue;
+    const note = String(r.note || "").slice(0, 300);
+    if (r.as === "needs_data") {
+      t.blocked = true;
+      t.needs = note || "data in the right state";
+      t.reason = `Blocked: needs ${t.needs}`;
+    } else if (r.as === "olivia_check" || r.as === "environment") {
+      t.passed = true;
+      t.triage = r.as;
+      t.triageNote = note;
+      t.reason = r.as === "environment" ? `Passed: a firewall or proxy answered (${note})` : `Passed: ${note}`;
+    } else if (r.as === "pre_existing") {
+      t.triage = "pre_existing";
+      t.triageNote = note;
+    }
+  }
+
+  const drop = new Set();
+  for (const r of Array.isArray(parsed.bugs) ? parsed.bugs : []) {
+    const b = review.bugs[r.i];
+    if (!b) continue;
+    if (["olivia_check", "environment", "needs_data"].includes(r.as)) drop.add(r.i);
+    else if (r.as === "pre_existing") {
+      b.introduced = false;
+      b.triageNote = String(r.note || "").slice(0, 300);
+    }
+  }
+  if (drop.size) review.bugs = review.bugs.filter((_, i) => !drop.has(i));
+
+  const keep = Array.isArray(parsed.keepQuestions)
+    ? parsed.keepQuestions.filter((n) => review.questions[n]).slice(0, MAX_QUESTIONS)
+    : null;
+  if (keep) review.questions = keep.map((n) => review.questions[n]);
+  else if (review.questions.length > MAX_QUESTIONS) review.questions = review.questions.slice(0, MAX_QUESTIONS);
+}
+
 /** The PR's title and description, straight from GitHub. */
 async function fetchPullRequest(installationId, owner, repo, prNumber) {
   const octokit = await getOctokit(installationId);
@@ -483,44 +584,49 @@ function verdictForReview(review, errors = []) {
     c.status = statuses[i];
   });
   const notMet = criteria.filter((c) => c.status === "not_met");
-  const serious = (review.bugs || []).filter((b) => ["critical", "high"].includes(b.severity));
-  const minor = (review.bugs || []).length - serious.length;
+  const ours = (review.bugs || []).filter((b) => b.introduced !== false);
+  const serious = ours.filter((b) => ["critical", "high"].includes(b.severity));
+  const minor = ours.length - serious.length;
+  const preExisting =
+    (review.bugs || []).length - ours.length +
+    review.tests.filter((t) => t.triage === "pre_existing").length;
+  const plus = preExisting ? ` ${preExisting} bugs that were already there before this PR are listed to open separately.` : "";
   const open = criteria.filter((c) => ["blocked", "untested", "manual"].includes(c.status));
   const base = verdictFor(review.tests, review.questions.filter((q) => !q.answer), errors);
 
   if (notMet.length) {
     return {
       verdict: "fail",
-      reason: `${notMet.length} of ${criteria.length} acceptance criteria not met. ${base.reason}`,
+      reason: `${notMet.length} of ${criteria.length} acceptance criteria not met. ${base.reason}${plus}`,
     };
   }
   if (serious.length) {
     return {
       verdict: "fail",
-      reason: `The bug hunter found ${serious.length} critical or high bugs. ${base.reason}`,
+      reason: `This PR introduced ${serious.length} critical or high bugs. ${base.reason}${plus}`,
     };
   }
-  if (base.verdict === "fail") return base;
+  if (base.verdict === "fail") return { ...base, reason: base.reason + plus };
   if (minor) {
     return {
       verdict: "review",
-      reason: `The bug hunter found ${minor} medium or low bugs to look at. ${base.reason}`,
+      reason: `This PR introduced ${minor} medium or low bugs to look at. ${base.reason}${plus}`,
     };
   }
   if (!criteria.length) {
     return {
       verdict: "review",
-      reason: `The PR states no acceptance criteria, so it can't be validated against the ticket; only what the code changed was tested. ${base.reason}`,
+      reason: `The PR states no acceptance criteria, so it can't be validated against the ticket; only what the code changed was tested. ${base.reason}${plus}`,
     };
   }
   if (open.length) {
     return {
       verdict: "review",
-      reason: `${criteria.length - open.length} of ${criteria.length} acceptance criteria met; ${open.length} still need data or a person. ${base.reason}`,
+      reason: `${criteria.length - open.length} of ${criteria.length} acceptance criteria met; ${open.length} still need data or a person. ${base.reason}${plus}`,
     };
   }
-  if (base.verdict === "review") return base;
-  return { verdict: "pass", reason: `All ${criteria.length} acceptance criteria met. ${base.reason}` };
+  if (base.verdict === "review") return { ...base, reason: base.reason + plus };
+  return { verdict: "pass", reason: `All ${criteria.length} acceptance criteria met. ${base.reason}${plus}` };
 }
 
 const VERDICT_LABEL = { pass: "✅ Passes", fail: "❌ Does not pass", review: "⚠️ Needs review" };
@@ -548,18 +654,22 @@ function commentBody(review) {
     md += `\n### Blocked, waiting for data (${blocked.length})\n\n`;
     for (const t of blocked.slice(0, 10)) md += `- **${t.endpoint}**, ${t.name}: needs ${t.needs}\n`;
   }
-  const failed = review.tests.filter((t) => !t.passed && !t.blocked).slice(0, 10);
+  const failed = review.tests.filter((t) => !t.passed && !t.blocked && t.triage !== "pre_existing").slice(0, 10);
   if (failed.length) {
     md += "\n### Failed\n\n";
     for (const t of failed) {
       md += `- **${t.endpoint}**, ${t.name}: ${t.reason}\n`;
     }
   }
-  if (review.bugs?.length) {
-    md += `\n### Bugs found (${review.bugs.length})\n\n`;
-    for (const b of review.bugs.slice(0, 15)) {
-      md += `- **${b.severity}** · ${b.endpoint}: ${b.title}\n`;
-    }
+  const ours = (review.bugs || []).filter((b) => b.introduced !== false);
+  const old = (review.bugs || []).filter((b) => b.introduced === false);
+  if (ours.length) {
+    md += `\n### Bugs introduced by this PR (${ours.length})\n\n`;
+    for (const b of ours.slice(0, 15)) md += `- **${b.severity}** · ${b.endpoint}: ${b.title}\n`;
+  }
+  if (old.length) {
+    md += `\n### Bugs that were already there (${old.length}), to open separately\n\n`;
+    for (const b of old.slice(0, 15)) md += `- **${b.severity}** · ${b.endpoint}: ${b.title}\n`;
   }
   if (review.questions.length) {
     md += "\n### Questions for the team\n\n";
@@ -639,6 +749,7 @@ async function reviewPullRequest({
         scope: { owner: watcher.owner, repo: watcher.repo },
         criteria: review.criteria,
         prNumber,
+        anthropicClient: client,
       })
       .catch((err) => console.error("[pr-review] couldn't propose rules:", err.message));
 
@@ -742,6 +853,13 @@ async function reviewPullRequest({
       }
     }
 
+    try {
+      await triageFindings({ review, diffText, client });
+    } catch (err) {
+      // Without triage the findings are reported as they are.
+      console.error("[pr-review] triage failed:", err.message);
+    }
+
     const { verdict, reason } = verdictForReview(review, errors);
     review.verdict = verdict;
     review.verdictReason =
@@ -782,6 +900,7 @@ module.exports = {
   criteriaStatus,
   extractCriteria,
   checkAcceptance,
+  triageFindings,
   focusNoteFor,
   redactHeaders,
   commentBody,

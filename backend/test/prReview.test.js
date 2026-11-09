@@ -290,7 +290,7 @@ describe("bugs from the bug hunter", () => {
       _id: "r1", verdict: "fail", verdictReason: "", criteria: [], tests: [], questions: [],
       bugs: [{ severity: "high", endpoint: "GET /orders/:id/invoice", title: "IDOR on invoice" }],
     });
-    expect(md).toContain("### Bugs found (1)");
+    expect(md).toContain("### Bugs introduced by this PR (1)");
     expect(md).toContain("- **high** · GET /orders/:id/invoice: IDOR on invoice");
   });
 });
@@ -305,4 +305,76 @@ test("the review's bug hunt is aimed at the PR's changes", () => {
   expect(note).toContain("NOT A GENERAL ONE");
   expect(note).toContain("Returns 404 for a missing order");
   expect(note).toContain("router.get('/orders/:id/invoice')");
+});
+
+describe("triage before reporting", () => {
+  const failing = (extra) => ({ type: "functional", passed: false, endpoint: "PATCH /orders/{order_id}/status", name: "x", expectedStatus: [200], reason: "Expected 200, got 409", request: { method: "PATCH", url: "u" }, response: { status: 409, error: "" }, ...extra });
+  const claudeSays = (answer) => ({ messages: { create: jest.fn(async () => ({ content: [{ type: "text", text: JSON.stringify(answer) }] })) } });
+
+  function reviewWith() {
+    return {
+      criteria: [{ text: "Returns units_count", endpoints: [], testable: "api" }],
+      tests: [
+        { type: "functional", criterion: 0, passed: true, response: { status: 200 } },
+        failing({ name: "cancel order 2 again" }),
+        failing({ name: "status 400 or 409", reason: "assertion about 409 couldn't be confirmed" }),
+        failing({ type: "security", name: "sql injection", response: { status: 403, body: "<html>Blocked</html>", error: "" } }),
+        failing({ type: "boundary", name: "huge id", response: { status: 500, error: "" } }),
+      ],
+      bugs: [
+        { severity: "high", endpoint: "GET /orders/{order_id}", title: "500 on huge id" },
+        { severity: "high", endpoint: "PATCH /orders/{order_id}/status", title: "cancel returned 409" },
+      ],
+      questions: Array.from({ length: 9 }, (_, i) => ({ text: `q${i}` })),
+    };
+  }
+
+  test("only the PR's own defects block it; the rest is sorted out", async () => {
+    const review = reviewWith();
+    await svc.triageFindings({
+      review,
+      diffText: "",
+      client: claudeSays({
+        tests: [
+          { i: 0, as: "needs_data", note: "an order that isn't cancelled" },
+          { i: 1, as: "olivia_check", note: "400 was one of the expected statuses" },
+          { i: 2, as: "environment", note: "Cloudflare blocked the payload" },
+          { i: 3, as: "pre_existing", note: "path ids were never bounded" },
+        ],
+        bugs: [{ i: 0, as: "pre_existing" }, { i: 1, as: "needs_data" }],
+        keepQuestions: [0, 3, 4],
+      }),
+    });
+    expect(review.tests[1]).toMatchObject({ blocked: true, needs: "an order that isn't cancelled" });
+    expect(review.tests[2]).toMatchObject({ passed: true, triage: "olivia_check" });
+    expect(review.tests[3]).toMatchObject({ passed: true, triage: "environment" });
+    expect(review.tests[4]).toMatchObject({ passed: false, triage: "pre_existing" });
+    expect(review.bugs).toEqual([expect.objectContaining({ title: "500 on huge id", introduced: false })]);
+    expect(review.questions.map((q) => q.text)).toEqual(["q0", "q3", "q4"]);
+
+    // With every criterion met, pre-existing bugs don't fail the ticket.
+    review.questions = [];
+    review.tests = review.tests.filter((t) => !t.blocked);
+    const v = svc.verdictForReview(review);
+    expect(v.verdict).toBe("pass");
+    expect(v.reason).toMatch(/already there before this PR/);
+  });
+
+  test("never more than 5 questions, even if triage keeps more", async () => {
+    const review = reviewWith();
+    await svc.triageFindings({ review, diffText: "", client: claudeSays({ keepQuestions: [0, 1, 2, 3, 4, 5, 6] }) });
+    expect(review.questions).toHaveLength(5);
+  });
+
+  test("the comment separates the PR's bugs from the ones to open separately", () => {
+    const md = svc.commentBody({
+      _id: "r1", verdict: "pass", verdictReason: "", criteria: [], tests: [], questions: [],
+      bugs: [
+        { severity: "high", endpoint: "GET /orders/{order_id}", title: "500 on huge id", introduced: false },
+        { severity: "low", endpoint: "GET /products/{product_id}", title: "new field rounding" },
+      ],
+    });
+    expect(md).toContain("### Bugs introduced by this PR (1)");
+    expect(md).toContain("### Bugs that were already there (1), to open separately");
+  });
 });

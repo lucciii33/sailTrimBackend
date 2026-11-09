@@ -73,6 +73,9 @@ function claude() {
             { text: "Only the order's owner can see it", endpoints: [KEY], testable: "api" },
           ] }) }] };
         }
+        if (system.includes("QA lead reviewing your team's findings")) {
+          return { content: [{ type: "text", text: JSON.stringify({ tests: [], bugs: [{ i: 0, as: "pr_bug" }] }) }] };
+        }
         if (system.includes("checking a pull request against its ACCEPTANCE CRITERIA")) {
           return { content: [{ type: "text", text: JSON.stringify({ checks: [
             { criterion: 0, steps: [{ endpoint: KEY, name: "invoice of order", method: "GET", path: "/orders/{{order_id}}/invoice", expectedStatus: [200] }] },

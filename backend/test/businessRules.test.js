@@ -189,20 +189,40 @@ describe("reviewing rules", () => {
 });
 
 describe("proposals from a PR's acceptance criteria", () => {
-  test("each criterion the API can check is proposed once, never approved", async () => {
-    mockRules.push({ companyId: COMPANY, ...SCOPE, status: "approved", text: "Returns 404 for a missing order", appliesTo: [] });
+  test("only lasting rules are proposed: no test cases, no repeats, never approved", async () => {
+    mockRules.push({ companyId: COMPANY, ...SCOPE, status: "approved", text: "An order is editable unless cancelled", appliesTo: [] });
+    let prompt = "";
+    const client = {
+      messages: {
+        create: async (req) => {
+          prompt = req.system + req.messages[0].content;
+          return {
+            content: [{ text: JSON.stringify({ rules: [
+              { kind: "permission", text: "Only the order's owner can see the invoice", appliesTo: ["GET /orders/:id/invoice", "GET /made/up"] },
+              { kind: "state", text: "an order is editable unless cancelled", appliesTo: [] },
+            ] }) }],
+          };
+        },
+      },
+    };
     const saved = await rules.proposeFromCriteria({
       companyId: COMPANY,
       scope: SCOPE,
       prNumber: 29,
+      anthropicClient: client,
       criteria: [
         { text: "Only the order's owner can see the invoice", endpoints: ["GET /orders/:id/invoice"], testable: "api" },
         { text: "returns 404 for a missing order", endpoints: [], testable: "api" },
+        { text: "editable is false only when cancelled", endpoints: [], testable: "api" },
         { text: "The invoice email looks right", endpoints: [], testable: "manual" },
       ],
     });
+    expect(prompt).toMatch(/Test cases, not rules/);
+    expect(prompt).toContain("[approved] An order is editable unless cancelled");
+    expect(prompt).not.toContain("The invoice email looks right");
     expect(saved).toEqual([
       expect.objectContaining({
+        kind: "permission",
         text: "Only the order's owner can see the invoice",
         status: "proposed",
         appliesTo: ["GET /orders/:id/invoice"],

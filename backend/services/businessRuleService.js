@@ -171,31 +171,79 @@ async function proposeFromDiff({
   return toSave.length ? BusinessRule.insertMany(toSave) : [];
 }
 
+const CRITERIA_RULES_SYSTEM = `You are a senior QA engineer keeping a list of the BUSINESS RULES of an HTTP API: lasting rules about what it must and must not allow.
+
+You receive the acceptance criteria of one ticket and the rules already on the list (approved, proposed or rejected). Pick only the criteria that state a LASTING business rule worth checking on every future PR, and write each as one plain, general sentence.
+
+Leave out:
+- Test cases, not rules: "returns 404 for a product that doesn't exist", "include_items=false still returns ...".
+- Field lists or response shapes: "the response includes units_to_minimum".
+- Anything "unchanged" or "still works": regressions, not rules.
+- Anything already on the list, even worded differently, or a narrower case of a rule on the list ("editable is false when cancelled" when "an order is editable unless cancelled" is there). Rejected rules were rejected on purpose: never propose them again.
+- Two criteria saying the same thing: keep one.
+
+Kinds: "permission", "state", "invariant", "rule".
+
+Return STRICT JSON only:
+{"rules":[{"kind":"state","text":"one plain sentence","appliesTo":["METHOD /path"]}]}
+appliesTo uses keys copied from the criteria, or [] if the rule is API-wide. Return {"rules":[]} if none qualify.`;
+
 /**
- * After a PR review: each acceptance criterion the API can check becomes a
- * proposed rule, so the next PRs are tested against it too. Proposed, never
- * approved: a person decides which ones are lasting rules and which were
- * one-off details of that ticket. Returns the rules it saved.
+ * After a PR review: the acceptance criteria that state a lasting business
+ * rule become proposed rules, so the next PRs are tested against them too.
+ * Test cases, field lists and repeats of rules already on the list are left
+ * out. Proposed, never approved: a person decides. Returns the rules it saved.
  */
-async function proposeFromCriteria({ companyId, scope, criteria, prNumber = null }) {
+async function proposeFromCriteria({
+  companyId,
+  scope,
+  criteria,
+  prNumber = null,
+  anthropicClient = null,
+}) {
   const testable = (criteria || []).filter((c) => c.testable !== "manual" && c.text);
   if (!companyId || !scope || !testable.length) return [];
-  const existing = await BusinessRule.find({ companyId, ...scope }).select("text").lean();
+  const existing = await BusinessRule.find({ companyId, ...scope }).select("text status").lean();
+
+  const client = aiUsage.tag(anthropicClient || getAnthropic(), {
+    action: "business_rules",
+    surface: "api",
+  });
+  const resp = await client.messages.create({
+    model: modelFor("diff"),
+    max_tokens: 2000,
+    system: CRITERIA_RULES_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `RULES ALREADY ON THE LIST:\n${
+            existing.map((r) => `- [${r.status}] ${r.text}`).join("\n") || "(none)"
+          }\n\n` +
+          `ACCEPTANCE CRITERIA:\n${testable
+            .map((c) => `- ${c.text}${c.endpoints?.length ? ` (${c.endpoints.join(", ")})` : ""}`)
+            .join("\n")}`,
+      },
+    ],
+  });
+  const text = (resp.content || []).map((b) => b.text || "").join("");
+
   const known = new Set(existing.map((r) => normalize(r.text)));
+  const validKeys = new Set(testable.flatMap((c) => c.endpoints || []));
   const toSave = [];
-  for (const c of testable) {
-    const text = String(c.text).trim().slice(0, 500);
-    if (known.has(normalize(text))) continue;
-    known.add(normalize(text));
+  for (const r of parseRules(text).slice(0, MAX_PROPOSALS_PER_MERGE)) {
+    const ruleText = String(r.text || "").trim().slice(0, 500);
+    if (!ruleText || known.has(normalize(ruleText))) continue;
+    known.add(normalize(ruleText));
     toSave.push({
       companyId,
       ...scope,
-      kind: "rule",
-      text,
-      appliesTo: c.endpoints || [],
+      kind: BusinessRule.KINDS.includes(r.kind) ? r.kind : "rule",
+      text: ruleText,
+      appliesTo: (Array.isArray(r.appliesTo) ? r.appliesTo : []).filter((k) => validKeys.has(k)),
       status: "proposed",
       source: "olivia",
-      evidence: { prNumber, files: [], note: "Acceptance criterion of the PR" },
+      evidence: { prNumber, files: [], note: "From the PR's acceptance criteria" },
     });
   }
   return toSave.length ? BusinessRule.insertMany(toSave) : [];

@@ -18,6 +18,12 @@ const testSchema = new mongoose.Schema(
     // counted as a failure.
     blocked: { type: Boolean, default: false },
     needs: { type: String, default: "" },
+    // The final triage: why a failure is or isn't the PR's fault.
+    //   pre_existing: a real bug the PR didn't introduce; doesn't block it.
+    //   olivia_check: Olivia's own check was wrong; the API behaved fine.
+    //   environment:  a proxy or firewall answered, not the API.
+    triage: { type: String, default: "" },
+    triageNote: { type: String, default: "" },
     // Index into the review's criteria this test checks, or null.
     criterion: { type: Number, default: null },
     // Written by the first review, or later in the chat with the agent.
@@ -62,6 +68,10 @@ const bugSchema = new mongoose.Schema(
     title: String,
     description: String,
     testCaseName: String,
+    // false: the bug was already there before this PR. Reported so it can be
+    // opened on its own, but it doesn't block the ticket.
+    introduced: { type: Boolean, default: true },
+    triageNote: { type: String, default: "" },
     request: mongoose.Schema.Types.Mixed,
     response: mongoose.Schema.Types.Mixed,
   },
