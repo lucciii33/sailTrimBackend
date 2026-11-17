@@ -411,8 +411,16 @@ async function githubCallback(req, res) {
     }
 
     const existingInstall = await Installation.findOne({ installationId }).select(
-      "removedRepos"
+      "removedRepos repos"
     );
+    // The app was already on this org and nothing new came through: a member
+    // who isn't an owner picked another repo, and GitHub dropped it without
+    // asking the owner (it only sends requests for a first install).
+    const knownRepos = new Set((existingInstall?.repos || []).map((r) => r.repoFullName));
+    const nothingAdded =
+      Boolean(existingInstall) &&
+      accountType === "Organization" &&
+      repos.every((r) => knownRepos.has(r.repoFullName));
     const update = {
       installationId,
       accountLogin,
@@ -440,6 +448,24 @@ async function githubCallback(req, res) {
     // an org owner completing/approving someone else's request: they have no
     // Olivia session, so redirecting to the app just dumps them on a login.
     // Show a clear success page instead.
+    if (state && nothingAdded) {
+      const settingsUrl = `https://github.com/organizations/${encodeURIComponent(accountLogin)}/settings/installations/${installationId}`;
+      const repoList = repos.map((r) => r.repoName).join(", ") || "no repositories";
+      return res
+        .status(200)
+        .type("html")
+        .send(
+          renderGithubResultPage({
+            variant: "pending",
+            title: "No new repository was added",
+            message: `OliviaTools is already installed on ${accountLogin} and can only see: ${repoList}. If you picked another repository and you're not an owner of ${accountLogin}, GitHub didn't add it and didn't ask the owners either. Send this link to an owner: under "Repository access" they add the repository, and it shows up in OliviaTools on its own.`,
+            shareLink: settingsUrl,
+            shareLabel: `For an owner of ${accountLogin}`,
+            ctaHref: frontendUrl ? `${frontendUrl}/docs?installed=1` : undefined,
+            ctaLabel: frontendUrl ? "Back to OliviaTools" : undefined,
+          })
+        );
+    }
     if (state && frontendUrl) {
       return res.redirect(`${frontendUrl}/docs?installed=1`);
     }

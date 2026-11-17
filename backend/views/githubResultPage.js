@@ -24,8 +24,10 @@ function escapeHtml(str) {
  * @param {string} opts.message    paragraph under the heading
  * @param {string} [opts.ctaHref]  optional button link
  * @param {string} [opts.ctaLabel] optional button text
+ * @param {string} [opts.shareLink] optional link to hand to someone else, with a copy button
+ * @param {string} [opts.shareLabel] what the link is for
  */
-function renderGithubResultPage({ variant, title, message, ctaHref, ctaLabel }) {
+function renderGithubResultPage({ variant, title, message, ctaHref, ctaLabel, shareLink, shareLabel }) {
   const icons = {
     success: "✓",
     pending: "⏳",
@@ -43,6 +45,16 @@ function renderGithubResultPage({ variant, title, message, ctaHref, ctaLabel }) 
     ctaHref && ctaLabel
       ? `<a class="cta" href="${escapeHtml(ctaHref)}">${escapeHtml(ctaLabel)}</a>`
       : "";
+
+  const share = shareLink
+    ? `<div class="share">
+      ${shareLabel ? `<div class="share-label">${escapeHtml(shareLabel)}</div>` : ""}
+      <div class="share-row">
+        <code id="share-link">${escapeHtml(shareLink)}</code>
+        <button type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('share-link').textContent).then(()=>{this.textContent='Copied'})">Copy</button>
+      </div>
+    </div>`
+    : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -125,6 +137,39 @@ function renderGithubResultPage({ variant, title, message, ctaHref, ctaLabel }) 
     font-weight: 600;
   }
   .cta:hover { opacity: 0.92; }
+  .share {
+    text-align: left;
+    margin: 0 0 24px;
+  }
+  .share-label {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .share-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .share code {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .share button {
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 0 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
   .brand {
     margin-top: 28px;
     font-size: 12px;
@@ -138,6 +183,7 @@ function renderGithubResultPage({ variant, title, message, ctaHref, ctaLabel }) 
     <div class="badge">${icon}</div>
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
+    ${share}
     ${cta}
     <div class="brand">OliviaTools</div>
   </div>
