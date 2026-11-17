@@ -21,6 +21,12 @@ const apiTestCaseSchema = new mongoose.Schema({
   body: { type: mongoose.Schema.Types.Mixed, default: null },
   expectedStatus: { type: [Number], default: [] },
 
+  // Where the case came from when a PR review made it: the PR's number, and the
+  // review test it copies (so creating the suite twice doesn't duplicate it).
+  // Null for cases written here.
+  fromPr: { type: Number, default: null },
+  fromReviewTest: { type: mongoose.Schema.Types.ObjectId, default: null },
+
   // Plain-English checks on the response, evaluated by Claude at run time.
   // Same idea as the MCP suites: readable by a QA lead, not just by code.
   assertions: { type: [String], default: [] },

@@ -238,6 +238,91 @@ async function generateSuite({
   return suite;
 }
 
+const MORE_CASES_SYSTEM = `You add cases to an endpoint's REGRESSION suite. It already holds checks that a pull request review proved against the real API; you write the ones it is missing.
+
+You receive the endpoint spec, the cases already in the suite, the acceptance criteria of the pull request that changed this endpoint, and the team's business rules.
+
+Return STRICT JSON only:
+{
+  "cases": [
+    {
+      "name": "short descriptive name",
+      "covers": "ONE plain sentence a non-technical QA lead can read, describing what this test verifies",
+      "category": "happy_path | not_found | unauthorized | invalid_input | boundary | security",
+      "method": "GET",
+      "path": "/the/path",
+      "headers": {},
+      "body": null,
+      "expectedStatus": [200],
+      "assertions": ["plain-English checks on the response"]
+    }
+  ]
+}
+
+Rules:
+- Between 0 and 5 cases. Never repeat what an existing case already checks. Zero is right when the suite already covers the contract.
+- Aim at what must not silently change later: the behaviour the criteria and rules describe, invalid input, unauthorized, not found, a boundary.
+- Reuse the ids and values the existing cases use, they are known to exist. For not_found cases use an obviously-bogus literal id.
+- Use "{{key}}" placeholders only for the available environment variables listed.
+- For the unauthorized case set "headers": {"Authorization": ""} so the runner strips auth.
+- "body" is null for GET/DELETE.
+- Every case needs a "covers" sentence and 1 to 4 assertions decidable from the response alone.
+- Return only the JSON object.`;
+
+/**
+ * Cases a regression suite is missing, written on top of the ones it has.
+ * Only returns them; the caller appends, so nothing already there is replaced.
+ */
+async function suggestMoreCases({ doc, existing = [], criteria = [], companyId, anthropicClient = null }) {
+  let varKeys = [];
+  if (doc.projectId) {
+    const project = await ApiProject.findOne({ _id: doc.projectId, companyId });
+    varKeys = (project?.variables || []).map((v) => v.key);
+  }
+  const rulesNote = businessRules.rulesNote(await businessRules.rulesFor({ companyId, doc }));
+  const client = aiUsage.tag(anthropicClient || getAnthropic(), { action: "api_suites", surface: "api" });
+  const resp = await client.messages.create({
+    model: modelFor("suites"),
+    max_tokens: 4000,
+    system: MORE_CASES_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `ENDPOINT SPEC:\n${JSON.stringify(specForPrompt(doc), null, 2)}\n\n` +
+          `CASES ALREADY IN THE SUITE:\n${JSON.stringify(
+            existing.map((c) => ({
+              name: c.name,
+              covers: c.covers,
+              method: c.method,
+              path: c.path,
+              body: c.body,
+              expectedStatus: c.expectedStatus,
+            })),
+            null,
+            2
+          )}\n\n` +
+          `ACCEPTANCE CRITERIA OF THE PR:\n${criteria.length ? criteria.map((t) => `- ${t}`).join("\n") : "(none)"}` +
+          (varKeys.length ? `\n\nAVAILABLE ENVIRONMENT VARIABLES: ${varKeys.join(", ")}` : "") +
+          rulesNote,
+      },
+    ],
+  });
+  const parsed = safeParseJson(extractText(resp));
+  const raw = Array.isArray(parsed?.cases) ? parsed.cases.slice(0, 5) : [];
+  return raw.map((c) => ({
+    name: c.name || `${doc.method} ${doc.path}`,
+    covers: c.covers || "",
+    category: c.category || "happy_path",
+    method: c.method || "",
+    path: c.path || "",
+    headers: c.headers || null,
+    body: c.body ?? null,
+    expectedStatus: Array.isArray(c.expectedStatus) ? c.expectedStatus : [],
+    assertions: Array.isArray(c.assertions) ? c.assertions : [],
+  }));
+}
+
 /**
  * Generate both kinds for every endpoint in a section. Sequential on purpose:
  * each endpoint is a Claude call, and firing a whole section in parallel is how
@@ -775,6 +860,8 @@ async function listProjectSuites({ projectId, owner, repo, companyId, branch }) 
 module.exports = {
   judgeAssertions,
   sectionForDoc,
+  ownerFieldsFor,
+  suggestMoreCases,
   generateSuite,
   createCase,
   deleteCase,

@@ -13,6 +13,8 @@ const testSchema = new mongoose.Schema(
     name: String,
     covers: String,
     expectedStatus: { type: [Number], default: [] },
+    // The checks the test made on the response, so it can become a regression case.
+    assertions: { type: [String], default: [] },
     passed: Boolean,
     // Couldn't run: it needs data Olivia doesn't have. Never invented, never
     // counted as a failure.
@@ -155,6 +157,26 @@ const prReviewSchema = new mongoose.Schema(
     decisionNote: { type: String, default: "" },
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     decidedAt: { type: Date, default: null },
+
+    // The regression suites this review's tests went into, one per endpoint.
+    regression: {
+      type: [
+        new mongoose.Schema(
+          {
+            endpoint: { type: String, default: "" },
+            suiteId: { type: mongoose.Schema.Types.ObjectId, ref: "ApiSuite", default: null },
+            // Copied from this review's passed tests.
+            fromReview: { type: Number, default: 0 },
+            // Written by the agent on top, for what the review didn't cover.
+            generated: { type: Number, default: 0 },
+            error: { type: String, default: "" },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    regressionAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

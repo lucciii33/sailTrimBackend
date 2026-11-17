@@ -310,6 +310,7 @@ async function runCase({ c, doc, config, variables, client, endpoint, source = "
     name: c.name || endpoint,
     covers: c.covers || "",
     expectedStatus: expected,
+    assertions: (Array.isArray(c.assertions) ? c.assertions : []).map(String).slice(0, 8),
     passed,
     reason: execution.response.error
       ? `Request failed: ${execution.response.error}`

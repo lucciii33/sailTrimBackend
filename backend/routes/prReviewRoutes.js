@@ -11,5 +11,6 @@ router.post("/:id/questions/:questionId/answer", protect, c.answerQuestion);
 router.patch("/:id/decision", protect, c.decide);
 router.post("/:id/chat", protect, requireBudget("api"), c.chat);
 router.post("/:id/actions/:actionId", protect, c.resolveAction);
+router.post("/:id/regression", protect, requireBudget("api"), c.createRegression);
 
 module.exports = router;

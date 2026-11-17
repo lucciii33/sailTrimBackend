@@ -4,6 +4,9 @@ const PrReview = require("../model/PrReviewModel");
 const BusinessRule = require("../model/BusinessRuleModel");
 const ApiQaConfig = require("../model/ApiQaConfig");
 const prReviewChat = require("../services/prReviewChatService");
+const prRegression = require("../services/prRegressionService");
+const jobs = require("../services/jobService");
+const { getUserAnthropicClient } = require("../services/userKeyService");
 
 // Reading Olivia's PR reviews, answering its questions, and recording the
 // team's decision. Scoped to the caller's company throughout.
@@ -122,6 +125,41 @@ const chat = asyncHandler(async (req, res) => {
 });
 
 /**
+ * POST /api/pr-reviews/:id/regression
+ * The review's passed tests go into each endpoint's regression suite, plus the
+ * cases an agent adds. A job: one agent call per endpoint takes a while.
+ */
+const createRegression = asyncHandler(async (req, res) => {
+  if (!requireCompany(req, res)) return;
+  const review = await findOwn(req, res);
+  if (!review) return;
+  if (review.status !== "done") {
+    return res.status(409).json({ message: "The review hasn't finished yet" });
+  }
+  const anthropicClient = await getUserAnthropicClient(req.user._id);
+  const job = await jobs.start({
+    kind: "pr_regression",
+    target: {
+      owner: review.owner,
+      repo: review.repo,
+      label: `Regression from PR #${review.prNumber}`,
+    },
+    userId: req.user._id,
+    companyId: req.user.companyId,
+    work: async () => {
+      const done = await prRegression.createRegressionFromReview({
+        reviewId: review._id,
+        companyId: req.user.companyId,
+        userId: req.user._id,
+        anthropicClient,
+      });
+      return { regression: done.regression, regressionAt: done.regressionAt };
+    },
+  });
+  res.status(202).json({ jobId: job._id, status: job.status });
+});
+
+/**
  * POST /api/pr-reviews/:id/actions/:actionId { decision: apply|dismiss }
  * Applies what the agent proposed to keep: a repo variable or a business rule.
  */
@@ -173,4 +211,4 @@ const resolveAction = asyncHandler(async (req, res) => {
   res.json(review);
 });
 
-module.exports = { listReviews, getReview, answerQuestion, decide, chat, resolveAction };
+module.exports = { listReviews, getReview, answerQuestion, decide, chat, resolveAction, createRegression };
