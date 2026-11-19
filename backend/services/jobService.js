@@ -20,7 +20,10 @@ const CONCURRENCY = {
   mcp: 2,
   api: 2,
   pro: 3,
-  enterprise: 6,
+  // 10, not unlimited: a bug hunt makes real requests to the customer's API and
+  // real calls to Claude, so twenty at once is a way to take down the thing
+  // being tested. Ten feels unlimited to a person and still leaves a brake.
+  enterprise: 10,
 };
 
 function limitFor(plan) {
