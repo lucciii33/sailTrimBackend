@@ -20,6 +20,8 @@ const shareLinkSchema = new mongoose.Schema(
       owner: { type: String, default: "" },
       repo: { type: String, default: "" },
       projectId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      // A repo's environment (branch). Null: the report picks what ships.
+      branch: { type: String, default: null },
     },
 
     // Frozen period, so the link keeps meaning what it meant when it was sent.

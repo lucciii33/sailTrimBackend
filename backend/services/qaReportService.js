@@ -132,11 +132,34 @@ function bugTotals(bugs, range) {
 }
 
 /** QA report for one connected repo, or one imported API project. */
-async function apiReport({ companyId, owner, repo, projectId, from, to }) {
+async function apiReport({ companyId, owner, repo, projectId, branch, from, to }) {
   const range = periodFilter(from, to);
   const docScope = projectId
     ? { projectId, companyId }
     : { owner, repo, companyId };
+
+  // A repo is documented once per branch (main, dev...). Counting them together
+  // reports every endpoint twice, so the report is for ONE environment: the one
+  // asked for, else what ships (main/master), else the first.
+  let branches = [];
+  let chosen = "";
+  if (!projectId) {
+    const counts = await Doc.aggregate([
+      { $match: docScope },
+      { $group: { _id: { $ifNull: ["$branch", ""] }, endpoints: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+    branches = counts.map((c) => ({ branch: c._id || "", endpoints: c.endpoints }));
+    const has = (b) => branches.some((x) => x.branch === b);
+    chosen =
+      (branch != null && branch !== "" && has(branch) && branch) ||
+      ["main", "master"].find(has) ||
+      branches[0]?.branch ||
+      "";
+    if (branches.length > 1 || chosen) {
+      docScope.branch = chosen ? chosen : { $in: ["", null] };
+    }
+  }
 
   const docs = await Doc.find(docScope).select("method path").lean();
   const docIds = docs.map((d) => d._id);
@@ -165,9 +188,11 @@ async function apiReport({ companyId, owner, repo, projectId, from, to }) {
 
   return {
     kind: "api",
-    subject: projectId ? "API project" : `${owner}/${repo}`,
+    subject: projectId ? "API project" : `${owner}/${repo}${chosen ? ` · ${chosen}` : ""}`,
     owner: owner || "",
     repo: repo || "",
+    branch: chosen,
+    branches,
     projectId: projectId ? String(projectId) : "",
     period: { from: from || null, to: to || null },
     generatedAt: new Date(),

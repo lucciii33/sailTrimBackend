@@ -20,7 +20,10 @@ function scopeFromParams(req) {
   if (req.query.surface === "mcp" || req.body?.surface === "mcp") {
     return { surface: "mcp", projectId: id };
   }
-  if (owner && repo) return { surface: "api", owner, repo };
+  if (owner && repo) {
+    const branch = req.query.branch ?? req.body?.branch;
+    return { surface: "api", owner, repo, branch: branch == null ? undefined : String(branch) };
+  }
   return { surface: "api", projectId: id };
 }
 
@@ -33,6 +36,7 @@ async function buildFor({ scope, companyId, from, to }) {
     owner: scope.owner,
     repo: scope.repo,
     projectId: scope.projectId || null,
+    branch: scope.branch,
     from,
     to,
   });
@@ -78,6 +82,8 @@ async function createShareLink(req, res) {
         owner: scope.owner || "",
         repo: scope.repo || "",
         projectId: scope.projectId || null,
+        // The environment the link was made for, so it keeps showing that one.
+        branch: scope.branch ?? null,
       },
       period: {
         from: req.body?.from ? new Date(req.body.from) : null,
@@ -156,6 +162,7 @@ async function getSharedReport(req, res) {
         owner: link.scope.owner,
         repo: link.scope.repo,
         projectId: link.scope.projectId,
+        branch: link.scope.branch ?? undefined,
       },
       companyId: link.companyId,
       from: link.period?.from,
