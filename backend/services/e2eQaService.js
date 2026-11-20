@@ -18,6 +18,12 @@ function getOpenAI() {
   if (!_openai) {
     _openai = new OpenAI({
       apiKey: process.env.OPEN_IA || process.env.OPENAI_API_KEY,
+      // Whisper gets an audio UPLOAD, not a prompt: minutes of speech is
+      // megabytes, and the default 10-minute-but-no-retry client was dropping it
+      // mid-flight with ECONNRESET on a long demo video. A reset upload is
+      // exactly what a retry is for.
+      maxRetries: 3,
+      timeout: 180_000,
     });
   }
   return _openai;
